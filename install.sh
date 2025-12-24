@@ -21,5 +21,9 @@ source venv/bin/activate
 pip install --upgrade pip
 pip install -r requirements.txt
 
+echo "[INFO] Creating directories..."
+mkdir -p keys
+mkdir -p logs
+
 chmod +x run_isync.sh
 echo "Done! Run: ./run_isync.sh"

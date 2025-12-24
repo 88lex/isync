@@ -5,6 +5,7 @@ import time
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
+from isync_config import DEFAULT_SA_JSON_PATH
 
 class ISyncAuthManager:
     """
@@ -15,7 +16,7 @@ class ISyncAuthManager:
     - User Deletion
     """
     def __init__(self, sa_json_path, admin_email):
-        self.sa_json_path = sa_json_path
+        self.sa_json_path = sa_json_path if sa_json_path else DEFAULT_SA_JSON_PATH
         self.admin_email = admin_email
         self.scopes = [
             'https://www.googleapis.com/auth/admin.directory.user',

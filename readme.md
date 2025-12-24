@@ -54,7 +54,7 @@ You must perform the following steps for **EACH** Google Workspace domain you wi
     * Click on your new Service Account in the list.
     * Go to the **Keys** tab > **Add Key** > **Create new key**.
     * Select **JSON**.
-    * **Save this file securely.** You will need the path to this file later.
+    * **Save this file securely.** Rename it to `master.json` and place it in the `keys/` folder of this repository.
 5.  **Enable Domain-Wide Delegation (DWD):**
     * While still in the Service Account details, go to the **Details** tab (or "Advanced Settings" depending on the UI version).
     * Look for "Domain-wide Delegation".
@@ -170,11 +170,11 @@ This is the most critical part. You need the files from the Prerequisites sectio
 
 *   **Domain Name:** Your Google Workspace domain (e.g., `example.com`).
 *   **Admin Email:** The Super Admin email you are impersonating (e.g., `admin@example.com`).
-*   **Local JSON Path:** The absolute path to the Service Account JSON key on the machine running the UI.
-    *   Windows Example: `C:\Users\Admin\keys\isync-sa.json`
-    *   Linux Example: `/home/user/keys/isync-sa.json`
+*   **Local JSON Path:** The absolute path to the Service Account JSON key. The default is `keys/master.json`.
+    *   Windows Example: `C:\isync\keys\master.json`
+    *   Linux Example: `/home/user/isync/keys/master.json`
 *   **Group Email:** The Google Group created in Prerequisites (e.g., `uploaders@example.com`).
-*   **Remote JSON Path:** (Only for Mode 2/3) The path to the JSON key on the remote server.
+*   **Remote JSON Path:** (Only for Mode 2/3) The path to the JSON key on the remote server (e.g., `/home/user/isync/keys/master.json`).
 
 Click 💾 **Save Settings**. The page will reload, and the "Configuration Health" check should turn green.
 
@@ -209,4 +209,4 @@ On Linux/Mac, `run_isync.sh` automatically attempts to use `tmux`. This ensures 
 
 *   **Stalls:** If Rclone output stops for 10 minutes (configurable), ISync will kill the process and restart the loop.
 *   **Auth Errors:** Use the "Check Auth Connection" button in Manual Ops to verify your Service Account and Admin Email.
-*   **Logs:** Check the "Live Console" tab or view `isync.log` directly.
+*   **Logs:** Check the "Live Console" tab or view `logs/isync.log` directly.

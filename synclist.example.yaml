@@ -1,4 +1,13 @@
+# Define your sync jobs here.
+# 'domain_reference' must match a 'domain_name' entry in config.yaml.
+
 sync_pairs:
+  # Example 1: Local Windows Source
   - source: "C:/Data/MyFiles"
     dest: "drive:SharedDrive/TargetFolder"
     domain_reference: "example.com"
+
+  # Example 2: Linux/Remote Source (if running via SSH)
+  # - source: "/home/user/data"
+  #   dest: "drive:Backup"
+  #   domain_reference: "example.com"
