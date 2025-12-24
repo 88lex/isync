@@ -6,5 +6,10 @@ python -m venv venv
 call venv\Scripts\activate
 pip install --upgrade pip
 pip install -r requirements.txt
+
+ECHO Creating directories...
+IF NOT EXIST keys mkdir keys
+IF NOT EXIST logs mkdir logs
+
 ECHO Setup Complete! Run run_isync.bat
 PAUSE

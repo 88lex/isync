@@ -4,6 +4,10 @@ cd "$DIR"
 
 SESSION_NAME="isync"
 
+# Ensure runtime directories exist
+mkdir -p keys
+mkdir -p logs
+
 # 1. Check Tmux
 if ! command -v tmux &> /dev/null; then
     echo "⚠️  Tmux not installed. Running in foreground (risk of disconnect)."
@@ -36,5 +40,6 @@ if [ $? != 0 ]; then
 fi
 
 echo "✅ Attaching to background session..."
+echo "   Logs are being written to: logs/isync.log"
 echo "   (To detach and keep running: Ctrl+B, then D)"
 tmux attach -t $SESSION_NAME

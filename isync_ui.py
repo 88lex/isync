@@ -9,7 +9,7 @@ import platform
 import shutil
 import difflib
 from datetime import datetime
-from isync_config import load_config, save_config, load_synclist, save_synclist, get_default_config
+from isync_config import load_config, save_config, load_synclist, save_synclist, get_default_config, resolve_sa_path, LOG_FILE_PATH
 from isync_engine import ISyncEngine
 from isync_auth import ISyncAuthManager
 
@@ -54,9 +54,8 @@ def validate_config_health(conf):
             if not d.get('domain_name'): issues.append(f"Domain #{i+1}: Missing 'Domain Name'.")
             if not d.get('admin_email'): issues.append(f"{name}: Missing 'Admin Email'.")
             
-            json_path = d.get('sa_json_path')
-            if not json_path: issues.append(f"{name}: Missing 'JSON Path'.")
-            elif not os.path.exists(json_path): issues.append(f"{name}: JSON file not found at '{json_path}'.")
+            json_path = resolve_sa_path(d.get('sa_json_path'))
+            if not os.path.exists(json_path): issues.append(f"{name}: JSON file not found at '{json_path}'.")
                 
             if not d.get('group_email'): issues.append(f"{name}: Missing 'Group Email'.")
     return issues
@@ -154,7 +153,7 @@ with tab1:
                 col_a, col_b, col_c, col_d, col_e = st.columns(5)
                 d_name = col_a.text_input(f"Domain Name *", value=d.get('domain_name', ''), key=f"dn_{i}", help="Friendly name for this domain.")
                 d_admin = col_b.text_input(f"Admin Email *", value=d.get('admin_email', ''), key=f"da_{i}", help="Super Admin email to impersonate.")
-                d_json = col_c.text_input(f"Local JSON Path *", value=d.get('sa_json_path', ''), key=f"dj_{i}", help="Local path to SA JSON (for Auth).")
+                d_json = col_c.text_input(f"Local JSON Path", value=d.get('sa_json_path', ''), key=f"dj_{i}", help="Local path to SA JSON. Defaults to keys/master.json.")
                 d_group = col_d.text_input(f"Group Email *", value=d.get('group_email', ''), key=f"dg_{i}", help="Google Group email that has Shared Drive access.")
                 d_remote_json = col_e.text_input(f"Remote JSON Path", value=d.get('remote_sa_json_path', ''), key=f"drj_{i}", help="Path to SA JSON on the REMOTE server (required if SSH enabled).")
                 
@@ -256,8 +255,9 @@ with tab1:
                 # Copy files
                 files_to_copy = ["config.yaml", "synclist.yaml"]
                 for d in config.get('domains', []):
-                    if d.get('sa_json_path') and os.path.exists(d['sa_json_path']):
-                        shutil.copy(d['sa_json_path'], tmp_path)
+                    json_path = resolve_sa_path(d.get('sa_json_path'))
+                    if json_path and os.path.exists(json_path):
+                        shutil.copy(json_path, tmp_path)
                 
                 for f in files_to_copy:
                     if os.path.exists(f): shutil.copy(f, tmp_path)
@@ -305,10 +305,11 @@ with tab1:
                     # Push JSON Keys
                     json_errs = []
                     for d in config.get('domains', []):
-                        local_json = d.get('sa_json_path')
+                        local_json = resolve_sa_path(d.get('sa_json_path'))
                         if local_json and os.path.exists(local_json):
                             fname = os.path.basename(local_json)
-                            rj = exec_scp(local_json, f"{ssh_target}:{remote_base}/{fname}")
+                            # Target keys/ folder on remote
+                            rj = exec_scp(local_json, f"{ssh_target}:{remote_base}/keys/{fname}")
                             if rj.returncode != 0: json_errs.append(rj.stderr)
 
                     if r1.returncode == 0 and r2.returncode == 0 and r_lib.returncode == 0 and not json_errs:
@@ -427,13 +428,13 @@ with tab3:
     
     lc1, lc2 = st.columns([1, 4])
     if lc1.button("🗑️ Clear Log"):
-        with open("isync.log", "w") as f: f.write("")
+        with open(LOG_FILE_PATH, "w") as f: f.write("")
         st.rerun()
 
     log_filter = lc2.text_input("Filter Log", help="Show only lines containing this text.")
 
-    if os.path.exists("isync.log"):
-        with open("isync.log", "r") as f: lines = f.readlines()
+    if os.path.exists(LOG_FILE_PATH):
+        with open(LOG_FILE_PATH, "r") as f: lines = f.readlines()
         
         if log_filter:
             lines = [l for l in lines if log_filter.lower() in l.lower()]

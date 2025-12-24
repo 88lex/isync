@@ -1,5 +1,6 @@
 import subprocess
 import logging
+from logging.handlers import RotatingFileHandler
 import time
 import os
 import threading
@@ -8,10 +9,12 @@ import re
 import shlex
 import requests
 from isync_auth import ISyncAuthManager
+from isync_config import DEFAULT_SA_JSON_PATH, LOG_FILE_PATH, LOGS_DIR
 
 # Configure logging to file
+os.makedirs(LOGS_DIR, exist_ok=True)
 logging.basicConfig(
-    filename='isync.log', 
+    handlers=[RotatingFileHandler(LOG_FILE_PATH, maxBytes=5*1024*1024, backupCount=5)],
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s'
 )
@@ -86,11 +89,16 @@ class ISyncEngine:
         results = []
         for d in self.config.get('domains', []):
             name = d.get('domain_name', 'Unknown')
-            if not os.path.exists(d.get('sa_json_path', '')):
-                results.append(f"❌ {name}: JSON file missing")
+            
+            json_path = d.get('sa_json_path')
+            if not json_path:
+                json_path = DEFAULT_SA_JSON_PATH
+
+            if not os.path.exists(json_path):
+                results.append(f"❌ {name}: JSON file missing ({json_path})")
                 continue
             try:
-                auth = ISyncAuthManager(d['sa_json_path'], d['admin_email'])
+                auth = ISyncAuthManager(json_path, d['admin_email'])
                 ok, msg = auth.test_api_connection()
                 if ok: results.append(f"✅ {name}: API OK")
                 else: results.append(f"❌ {name}: API Error ({msg})")
@@ -107,6 +115,9 @@ class ISyncEngine:
         
         mode_label = "TEST MODE" if dry_run else "Normal"
         
+        if not sa_json_path:
+            sa_json_path = DEFAULT_SA_JSON_PATH
+
         # Determine which JSON path to use for the rclone command
         effective_sa_path = sa_json_path
         if self.config.get('ssh_enabled') and remote_sa_json_path:
@@ -211,7 +222,12 @@ class ISyncEngine:
         self.send_notification(f"🚀 Job Started: `{job_label}` ({mode_label})")
         
         domain_cfg = self.get_domain_config(target_domain)
-        auth_mgr = ISyncAuthManager(domain_cfg['sa_json_path'], domain_cfg['admin_email'])
+        
+        json_path = domain_cfg.get('sa_json_path')
+        if not json_path:
+            json_path = DEFAULT_SA_JSON_PATH
+            
+        auth_mgr = ISyncAuthManager(json_path, domain_cfg['admin_email'])
         max_users = 1 if dry_run else int(self.config.get('max_users_per_cycle', 10))
         
         current_user = auth_mgr.provision_uploader(domain_cfg['domain_name'], domain_cfg['group_email'])
@@ -232,7 +248,7 @@ class ISyncEngine:
                 t.start()
 
             # Run transfer
-            status = self.run_rclone(source, dest, domain_cfg['sa_json_path'], current_user, job_label, dry_run=dry_run, remote_sa_json_path=domain_cfg.get('remote_sa_json_path'))
+            status = self.run_rclone(source, dest, json_path, current_user, job_label, dry_run=dry_run, remote_sa_json_path=domain_cfg.get('remote_sa_json_path'))
 
             if i < max_users and not dry_run: t.join()
 

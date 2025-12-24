@@ -14,6 +14,6 @@ ssh_remote_path: "~/isync"
 domains:
   - domain_name: "example.com"
     admin_email: "admin@example.com"
-    sa_json_path: "/absolute/path/to/service_account.json"
+    sa_json_path: "keys/master.json"
     group_email: "uploaders@example.com"
-    remote_sa_json_path: ""
+    remote_sa_json_path: "~/isync/keys/master.json"
