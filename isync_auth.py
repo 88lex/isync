@@ -20,7 +20,8 @@ class ISyncAuthManager:
         self.admin_email = admin_email
         self.scopes = [
             'https://www.googleapis.com/auth/admin.directory.user',
-            'https://www.googleapis.com/auth/admin.directory.group'
+            'https://www.googleapis.com/auth/admin.directory.group',
+            'https://www.googleapis.com/auth/admin.directory.group.member'
         ]
         self.service = self._get_service()
 
@@ -53,6 +54,7 @@ class ISyncAuthManager:
 
     def create_user(self, domain_name):
         """Creates a temporary user with a random ID."""
+        domain_name = domain_name.strip()
         rand_id = ''.join(random.choices(string.ascii_lowercase + string.digits, k=6))
         email = f"isync-{rand_id}@{domain_name}"
         

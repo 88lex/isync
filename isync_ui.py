@@ -8,6 +8,7 @@ import socket
 import platform
 import shutil
 import difflib
+import shlex
 from datetime import datetime
 from isync_config import load_config, save_config, load_synclist, save_synclist, get_default_config, resolve_sa_path, LOG_FILE_PATH
 from isync_engine import ISyncEngine
@@ -62,6 +63,20 @@ def validate_config_health(conf):
 
 st.title("🔄 ISync: Impersonate Sync")
 
+config = load_config()
+
+# --- COMMAND PREVIEW ---
+with st.expander("👁️ Rclone Command Preview", expanded=False):
+    st.caption("This is how the command will look based on current saved settings.")
+    dummy_eng = ISyncEngine(config)
+    # Get first domain for context or use defaults
+    d_preview = config.get('domains', [{}])[0] if config.get('domains') else {}
+    p_src = "/local/source" if not config.get('ssh_enabled') else "/remote/source"
+    p_dst = "drive:SharedDrive/Dest"
+    
+    cmd_preview = dummy_eng.build_rclone_cmd(p_src, p_dst, d_preview.get('sa_json_path'), d_preview.get('admin_email', 'admin@example.com'), dry_run=False, remote_sa_json_path=d_preview.get('remote_sa_json_path'))
+    st.code(shlex.join(cmd_preview), language="bash")
+
 # --- SIDEBAR: SYSTEM CONTEXT ---
 with st.sidebar:
     st.header("Environment")
@@ -73,7 +88,6 @@ tab1, tab2, tab3, tab4 = st.tabs(["⚙️ Configuration", "📂 Sync Jobs", "�
 # --- TAB 1: CONFIGURATION ---
 with tab1:
     st.header("Configuration Health")
-    config = load_config()
     
     issues = validate_config_health(config)
     if issues:
@@ -103,7 +117,7 @@ with tab1:
             flags = c7.text_input("Global Flags (Optional)", value=config.get('global_rclone_flags', ''), help="Extra flags passed to rclone (e.g. --drive-use-trash=false).")
 
             st.subheader("Remote Execution (SSH)")
-            ssh_enabled = st.checkbox("Enable SSH Remote Execution", value=config.get('ssh_enabled', False), help="Enable ONLY if running ISync Locally but executing Rclone Remotely. Disable if ISync is already running on the remote server.")
+            ssh_enabled = st.checkbox("Enable SSH Remote Execution", value=config.get('ssh_enabled', False), help="Enable this to run ISync logic locally while executing Rclone commands on a remote server (Hybrid Mode).")
             
             ssh_mode = config.get('ssh_mode', 'explicit')
             ssh_host = config.get('ssh_host', '')
@@ -151,7 +165,7 @@ with tab1:
                 d = domains[i] if i < len(domains) else {}
                 st.markdown(f"**Domain Config #{i+1}**")
                 col_a, col_b, col_c, col_d, col_e = st.columns(5)
-                d_name = col_a.text_input(f"Domain Name *", value=d.get('domain_name', ''), key=f"dn_{i}", help="Friendly name for this domain.")
+                d_name = col_a.text_input(f"Domain Name *", value=d.get('domain_name', ''), key=f"dn_{i}", help="Your Google Workspace domain (e.g. example.com).")
                 d_admin = col_b.text_input(f"Admin Email *", value=d.get('admin_email', ''), key=f"da_{i}", help="Super Admin email to impersonate.")
                 d_json = col_c.text_input(f"Local JSON Path", value=d.get('sa_json_path', ''), key=f"dj_{i}", help="Local path to SA JSON. Defaults to keys/master.json.")
                 d_group = col_d.text_input(f"Group Email *", value=d.get('group_email', ''), key=f"dg_{i}", help="Google Group email that has Shared Drive access.")

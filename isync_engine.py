@@ -106,14 +106,11 @@ class ISyncEngine:
                 results.append(f"❌ {name}: {str(e)}")
         return results
 
-    def run_rclone(self, source, dest, sa_json_path, impersonate_email, job_label, dry_run=False, remote_sa_json_path=None):
-        """Runs the rclone command and monitors output."""
+    def build_rclone_cmd(self, source, dest, sa_json_path, impersonate_email, dry_run=False, remote_sa_json_path=None):
+        """Generates the full rclone command list (including SSH wrapping if enabled)."""
         command_type = self.config.get('rclone_command', 'copy')
-        stall_limit = int(self.config.get('stall_timeout_minutes', 10)) * 60
         upload_limit_str = self.config.get('upload_limit', '700G')
         extra_flags = self.config.get('global_rclone_flags', '').split()
-        
-        mode_label = "TEST MODE" if dry_run else "Normal"
         
         if not sa_json_path:
             sa_json_path = DEFAULT_SA_JSON_PATH
@@ -128,7 +125,7 @@ class ISyncEngine:
             f"--drive-service-account-file={effective_sa_path}",
             f"--drive-impersonate={impersonate_email}",
             f"--drive-stop-on-upload-limit={upload_limit_str}",
-            f"--transfers={self.config.get('transfers', 8)}",
+            f"--transfers={str(self.config.get('transfers', 8))}",
             "--drive-chunk-size=128M",
             "--stats=1s",
             "--verbose"
@@ -154,8 +151,17 @@ class ISyncEngine:
                 if ssh_key: cmd.extend(["-i", ssh_key])
             
             cmd.append(remote_cmd_str)
+            
+        return cmd
 
-        logging.info(f"[ISyncEngine] Starting {command_type} ({mode_label}) as: {impersonate_email}")
+    def run_rclone(self, source, dest, sa_json_path, impersonate_email, job_label, dry_run=False, remote_sa_json_path=None):
+        """Runs the rclone command and monitors output."""
+        stall_limit = int(self.config.get('stall_timeout_minutes', 10)) * 60
+        mode_label = "TEST MODE" if dry_run else "Normal"
+        
+        cmd = self.build_rclone_cmd(source, dest, sa_json_path, impersonate_email, dry_run, remote_sa_json_path)
+
+        logging.info(f"[ISyncEngine] Starting ({mode_label}): {shlex.join(cmd)}")
         
         # Start subprocess
         process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, universal_newlines=True)
