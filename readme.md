@@ -38,13 +38,12 @@ You must perform the following steps for **EACH** Google Workspace domain you wi
     * Search for and enable the following two APIs:
         * **Admin SDK API**
         * **IAM API**
-
-        **Optional**
-        * **Cloud Identity API**, 
-        * **Cloud Resource Manager API**
-        * **Service Management API**
-        * **Drive API**
-        * **Sheets API**
+    * **Optional (Recommended):**
+        * Cloud Identity API
+        * Cloud Resource Manager API
+        * Service Management API
+        * Drive API
+        * Sheets API
 
 3.  **Create the Master Service Account (SA):**
     * Navigate to **IAM & Admin > Service Accounts**.
@@ -71,9 +70,9 @@ You must perform the following steps for **EACH** Google Workspace domain you wi
     * **Client ID:** Paste the numeric Client ID from the previous step.
     * **OAuth Scopes:** Copy and paste the following block exactly:
       ```text
-      [https://www.googleapis.com/auth/admin.directory.user](https://www.googleapis.com/auth/admin.directory.user),
-      [https://www.googleapis.com/auth/admin.directory.group](https://www.googleapis.com/auth/admin.directory.group),
-      [https://www.googleapis.com/auth/drive](https://www.googleapis.com/auth/drive)
+      https://www.googleapis.com/auth/admin.directory.user,
+      https://www.googleapis.com/auth/admin.directory.group,
+      https://www.googleapis.com/auth/drive
       ```
     * Click **Authorize**.
 
@@ -122,6 +121,7 @@ cd isync
 # 3. Set permissions and install
 chmod +x install.sh run_isync.sh
 ./install.sh
+```
 
 ---
 
