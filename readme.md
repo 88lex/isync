@@ -13,7 +13,7 @@ It utilizes **Service Account Impersonation**, meaning you do **not** need to ma
 2.  [Prerequisites (Critical Setup)](#prerequisites)
 3.  [Installation (Local & Remote)](#installation)
 4.  [Operating Modes & Usage](#usage)
-5.  [Configuration Guide](#configuration-guide)
+5.  [First Run & Configuration Walkthrough](#first-run)
 6.  [Background Persistence (Tmux)](#background-persistence)
 7.  [Troubleshooting](#troubleshooting)
 
