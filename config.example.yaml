@@ -1,0 +1,19 @@
+upload_limit: 700G
+transfers: 8
+max_users_per_cycle: 10
+rclone_command: copy
+stall_timeout_minutes: 10
+webhook_url: ""
+global_rclone_flags: "--drive-use-trash=false"
+ssh_enabled: false
+ssh_mode: explicit
+ssh_host: ""
+ssh_user: ""
+ssh_key_path: ""
+ssh_remote_path: "~/isync"
+domains:
+  - domain_name: "example.com"
+    admin_email: "admin@example.com"
+    sa_json_path: "/absolute/path/to/service_account.json"
+    group_email: "uploaders@example.com"
+    remote_sa_json_path: ""

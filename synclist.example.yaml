@@ -1,0 +1,4 @@
+sync_pairs:
+  - source: "C:/Data/MyFiles"
+    dest: "drive:SharedDrive/TargetFolder"
+    domain_reference: "example.com"

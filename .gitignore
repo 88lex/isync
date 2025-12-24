@@ -1,0 +1,22 @@
+# Python & Environment
+__pycache__/
+*.py[cod]
+venv/
+
+# Logs & Runtime Status
+isync.log
+current_status.json
+
+# Configuration & Secrets (Do NOT commit these)
+config.yaml
+synclist.yaml
+*.json
+*.zip
+
+# App Data
+backups/
+config_library/
+
+# OS Files
+.DS_Store
+Thumbs.db
