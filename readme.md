@@ -72,6 +72,7 @@ You must perform the following steps for **EACH** Google Workspace domain you wi
       ```text
       https://www.googleapis.com/auth/admin.directory.user,
       https://www.googleapis.com/auth/admin.directory.group,
+      https://www.googleapis.com/auth/admin.directory.group.member,
       https://www.googleapis.com/auth/drive
       ```
     * Click **Authorize**.
@@ -149,6 +150,14 @@ ISync supports three flexible operating modes. Choose the one that fits your net
     *   Keep the window open.
 *   **Access (Local):** Open browser to `http://localhost:8501`.
 *   **UI Check:** Sidebar Host should match the Server's hostname.
+
+### Mode 4: Hybrid (Local App + Remote Rclone)
+*   **Scenario:** You want the UI running on your local machine (for ease of access/monitoring), but the heavy lifting (Rclone) should happen on a remote server (e.g., a powerful NAS or VPS).
+*   **Launch:** Run `run_isync.bat` (Windows) or `./run_isync.sh` (Mac/Linux) locally.
+*   **Config:** In the **Configuration** tab:
+    1.  Check **Enable SSH Remote Execution**.
+    2.  Fill in SSH Host, User, and Key details.
+    3.  Set **Remote JSON Path** in the Domain Config to where the keys live *on the remote server*.
 
 ---
 
