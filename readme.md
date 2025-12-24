@@ -1,7 +1,5 @@
 # ISync (Impersonate Sync)
 
-
-
 **ISync** is an advanced Python automation tool designed for high-volume data migrations to Google Workspace Shared Drives. It bypasses the standard 750GB daily upload limit per user by automating the lifecycle of temporary user accounts.
 
 It utilizes **Service Account Impersonation**, meaning you do **not** need to manage thousands of JSON key files. One Master Service Account can generate, control, and delete temporary users on the fly.
@@ -9,13 +7,13 @@ It utilizes **Service Account Impersonation**, meaning you do **not** need to ma
 ---
 
 ## 📋 Table of Contents
-1.  [Architecture](#architecture)
-2.  [Prerequisites (Critical Setup)](#prerequisites)
-3.  [Installation (Local & Remote)](#installation)
-4.  [Operating Modes & Usage](#usage)
-5.  [First Run & Configuration Walkthrough](#first-run)
-6.  [Background Persistence (Tmux)](#background-persistence)
-7.  [Troubleshooting](#troubleshooting)
+1. [Architecture](#architecture)
+2. [Prerequisites (Critical Setup)](#prerequisites)
+3. [Installation (Local & Remote)](#installation)
+4. [Operating Modes & Usage](#usage)
+5. [First Run & Configuration Walkthrough](#first-run)
+6. [Background Persistence (Tmux)](#background-persistence)
+7. [Troubleshooting](#troubleshooting)
 
 ---
 
@@ -124,3 +122,91 @@ cd isync
 # 3. Set permissions and install
 chmod +x install.sh run_isync.sh
 ./install.sh
+
+---
+
+## <a name="usage"></a> 4. Operating Modes & Usage
+
+ISync supports three flexible operating modes. Choose the one that fits your network.
+
+### Mode 1: Fully Local
+*   **Scenario:** You run the app and rclone on your local machine.
+*   **Launch:** Double-click `run_isync.bat` (Windows) or `./run_isync.sh` (Linux/Mac).
+*   **Access:** Open browser to `http://localhost:8501`.
+*   **UI Check:** Sidebar Host should match your local computer name.
+
+### Mode 2: Remote Server (Tailscale / VPN)
+*   **Scenario:** App runs on a remote server connected via Tailscale.
+*   **Launch (Server):** SSH into server and run `./run_isync.sh`.
+*   **Access (Local):** Open browser to `http://<tailscale-ip>:8501`.
+*   **UI Check:** Sidebar Host should match the Server's hostname.
+
+### Mode 3: Remote Server (SSH Tunnel)
+*   **Scenario:** App runs on a remote server NOT on Tailscale (public internet or private VPC).
+*   **Launch (Server):** SSH into server and run `./run_isync.sh`.
+*   **Connect (Local):** Run the `connect_tunnel.bat` script on your Windows machine.
+    *   Enter your server address (e.g., `user@1.2.3.4`).
+    *   Keep the window open.
+*   **Access (Local):** Open browser to `http://localhost:8501`.
+*   **UI Check:** Sidebar Host should match the Server's hostname.
+
+---
+
+## <a name="first-run"></a> 5. First Run & Configuration Walkthrough
+
+Once you have launched the app (see Section 4), follow these steps to configure your first job.
+
+### Step 1: Global Settings (Tab 1)
+Navigate to the ⚙️ **Configuration** tab. You will see a health check at the top. If it's your first run, it will likely show errors. Expand the "Edit Configuration" form.
+
+1.  **Upload Limit:** Set this to `700G` (Google's daily limit is 750GB). ISync will rotate users when this is hit.
+2.  **Rclone Transfers:** Default is 8. Higher values use more bandwidth/CPU.
+3.  **Max Users/Cycle:** How many temporary users to create in a single run (e.g., 10).
+4.  **Rclone Command:** Usually `copy`. Use `sync` only if you want the destination to exactly match the source (deletes files at dest!).
+5.  **Stall Timeout:** If Rclone stops outputting stats for this many minutes, the process is killed and restarted.
+
+### Step 2: Domain Configuration
+This is the most critical part. You need the files from the Prerequisites section.
+
+*   **Domain Name:** Your Google Workspace domain (e.g., `example.com`).
+*   **Admin Email:** The Super Admin email you are impersonating (e.g., `admin@example.com`).
+*   **Local JSON Path:** The absolute path to the Service Account JSON key on the machine running the UI.
+    *   Windows Example: `C:\Users\Admin\keys\isync-sa.json`
+    *   Linux Example: `/home/user/keys/isync-sa.json`
+*   **Group Email:** The Google Group created in Prerequisites (e.g., `uploaders@example.com`).
+*   **Remote JSON Path:** (Only for Mode 2/3) The path to the JSON key on the remote server.
+
+Click 💾 **Save Settings**. The page will reload, and the "Configuration Health" check should turn green.
+
+### Step 3: Verify Connectivity
+Click the "Test Config & Connectivity" button at the bottom of Tab 1.
+*   **Success:** You see "✅ Domain: API OK".
+*   **Failure:** Check your JSON path, Admin Email, and ensure Domain-Wide Delegation scopes are correct in the Google Admin Console.
+
+### Step 4: Add a Job (Tab 2)
+Go to the 📂 **Sync Jobs** tab.
+
+1.  **Source:** Local path (`C:\Data`) or Rclone remote (`myremote:bucket`).
+2.  **Destination:** Usually a Shared Drive path (e.g., `drive:SharedDriveName/TargetFolder`).
+3.  **Target Domain:** Select the domain configured in Step 2.
+4.  Click **Add Job**.
+
+### Step 5: Launch
+Select the job in the Queue list and click 🚀 **Launch ISync**. Switch to the 📺 **Live Console** tab to watch the progress.
+
+---
+
+## <a name="background-persistence"></a> 6. Background Persistence (Tmux)
+
+On Linux/Mac, `run_isync.sh` automatically attempts to use `tmux`. This ensures the sync job continues running even if you close your SSH terminal.
+
+*   **Attach:** `./run_isync.sh` (will attach to existing session if found).
+*   **Detach:** Press `Ctrl+B`, then `D`.
+
+---
+
+## <a name="troubleshooting"></a> 7. Troubleshooting
+
+*   **Stalls:** If Rclone output stops for 10 minutes (configurable), ISync will kill the process and restart the loop.
+*   **Auth Errors:** Use the "Check Auth Connection" button in Manual Ops to verify your Service Account and Admin Email.
+*   **Logs:** Check the "Live Console" tab or view `isync.log` directly.

@@ -171,7 +171,7 @@ with tab1:
                 save_config(new_conf)
                 st.success("Settings Saved!")
                 time.sleep(1)
-                st.experimental_rerun()
+                st.rerun()
 
     with st.expander("📚 Configuration Library (Import/Export)", expanded=False):
         st.caption("Save current settings to a named JSON file or load a previous configuration.")
@@ -206,7 +206,7 @@ with tab1:
                         save_config(new_conf)
                         st.success(f"Loaded {sel_file}! Reloading...")
                         time.sleep(1)
-                        st.experimental_rerun()
+                        st.rerun()
                     except Exception as e:
                         st.error(f"Error: {e}")
             else:
@@ -223,10 +223,10 @@ with tab1:
                 st.session_state['confirm_reset'] = False
                 st.success("Configuration reset to defaults!")
                 time.sleep(1)
-                st.experimental_rerun()
+                st.rerun()
             if rc2.button("❌ Cancel"):
                 st.session_state['confirm_reset'] = False
-                st.experimental_rerun()
+                st.rerun()
 
     if st.button("Test Config & Connectivity"):
         with st.spinner("Checking..."):
@@ -326,7 +326,7 @@ with tab1:
                     if r1.returncode == 0 and r2.returncode == 0:
                         st.success("✅ Pull Complete. Refreshing...")
                         time.sleep(1)
-                        st.experimental_rerun()
+                        st.rerun()
                     else: st.error(f"❌ Pull Failed: {r1.stderr} {r2.stderr}")
             
             st.divider()
@@ -386,7 +386,7 @@ with tab2:
                     sync_pairs.append({'source': src, 'dest': dst, 'domain_reference': dom_ref})
                     save_synclist(sync_pairs)
                     st.success("Added")
-                    st.experimental_rerun()
+                    st.rerun()
 
     if sync_pairs:
         st.write("### Queue")
@@ -411,7 +411,7 @@ with tab2:
 # --- TAB 3: MONITOR ---
 with tab3:
     st.header("Live Monitor")
-    if st.button("Refresh"): st.experimental_rerun()
+    if st.button("Refresh"): st.rerun()
     status = get_live_status()
     m1, m2, m3, m4 = st.columns(4)
     if status:
@@ -428,7 +428,7 @@ with tab3:
     lc1, lc2 = st.columns([1, 4])
     if lc1.button("🗑️ Clear Log"):
         with open("isync.log", "w") as f: f.write("")
-        st.experimental_rerun()
+        st.rerun()
 
     log_filter = lc2.text_input("Filter Log", help="Show only lines containing this text.")
 
