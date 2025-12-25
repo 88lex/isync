@@ -57,8 +57,37 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
+SESSION_STATE_FILE = "session_state.json"
+
+def save_session_state():
+    """Persists session state to file."""
+    state = {}
+    for k, v in st.session_state.items():
+        # Filter out complex objects if any, mostly strings/ints/bools/lists
+        try:
+            json.dumps(v)
+            state[k] = v
+        except: pass
+    try:
+        with open(SESSION_STATE_FILE, 'w') as f:
+            json.dump(state, f)
+    except Exception: pass
+
+def load_session_state():
+    """Loads session state from file."""
+    if os.path.exists(SESSION_STATE_FILE):
+        try:
+            with open(SESSION_STATE_FILE, 'r') as f:
+                data = json.load(f)
+            for k, v in data.items():
+                if k not in st.session_state:
+                    st.session_state[k] = v
+        except Exception: pass
+
 def ui_text_input_copy(label, value="", key=None, help=None, type="default", on_change=None, args=None, kwargs=None):
     """Renders a text input with a copy button (code block) below it."""
+    if on_change is None:
+        on_change = save_session_state
     val = st.text_input(label, value=value, key=key, help=help, type=type, on_change=on_change, args=args, kwargs=kwargs)
     if val: st.code(val, language=None)
     return val
@@ -146,6 +175,9 @@ render_step_manager()
 
 config = load_config()
 
+# --- LOAD SESSION STATE ---
+load_session_state()
+
 # --- LIVE CONFIG PATCHING ---
 # Override loaded config with live session state values for immediate preview updates
 if "ssh_host_input" in st.session_state: config['ssh_host'] = st.session_state.ssh_host_input
@@ -164,10 +196,12 @@ if 'shared_max_users' not in st.session_state:
 def update_max_users_from_config():
     st.session_state.shared_max_users = st.session_state.config_max_users
     st.session_state.manual_max_users = st.session_state.config_max_users
+    save_session_state()
 
 def update_max_users_from_manual():
     st.session_state.shared_max_users = st.session_state.manual_max_users
     st.session_state.config_max_users = st.session_state.manual_max_users
+    save_session_state()
 
 # --- SIDEBAR: SYSTEM CONTEXT & MODE ---
 # Moved to top so 'ssh_enabled' updates config before Preview renders
@@ -179,7 +213,7 @@ with st.sidebar:
     nav_view = st.radio("Navigation", ["⚙️ Configuration", "📂 Sync Jobs", "📺 Live Console", "🛠️ Manual Ops"], label_visibility="collapsed")
     st.divider()
     st.header("Execution Mode")
-    ssh_enabled = st.checkbox("Enable SSH Remote Execution", value=config.get('ssh_enabled', False), help="Run logic locally, execute Rclone on remote server.")
+    ssh_enabled = st.checkbox("Enable SSH Remote Execution", value=config.get('ssh_enabled', False), key="ssh_enabled_chk", on_change=save_session_state, help="Run logic locally, execute Rclone on remote server.")
     config['ssh_enabled'] = ssh_enabled # Update in-memory config for Previews
     
     st.divider()
@@ -191,7 +225,7 @@ with st.sidebar:
     if curr_strat == 'existing':
         mode_idx = 1 if curr_inc else 2
     
-    user_mode = st.selectbox("Select Mode", ["New Temp Users", "Existing Users", "Existing Users Without Protected"], index=mode_idx, help="Define how users are selected for rotation.")
+    user_mode = st.selectbox("Select Mode", ["New Temp Users", "Existing Users", "Existing Users Without Protected"], index=mode_idx, key="user_mode_sel", on_change=save_session_state, help="Define how users are selected for rotation.")
     
     # Update config based on selection
     if user_mode == "New Temp Users":
@@ -309,7 +343,7 @@ if nav_view == "⚙️ Configuration":
         c1, c2 = st.columns(2)
         with c1:
             upload_limit = ui_text_input_copy("Upload Limit *", value=config.get('upload_limit', '700G'), help="Stop transfer and rotate user after this amount (e.g. 700G).")
-        transfers = c2.number_input("Rclone Transfers *", value=int(config.get('transfers', 8)), help="Number of parallel file transfers.")
+        transfers = c2.number_input("Rclone Transfers *", value=int(config.get('transfers', 8)), on_change=save_session_state, help="Number of parallel file transfers.")
         
         c_src, c_dst = st.columns(2)
         with c_src:
@@ -324,8 +358,8 @@ if nav_view == "⚙️ Configuration":
             users_file = ui_text_input_copy("Users List File", value=users_file, help="Path to text file containing one email per line.")
 
         c4, c5 = st.columns(2)
-        cmd_type = c4.selectbox("Rclone Command *", ["copy", "sync"], index=0 if config.get('rclone_command', 'copy') == 'copy' else 1, help="'copy' adds files; 'sync' makes dest identical to source (deletes files!).")
-        stall_time = c5.number_input("Stall Timeout (Mins) *", value=int(config.get('stall_timeout_minutes', 10)), help="Restart rclone if no output is received for this many minutes.")
+        cmd_type = c4.selectbox("Rclone Command *", ["copy", "sync"], index=0 if config.get('rclone_command', 'copy') == 'copy' else 1, on_change=save_session_state, help="'copy' adds files; 'sync' makes dest identical to source (deletes files!).")
+        stall_time = c5.number_input("Stall Timeout (Mins) *", value=int(config.get('stall_timeout_minutes', 10)), on_change=save_session_state, help="Restart rclone if no output is received for this many minutes.")
         
         c6, c7 = st.columns(2)
         with c6:
@@ -333,7 +367,7 @@ if nav_view == "⚙️ Configuration":
         with c7:
             flags = ui_text_input_copy("Global Flags (Optional)", value=config.get('global_rclone_flags', ''), key="global_flags_input", help="Extra flags passed to rclone (e.g. --drive-use-trash=false).")
         
-        step_check = st.checkbox("Enable Step Check (Pause before execution)", value=config.get('step_check', False), help="If enabled, ISync will pause before every main step (Create User, Run Rclone, Delete User) and ask for confirmation.")
+        step_check = st.checkbox("Enable Step Check (Pause before execution)", value=config.get('step_check', False), on_change=save_session_state, help="If enabled, ISync will pause before every main step (Create User, Run Rclone, Delete User) and ask for confirmation.")
 
         st.caption("Advanced Rclone Settings")
         c_adv1, c_adv2, c_adv3 = st.columns(3)
@@ -341,7 +375,7 @@ if nav_view == "⚙️ Configuration":
             chunk_size = ui_text_input_copy("Chunk Size", value=config.get('rclone_chunk_size', '128M'), help="Rclone --drive-chunk-size (e.g. 128M, 256M).")
         with c_adv2:
             stats_int = ui_text_input_copy("Stats Interval", value=config.get('rclone_stats_interval', '1s'), help="Rclone --stats frequency (e.g. 1s, 5s).")
-        verbose_log = c_adv3.checkbox("Verbose Logging", value=config.get('rclone_verbose', True), help="Enable --verbose flag for detailed logs.")
+        verbose_log = c_adv3.checkbox("Verbose Logging", value=config.get('rclone_verbose', True), on_change=save_session_state, help="Enable --verbose flag for detailed logs.")
 
         st.subheader("Remote Execution (SSH)")
         st.caption(f"SSH Mode is currently: **{'ENABLED' if ssh_enabled else 'DISABLED'}** (Toggle in Sidebar)")
@@ -363,7 +397,7 @@ if nav_view == "⚙️ Configuration":
         with c_rem1:
             ssh_remote_path = ui_text_input_copy("Remote ISync Path", value=ssh_remote_path, help="Directory on remote server where isync is installed (e.g. /home/user/isync). Required for Sync features.")
         with c_rem2:
-            ssh_timeout = st.number_input("Timeout (s)", value=int(config.get('ssh_connect_timeout', 10)), min_value=1, help="SSH connection timeout in seconds.")
+            ssh_timeout = st.number_input("Timeout (s)", value=int(config.get('ssh_connect_timeout', 10)), min_value=1, on_change=save_session_state, help="SSH connection timeout in seconds.")
 
         st.subheader("Safety & Security")
         protected_list = config.get('protected_users', [])
@@ -813,8 +847,8 @@ elif nav_view == "🛠️ Manual Ops":
         m_dst = ui_text_input_copy("Destination Path", value=config.get('default_dest', ''), help="Destination for manual run.")
         
         c_man1, c_man2 = st.columns(2)
-        m_dry_check = c_man1.checkbox("Dry Run", value=True, key="man_dry")
-        man_use_ssh = c_man2.checkbox("Run via SSH", value=config.get('ssh_enabled', False), key="man_ssh")
+        m_dry_check = c_man1.checkbox("Dry Run", value=True, key="man_dry", on_change=save_session_state)
+        man_use_ssh = c_man2.checkbox("Run via SSH", value=config.get('ssh_enabled', False), key="man_ssh", on_change=save_session_state)
         
         is_dry = True if manual_test_mode else m_dry_check
         if manual_test_mode: st.caption("ℹ️ Test Mode: Dry Run is enforced.")
@@ -840,7 +874,7 @@ elif nav_view == "🛠️ Manual Ops":
         c_b1, c_b2 = st.columns(2)
         # Display N for clarity (read-only)
         c_b1.text_input("N (Users)", value=st.session_state.shared_max_users, disabled=True, help="Value set in User Management section.")
-        b_dry = c_b2.checkbox("Dry Run", value=True, key="b_dry_run")
+        b_dry = c_b2.checkbox("Dry Run", value=True, key="b_dry_run", on_change=save_session_state)
         
         c_batch_run, c_batch_prev = st.columns([1, 1])
         
