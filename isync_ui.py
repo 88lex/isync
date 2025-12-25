@@ -10,7 +10,7 @@ import shutil
 import difflib
 import shlex
 from datetime import datetime
-from isync_config import load_config, save_config, load_synclist, save_synclist, get_default_config, resolve_sa_path, LOG_FILE_PATH
+from isync_config import load_config, save_config, load_synclist, save_synclist, resolve_sa_path, LOG_FILE_PATH, DEFAULT_CONFIG_FILE, CURRENT_CONFIG_FILE, CONFIGS_DIR
 from isync_engine import ISyncEngine
 from isync_auth import ISyncAuthManager
 
@@ -21,8 +21,12 @@ st.markdown("""
     <style>
         /* Reduce top padding */
         .block-container {
-            padding-top: 1rem !important;
+            padding-top: 3.5rem !important;
             padding-bottom: 1rem !important;
+        }
+        /* Force header height reduction */
+        header[data-testid="stHeader"] {
+            height: 3rem !important;
         }
         /* Reduce vertical spacing between widgets */
         div[data-testid="stVerticalBlock"] {
@@ -41,21 +45,21 @@ st.markdown("""
         /* Targets expanders only inside the marked container */
         div[data-testid="stVerticalBlock"]:has(.sticky-preview-marker) > div > div[data-testid="stExpander"] {
             position: sticky;
-            top: 3.75rem;
+            top: 3rem;
             z-index: 999;
             background-color: #0e1117; /* Matches Dark Theme BG. Change to white for light theme. */
             border-bottom: 1px solid #333;
         }
         /* Adjust sticky offset for the second preview (SSH) if present (3rd child: Marker, Expander1, Expander2) */
         div[data-testid="stVerticalBlock"]:has(.sticky-preview-marker) > div:nth-child(3) > div[data-testid="stExpander"] {
-            top: 6.75rem; /* Header (3.75) + First Expander (3.0) */
+            top: 6.5rem; /* Header (3.0) + First Expander (3.0) + Gap */
         }
     </style>
 """, unsafe_allow_html=True)
 
-def ui_text_input_copy(label, value="", key=None, help=None, type="default"):
+def ui_text_input_copy(label, value="", key=None, help=None, type="default", on_change=None, args=None, kwargs=None):
     """Renders a text input with a copy button (code block) below it."""
-    val = st.text_input(label, value=value, key=key, help=help, type=type)
+    val = st.text_input(label, value=value, key=key, help=help, type=type, on_change=on_change, args=args, kwargs=kwargs)
     if val: st.code(val, language=None)
     return val
 
@@ -135,7 +139,7 @@ def validate_config_health(conf):
     return issues
 
 # Reduced font size title
-st.markdown("<h3 style='position: fixed; top: 0; left: 4rem; z-index: 999999; margin: 0; padding-top: 0.5rem; font-size: 1.2rem;'>🔄 ISync: Impersonate Sync</h3>", unsafe_allow_html=True)
+st.markdown("<h3 style='margin: 0 0 0.5rem 0;'>🔄 ISync: Impersonate Sync</h3>", unsafe_allow_html=True)
 
 # --- STEP STATUS DISPLAY ---
 render_step_manager()
@@ -147,6 +151,11 @@ config = load_config()
 if "ssh_host_input" in st.session_state: config['ssh_host'] = st.session_state.ssh_host_input
 if "ssh_user_input" in st.session_state: config['ssh_user'] = st.session_state.ssh_user_input
 if "ssh_key_input" in st.session_state: config['ssh_key_path'] = st.session_state.ssh_key_input
+if "def_src_input" in st.session_state: config['default_source'] = st.session_state.def_src_input
+if "def_dst_input" in st.session_state: config['default_dest'] = st.session_state.def_dst_input
+if "global_flags_input" in st.session_state: config['global_rclone_flags'] = st.session_state.global_flags_input
+if "protected_users_input" in st.session_state:
+    config['protected_users'] = [u.strip() for u in st.session_state.protected_users_input.split('\n') if u.strip()]
 
 # --- SYNC STATE LOGIC ---
 if 'shared_max_users' not in st.session_state:
@@ -172,6 +181,28 @@ with st.sidebar:
     st.header("Execution Mode")
     ssh_enabled = st.checkbox("Enable SSH Remote Execution", value=config.get('ssh_enabled', False), help="Run logic locally, execute Rclone on remote server.")
     config['ssh_enabled'] = ssh_enabled # Update in-memory config for Previews
+    
+    st.divider()
+    st.header("User Mode")
+    # Map config to User Mode selection
+    curr_strat = config.get('rotation_strategy', 'standard')
+    curr_inc = config.get('include_protected_users', False)
+    mode_idx = 0
+    if curr_strat == 'existing':
+        mode_idx = 1 if curr_inc else 2
+    
+    user_mode = st.selectbox("Select Mode", ["New Temp Users", "Existing Users", "Existing Users Without Protected"], index=mode_idx, help="Define how users are selected for rotation.")
+    
+    # Update config based on selection
+    if user_mode == "New Temp Users":
+        config['rotation_strategy'] = 'standard'
+        config['include_protected_users'] = False
+    elif user_mode == "Existing Users":
+        config['rotation_strategy'] = 'existing'
+        config['include_protected_users'] = True
+    else:
+        config['rotation_strategy'] = 'existing'
+        config['include_protected_users'] = False
 
 # --- COMMAND PREVIEW ---
 # 1. Rclone Preview (Inner Command)
@@ -187,10 +218,19 @@ with st.container():
         st.caption("This is the command that will run on the target system.")
         # Get first domain for context or use defaults
         d_preview = config.get('domains', [{}])[0] if config.get('domains') else {}
-        p_src = "/local/source" if not config.get('ssh_enabled') else "/remote/source"
-        p_dst = "drive:SharedDrive/Dest"
+        p_src = config.get('default_source') or ""
+        p_dst = config.get('default_dest') or ""
         
-        cmd_preview = preview_eng.build_rclone_cmd(p_src, p_dst, d_preview.get('sa_json_path'), d_preview.get('admin_email', 'admin@example.com'), dry_run=False, remote_sa_json_path=d_preview.get('remote_sa_json_path'))
+        # Override with Batch Job inputs if present
+        if st.session_state.get('b_src'): p_src = st.session_state.get('b_src')
+        if st.session_state.get('b_dst'): p_dst = st.session_state.get('b_dst')
+        
+        # Determine dry_run state based on Manual Ops context
+        preview_dry_run = False
+        if nav_view == "🛠️ Manual Ops":
+            preview_dry_run = st.session_state.get('b_dry_run', True)
+
+        cmd_preview = preview_eng.build_rclone_cmd(p_src, p_dst, d_preview.get('sa_json_path'), d_preview.get('admin_email', 'admin@example.com'), dry_run=preview_dry_run, remote_sa_json_path=d_preview.get('remote_sa_json_path'))
         
         if platform.system() == "Windows" and not config.get('ssh_enabled'):
             ps_bin = shutil.which("pwsh") or shutil.which("powershell")
@@ -222,6 +262,48 @@ if nav_view == "⚙️ Configuration":
     
     st.divider()
     
+    # --- CONFIGURATION MANAGEMENT ---
+    st.subheader("Configuration Management")
+    cm1, cm2, cm3, cm4 = st.columns(4)
+    
+    with cm1:
+        if st.button("Load Default Config"):
+            if os.path.exists(DEFAULT_CONFIG_FILE):
+                shutil.copy(DEFAULT_CONFIG_FILE, CURRENT_CONFIG_FILE)
+                st.success("Loaded Default!")
+                time.sleep(0.5)
+                st.rerun()
+            else:
+                st.error("No default_config.yaml found.")
+
+    with cm2:
+        if not os.path.exists(CONFIGS_DIR): os.makedirs(CONFIGS_DIR)
+        saved_configs = [f for f in os.listdir(CONFIGS_DIR) if f.endswith('.yaml')]
+        sel_saved = st.selectbox("Select Saved Config", [""] + saved_configs, label_visibility="collapsed")
+        if st.button("Load Saved Config"):
+            if sel_saved:
+                shutil.copy(os.path.join(CONFIGS_DIR, sel_saved), CURRENT_CONFIG_FILE)
+                st.success(f"Loaded {sel_saved}!")
+                time.sleep(0.5)
+                st.rerun()
+
+    with cm3:
+        if st.button("Save Current as Default"):
+            save_config(config, DEFAULT_CONFIG_FILE)
+            st.success("Saved current settings as Default!")
+
+    with cm4:
+        new_name = st.text_input("Config Name", placeholder="my_config", label_visibility="collapsed")
+        if st.button("Save as Named Config"):
+            if new_name:
+                fname = new_name if new_name.endswith('.yaml') else f"{new_name}.yaml"
+                save_config(config, os.path.join(CONFIGS_DIR, fname))
+                st.success(f"Saved to configs/{fname}")
+                time.sleep(0.5)
+                st.rerun()
+            else: st.error("Enter a name.")
+
+    st.divider()
     with st.expander("📝 Edit Configuration", expanded=True):
         st.caption("Fields marked with * are mandatory.")
         c1, c2 = st.columns(2)
@@ -229,12 +311,16 @@ if nav_view == "⚙️ Configuration":
             upload_limit = ui_text_input_copy("Upload Limit *", value=config.get('upload_limit', '700G'), help="Stop transfer and rotate user after this amount (e.g. 700G).")
         transfers = c2.number_input("Rclone Transfers *", value=int(config.get('transfers', 8)), help="Number of parallel file transfers.")
         
+        c_src, c_dst = st.columns(2)
+        with c_src:
+            def_src = ui_text_input_copy("Default Source", value=config.get('default_source', ''), key="def_src_input", help="Default source path for rclone commands.")
+        with c_dst:
+            def_dst = ui_text_input_copy("Default Destination", value=config.get('default_dest', ''), key="def_dst_input", help="Default destination path for rclone commands.")
+        
         st.subheader("Run & Stop Mode Settings")
-        c_strat1, c_strat2 = st.columns(2)
-        strategy = c_strat1.selectbox("Mode / Strategy", ["standard", "existing"], index=0 if config.get('rotation_strategy', 'standard') == 'standard' else 1, help="Standard: Create N users. Existing: Use list.")
-        max_users = c_strat2.number_input("# Users to create *", value=st.session_state.shared_max_users, key="config_max_users", on_change=update_max_users_from_config, help="Number of users to rotate through before stopping.")
+        max_users = st.number_input("# Users to create *", value=st.session_state.shared_max_users, key="config_max_users", on_change=update_max_users_from_config, help="Number of users to rotate through before stopping.")
         users_file = config.get('existing_users_file', 'users.txt')
-        if strategy == "existing":
+        if config.get('rotation_strategy') == "existing":
             users_file = ui_text_input_copy("Users List File", value=users_file, help="Path to text file containing one email per line.")
 
         c4, c5 = st.columns(2)
@@ -245,7 +331,7 @@ if nav_view == "⚙️ Configuration":
         with c6:
             webhook = ui_text_input_copy("Webhook URL (Optional)", value=config.get('webhook_url', ''), help="Discord or Slack webhook URL for notifications.")
         with c7:
-            flags = ui_text_input_copy("Global Flags (Optional)", value=config.get('global_rclone_flags', ''), help="Extra flags passed to rclone (e.g. --drive-use-trash=false).")
+            flags = ui_text_input_copy("Global Flags (Optional)", value=config.get('global_rclone_flags', ''), key="global_flags_input", help="Extra flags passed to rclone (e.g. --drive-use-trash=false).")
         
         step_check = st.checkbox("Enable Step Check (Pause before execution)", value=config.get('step_check', False), help="If enabled, ISync will pause before every main step (Create User, Run Rclone, Delete User) and ask for confirmation.")
 
@@ -282,7 +368,7 @@ if nav_view == "⚙️ Configuration":
         st.subheader("Safety & Security")
         protected_list = config.get('protected_users', [])
         protected_str = "\n".join(protected_list)
-        protected_input = st.text_area("Protected Users (One per line)", value=protected_str, help="Users listed here will NEVER be deleted by ISync (Manual or Automated). Use this for permanent accounts.")
+        protected_input = st.text_area("Protected Users (One per line)", value=protected_str, key="protected_users_input", help="Users listed here will NEVER be deleted by ISync (Manual or Automated). Use this for permanent accounts.")
 
         if st.button("Test SSH Connection"):
             cmd = ["ssh"]
@@ -319,78 +405,25 @@ if nav_view == "⚙️ Configuration":
             
             if d_name: updated_domains.append({'domain_name': d_name, 'admin_email': d_admin, 'sa_json_path': d_json, 'group_email': d_group, 'remote_sa_json_path': d_remote_json})
         
-        if st.button("💾 Save Settings"):
+        if st.button("💾 Save to Current Config"):
             p_users = [u.strip() for u in protected_input.split('\n') if u.strip()]
             new_conf = {
+                'default_source': def_src, 'default_dest': def_dst,
                 'upload_limit': upload_limit, 'transfers': transfers, 'max_users_per_cycle': max_users,
-                'rotation_strategy': strategy, 'existing_users_file': users_file,
+                'rotation_strategy': config.get('rotation_strategy'), 'existing_users_file': users_file,
                 'rclone_command': cmd_type, 'stall_timeout_minutes': stall_time,
                 'rclone_chunk_size': chunk_size, 'rclone_stats_interval': stats_int, 'rclone_verbose': verbose_log,
                 'webhook_url': webhook, 'global_rclone_flags': flags,
                 'step_check': step_check,
                 'ssh_enabled': ssh_enabled, 'ssh_host': ssh_host, 'ssh_user': ssh_user, 'ssh_key_path': ssh_key, 'ssh_remote_path': ssh_remote_path, 'ssh_connect_timeout': ssh_timeout,
                 'protected_users': p_users,
+                'include_protected_users': config.get('include_protected_users'),
                 'domains': updated_domains
             }
             save_config(new_conf)
             st.success("Settings Saved!")
             time.sleep(1)
             st.rerun()
-
-    with st.expander("📚 Configuration Library (Import/Export)", expanded=False):
-        st.caption("Save current settings to a named JSON file or load a previous configuration.")
-        
-        lib_dir = "config_library"
-        if not os.path.exists(lib_dir): os.makedirs(lib_dir)
-        
-        c_ex, c_im = st.columns(2)
-        
-        with c_ex:
-            st.markdown("**Export Current**")
-            export_name = st.text_input("Config Name", placeholder="e.g. production_v1", help="Save as .json in config_library/")
-            if st.button("💾 Export to Library"):
-                if export_name:
-                    fname = f"{export_name}.json" if not export_name.endswith('.json') else export_name
-                    fpath = os.path.join(lib_dir, fname)
-                    with open(fpath, 'w') as f:
-                        json.dump(config, f, indent=4)
-                    st.success(f"Saved: {fname}")
-                else:
-                    st.error("Enter a name.")
-
-        with c_im:
-            st.markdown("**Import from Library**")
-            files = [f for f in os.listdir(lib_dir) if f.endswith('.json')]
-            if files:
-                sel_file = st.selectbox("Select Config", files, label_visibility="collapsed")
-                if st.button("📂 Load Selected"):
-                    try:
-                        with open(os.path.join(lib_dir, sel_file), 'r') as f:
-                            new_conf = json.load(f)
-                        save_config(new_conf)
-                        st.success(f"Loaded {sel_file}! Reloading...")
-                        time.sleep(1)
-                        st.rerun()
-                    except Exception as e:
-                        st.error(f"Error: {e}")
-            else:
-                st.info("No saved configs.")
-
-        if st.button("⚠️ Reset to Defaults", help="Resets all configuration settings to their original defaults. Warning: This clears configured domains."):
-            st.session_state['confirm_reset'] = True
-
-        if st.session_state.get('confirm_reset', False):
-            st.warning("⚠️ Are you sure? This will delete all domain configurations.")
-            rc1, rc2 = st.columns(2)
-            if rc1.button("✅ Yes, Reset"):
-                save_config(get_default_config())
-                st.session_state['confirm_reset'] = False
-                st.success("Configuration reset to defaults!")
-                time.sleep(1)
-                st.rerun()
-            if rc2.button("❌ Cancel"):
-                st.session_state['confirm_reset'] = False
-                st.rerun()
 
     if st.button("Test Config & Connectivity"):
         with st.spinner("Checking..."):
@@ -427,6 +460,10 @@ if nav_view == "⚙️ Configuration":
                 for f in files_to_copy:
                     if os.path.exists(f): shutil.copy(f, tmp_path)
                 
+                # Copy configs dir
+                if os.path.exists(CONFIGS_DIR):
+                    shutil.copytree(CONFIGS_DIR, os.path.join(tmp_path, CONFIGS_DIR))
+                
                 # Zip
                 shutil.make_archive(os.path.join(bk_dir, tmp_name), 'zip', tmp_path)
                 shutil.rmtree(tmp_path)
@@ -460,13 +497,13 @@ if nav_view == "⚙️ Configuration":
                     st.info(f"Pushing files to {ssh_target}:{remote_base} ...")
                     
                     # Push Configs
-                    r1 = exec_scp("config.yaml", f"{ssh_target}:{remote_base}/config.yaml")
+                    r1 = exec_scp(CURRENT_CONFIG_FILE, f"{ssh_target}:{remote_base}/{CURRENT_CONFIG_FILE}")
                     r2 = exec_scp("synclist.yaml", f"{ssh_target}:{remote_base}/synclist.yaml")
                     
                     # Push Config Library (Backup JSONs)
                     r_lib = subprocess.CompletedProcess(args=[], returncode=0)
-                    if os.path.exists("config_library"):
-                        r_lib = exec_scp("config_library", f"{ssh_target}:{remote_base}/", recursive=True)
+                    if os.path.exists(CONFIGS_DIR):
+                        r_lib = exec_scp(CONFIGS_DIR, f"{ssh_target}:{remote_base}/", recursive=True)
 
                     # Push JSON Keys
                     json_errs = []
@@ -479,16 +516,16 @@ if nav_view == "⚙️ Configuration":
                             if rj.returncode != 0: json_errs.append(rj.stderr)
 
                     if r1.returncode == 0 and r2.returncode == 0 and r_lib.returncode == 0 and not json_errs:
-                        st.success("✅ Push Complete! (Note: Remote paths in config.yaml might need adjustment)")
+                        st.success("✅ Push Complete!")
                     else:
                         st.error(f"❌ Push Failed. \nConfig: {r1.stderr}\nSyncList: {r2.stderr}\nLib: {r_lib.stderr}\nKeys: {json_errs}")
 
             with c_sync2:
                 if st.button("⬇️ Pull Config from Remote"):
                     st.info(f"Pulling files from {ssh_target}:{remote_base} ...")
-                    r1 = exec_scp(f"{ssh_target}:{remote_base}/config.yaml", ".")
+                    r1 = exec_scp(f"{ssh_target}:{remote_base}/{CURRENT_CONFIG_FILE}", ".")
                     r2 = exec_scp(f"{ssh_target}:{remote_base}/synclist.yaml", ".")
-                    r_lib = exec_scp(f"{ssh_target}:{remote_base}/config_library", ".", recursive=True)
+                    r_lib = exec_scp(f"{ssh_target}:{remote_base}/{CONFIGS_DIR}", ".", recursive=True)
                     
                     if r1.returncode == 0 and r2.returncode == 0:
                         st.success("✅ Pull Complete. Refreshing...")
@@ -511,7 +548,7 @@ if nav_view == "⚙️ Configuration":
                     
                     return subprocess.run(cmd, capture_output=True, text=True)
 
-                for fname in ["config.yaml", "synclist.yaml"]:
+                for fname in [CURRENT_CONFIG_FILE, "synclist.yaml"]:
                     # Read Local
                     local_content = []
                     if os.path.exists(fname):
@@ -635,8 +672,9 @@ elif nav_view == "🛠️ Manual Ops":
             except Exception as e: st.error(f"Error: {e}")
 
         st.divider()
+        st.subheader("User Creation")
         
-        c_n, c_create, c_delete = st.columns([1, 1, 1])
+        c_n, c_create = st.columns([1, 1])
         with c_n:
             st.number_input("# Users to create", min_value=1, value=st.session_state.shared_max_users, key="manual_max_users", on_change=update_max_users_from_manual)
 
@@ -673,42 +711,106 @@ elif nav_view == "🛠️ Manual Ops":
                                 st.code("\n".join(created_list), language=None)
                     except Exception as e: st.error(f"Failed: {e}")
         
-        default_tgt = st.session_state['manual_email'] if st.session_state['manual_email'] else admin
-        target_user = ui_text_input_copy("Target User Email", value=default_tgt, key="target_user_input", help="The temporary user email to operate on. Defaults to Admin Email.")
+        st.subheader("User Management")
         
-        with c_delete:
-            btn_del_text = "Verify User Exists" if manual_test_mode else "Delete User"
-            if st.button(btn_del_text):
-                if target_user:
-                    try:
-                        protected = config.get('protected_users', [])
-                        mgr = ISyncAuthManager(sa_path, admin, protected_users=protected)
-                        if manual_test_mode:
-                            if mgr.user_exists(target_user): st.success(f"✅ User {target_user} exists.")
-                            else: st.warning(f"User {target_user} not found.")
-                        else:
-                            mgr.delete_user(target_user)
-                            st.success("Deleted:"); st.code(target_user, language=None)
-                    except Exception as e: st.error(f"Failed: {e}")
-
-        st.subheader("Directory Listing")
-        if st.button("List Users"):
+        # Row 1: List & Selection
+        c_list, c_sel_all, c_clear = st.columns([1, 1, 1])
+        
+        if c_list.button("List Users"):
             try:
                 mgr = ISyncAuthManager(sa_path, admin)
                 with st.spinner(f"Fetching users for {sel_conf['domain_name']}..."):
                     users = mgr.list_users(sel_conf['domain_name'])
                 
                 if users:
+                    st.session_state['fetched_users'] = users
                     st.success(f"Found {len(users)} users.")
-                    st.text_area("User List", "\n".join(users), height=200)
                 else:
+                    st.session_state['fetched_users'] = []
                     st.info("No users found.")
             except Exception as e: st.error(f"Failed to list users: {e}")
+        
+        if c_sel_all.button("Select All"):
+            if 'fetched_users' in st.session_state:
+                protected_set = set(u.lower().strip() for u in config.get('protected_users', []))
+                for u in st.session_state['fetched_users']:
+                    if u.lower().strip() not in protected_set:
+                        st.session_state[f"chk_{u}"] = True
+            st.rerun()
+
+        if c_clear.button("Clear List"):
+            st.session_state['fetched_users'] = []
+            st.rerun()
+
+        # Row 2: Actions
+        c_del_sel, c_add_prot = st.columns([1, 1])
+
+        if c_del_sel.button("Delete Selected Users"):
+            if 'fetched_users' in st.session_state and st.session_state['fetched_users']:
+                to_delete = []
+                for u in st.session_state['fetched_users']:
+                    if st.session_state.get(f"chk_{u}", False):
+                        to_delete.append(u)
+                
+                if to_delete:
+                    mgr = ISyncAuthManager(sa_path, admin, protected_users=config.get('protected_users', []))
+                    progress_text = "Verifying..." if manual_test_mode else "Deleting..."
+                    bar = st.progress(0, text=progress_text)
+                    for i, u in enumerate(to_delete):
+                        if manual_test_mode:
+                            if mgr.user_exists(u): st.write(f"✅ Would delete: {u}")
+                        else:
+                            mgr.delete_user(u)
+                        bar.progress((i + 1) / len(to_delete))
+                    st.success(f"Processed {len(to_delete)} users.")
+                    # Refresh list logic could go here, but requires re-fetch
+                else:
+                    st.warning("No users selected.")
+
+        if c_add_prot.button("Add Selected to Protected"):
+            if 'fetched_users' in st.session_state:
+                existing_lower = set(u.lower().strip() for u in config.get('protected_users', []))
+                new_protected_list = list(config.get('protected_users', []))
+                added_count = 0
+                
+                for u in st.session_state['fetched_users']:
+                    if st.session_state.get(f"chk_{u}", False):
+                        if u.lower().strip() not in existing_lower:
+                            new_protected_list.append(u.strip())
+                            existing_lower.add(u.lower().strip())
+                            added_count += 1
+                        st.session_state[f"chk_{u}"] = False
+                
+                if added_count > 0:
+                    config['protected_users'] = new_protected_list
+                    st.session_state.protected_users_input = "\n".join(new_protected_list)
+                    st.success(f"Added {added_count} users to Protected list.")
+                    time.sleep(0.5)
+                    st.rerun()
+                else:
+                    st.warning("No new users selected.")
+
+        if 'fetched_users' in st.session_state and st.session_state['fetched_users']:
+            protected_set = set(u.lower().strip() for u in config.get('protected_users', []))
+            with st.container():
+                st.write("Select users to delete:")
+                for u in st.session_state['fetched_users']:
+                    c_chk, c_email = st.columns([1, 15])
+                    with c_chk:
+                        if u.lower().strip() in protected_set:
+                            st.markdown("🛡️", help="Protected User")
+                        else:
+                            st.checkbox("Select", key=f"chk_{u}", label_visibility="collapsed", help=f"Select {u}")
+                    with c_email:
+                        st.code(u, language=None)
 
         st.divider()
         st.subheader("Run Single Rclone Job")
-        m_src = ui_text_input_copy("Source Path", help="Source for manual run.")
-        m_dst = ui_text_input_copy("Destination Path", help="Destination for manual run.")
+        
+        default_tgt = st.session_state['manual_email'] if st.session_state['manual_email'] else admin
+        target_user = ui_text_input_copy("Target User Email", value=default_tgt, key="target_user_input", help="The temporary user email to operate on. Defaults to Admin Email.")
+        m_src = ui_text_input_copy("Source Path", value=config.get('default_source', ''), help="Source for manual run.")
+        m_dst = ui_text_input_copy("Destination Path", value=config.get('default_dest', ''), help="Destination for manual run.")
         
         c_man1, c_man2 = st.columns(2)
         m_dry_check = c_man1.checkbox("Dry Run", value=True, key="man_dry")
@@ -732,23 +834,96 @@ elif nav_view == "🛠️ Manual Ops":
         st.subheader("Run Batch Job (Run & Stop)")
         st.caption("Execute a full rotation cycle manually with custom settings.")
         
-        b_src = ui_text_input_copy("Source Path", key="b_src")
-        b_dst = ui_text_input_copy("Destination Path", key="b_dst")
+        b_src = ui_text_input_copy("Source Path", value=config.get('default_source', ''), key="b_src")
+        b_dst = ui_text_input_copy("Destination Path", value=config.get('default_dest', ''), key="b_dst")
         
         c_b1, c_b2 = st.columns(2)
-        b_strat = c_b1.selectbox("Strategy", ["standard", "existing"], key="b_strat")
-        b_n = st.session_state.shared_max_users
+        # Display N for clarity (read-only)
+        c_b1.text_input("N (Users)", value=st.session_state.shared_max_users, disabled=True, help="Value set in User Management section.")
         b_dry = c_b2.checkbox("Dry Run", value=True, key="b_dry_run")
         
-        if st.button("🚀 Start Batch Job"):
+        c_batch_run, c_batch_prev = st.columns([1, 1])
+        
+        if c_batch_run.button("🚀 Start Batch Job"):
             if b_src and b_dst and selected_dom:
                 batch_conf = config.copy()
-                batch_conf['rotation_strategy'] = b_strat
-                batch_conf['max_users_per_cycle'] = b_n
+                batch_conf['max_users_per_cycle'] = st.session_state.shared_max_users
                 pair = {'source': b_src, 'dest': b_dst, 'domain_reference': selected_dom}
                 eng = ISyncEngine(batch_conf)
                 t = threading.Thread(target=eng.execute_job, args=(pair, b_dry))
                 t.start()
-                st.success(f"Batch Job Started! (N={b_n}, Strategy={b_strat})")
+                st.success(f"Batch Job Started! (N={st.session_state.shared_max_users}, Mode={config.get('rotation_strategy')})")
             else:
                 st.error("Missing Source, Destination, or Domain Context.")
+
+        if c_batch_prev.button("👁️ Preview Command Cycling"):
+            if b_src and b_dst and selected_dom:
+                batch_conf = config.copy()
+                batch_conf['max_users_per_cycle'] = st.session_state.shared_max_users
+                eng = ISyncEngine(batch_conf)
+                
+                preview_lines = []
+                sa_json = sel_conf.get('sa_json_path')
+                remote_sa_json = sel_conf.get('remote_sa_json_path')
+                
+                user_list = []
+                if config.get('rotation_strategy') == 'existing':
+                    try:
+                        sa_path = sel_conf.get('sa_json_path', '')
+                        admin = sel_conf.get('admin_email', '')
+                        mgr = ISyncAuthManager(sa_path, admin)
+                        with st.spinner("Fetching users from directory..."):
+                            raw_users = mgr.list_users(sel_conf['domain_name'])
+                        
+                        if not config.get('include_protected_users'):
+                            protected_set = set(u.lower() for u in config.get('protected_users', []))
+                            raw_users = [u for u in raw_users if u.lower() not in protected_set]
+                        user_list = raw_users[:st.session_state.shared_max_users]
+                    except Exception as e:
+                        st.error(f"Failed to fetch users: {e}")
+                else:
+                    for i in range(st.session_state.shared_max_users):
+                        user_list.append(f"dummy{i+1}@{selected_dom}")
+                
+                for i, u in enumerate(user_list):
+                    cmd = eng.build_rclone_cmd(b_src, b_dst, sa_json, u, dry_run=b_dry, remote_sa_json_path=remote_sa_json)
+                    if platform.system() == "Windows" and not config.get('ssh_enabled'):
+                        ps_bin = shutil.which("pwsh") or shutil.which("powershell")
+                        if ps_bin:
+                            cmd_str = subprocess.list2cmdline(cmd)
+                            cmd = [ps_bin, "-NoProfile", "-Command", cmd_str]
+                    preview_lines.append(f"--- Cycle {i+1}/{len(user_list)} (User: {u}) ---")
+                    preview_lines.append(shlex.join(cmd))
+                    preview_lines.append("")
+                
+                if preview_lines:
+                    st.text_area("Command Cycling Preview", "\n".join(preview_lines), height=400)
+            else:
+                st.error("Missing Source, Destination, or Domain Context.")
+
+        st.divider()
+        st.subheader("Session Management")
+        if st.button("Terminate Remote Sessions", help="Terminates all 'isync_' tmux sessions on the configured SSH host."):
+            if config.get('ssh_enabled'):
+                eng = ISyncEngine(config)
+                base_cmd = eng._get_ssh_base_cmd()
+                # Safer kill command compatible with most shells
+                kill_cmd_str = "for s in $(tmux list-sessions -F '#{session_name}' 2>/dev/null | grep '^isync_'); do tmux kill-session -t \"$s\"; echo \"Killed $s\"; done"
+                
+                full_cmd = base_cmd + [kill_cmd_str]
+                
+                with st.spinner("Terminating sessions..."):
+                    try:
+                        res = subprocess.run(full_cmd, capture_output=True, text=True, timeout=15)
+                        if res.returncode == 0:
+                            if res.stdout.strip():
+                                st.success("✅ Sessions terminated:")
+                                st.code(res.stdout)
+                            else:
+                                st.info("No active 'isync_' sessions found.")
+                        else:
+                            st.error(f"Failed: {res.stderr}")
+                    except Exception as e:
+                        st.error(f"Execution Error: {e}")
+            else:
+                st.warning("SSH Remote Execution is disabled. No remote sessions to terminate.")

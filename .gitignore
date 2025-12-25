@@ -8,7 +8,7 @@ logs/*.log
 current_status.json
 
 # Configuration & Secrets (Do NOT commit these)
-config.yaml
+*config.yaml
 synclist.yaml
 *.json
 *.zip

@@ -17,5 +17,6 @@ if (-not (Test-Path "venv")) {
 . "$ScriptDir\venv\Scripts\Activate.ps1"
 
 Write-Host "ISync is running. DO NOT CLOSE THIS WINDOW." -ForegroundColor Cyan
+
 streamlit run isync_ui.py
 Read-Host "Press Enter to exit"
