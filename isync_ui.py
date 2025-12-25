@@ -876,7 +876,7 @@ elif nav_view == "🛠️ Manual Ops":
         c_b1.text_input("N (Users)", value=st.session_state.shared_max_users, disabled=True, help="Value set in User Management section.")
         b_dry = c_b2.checkbox("Dry Run", value=True, key="b_dry_run", on_change=save_session_state)
         
-        c_batch_run, c_batch_prev = st.columns([1, 1])
+        c_batch_run, c_batch_prev, c_batch_copy = st.columns([1, 1, 1])
         
         if c_batch_run.button("🚀 Start Batch Job"):
             if b_src and b_dst and selected_dom:
@@ -932,6 +932,21 @@ elif nav_view == "🛠️ Manual Ops":
                 
                 if preview_lines:
                     st.text_area("Command Cycling Preview", "\n".join(preview_lines), height=400)
+            else:
+                st.error("Missing Source, Destination, or Domain Context.")
+
+        if c_batch_copy.button("📋 Copy-Paste Batch"):
+            if b_src and b_dst and selected_dom:
+                batch_conf = config.copy()
+                batch_conf['max_users_per_cycle'] = st.session_state.shared_max_users
+                pair = {'source': b_src, 'dest': b_dst, 'domain_reference': selected_dom}
+                eng = ISyncEngine(batch_conf)
+                
+                with st.spinner("Generating batch command..."):
+                    cmd_str = eng.generate_batch_command(pair, dry_run=b_dry)
+                
+                st.success("Batch Command Generated:")
+                st.code(cmd_str, language="bash")
             else:
                 st.error("Missing Source, Destination, or Domain Context.")
 
