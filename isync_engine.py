@@ -93,7 +93,6 @@ class ISyncEngine:
         
         if not success:
             logging.error(f"[Step Failure] {description}: {error}")
-            raise Exception(f"Step Failed: {description} - {error}")
 
     def send_notification(self, message):
         """Sends webhook notification (Discord/Slack)."""
@@ -220,9 +219,8 @@ class ISyncEngine:
             
             # Wrap in Tmux (New Session)
             session_name = f"isync_{int(time.time())}"
-            tmux_cmd_str = f"tmux new-session -s {session_name} {shlex.quote(remote_cmd_str)}"
-            
-            cmd = base_cmd + [tmux_cmd_str]
+            # Pass as separate arguments to avoid over-quoting by SSH/Windows
+            cmd = base_cmd + ["tmux", "new-session", "-s", session_name, remote_cmd_str]
             
         return cmd
 
@@ -366,14 +364,14 @@ class ISyncEngine:
         
         if strategy == 'existing':
             # --- EXISTING USERS MODE ---
-            users_file = self.config.get('existing_users_file', 'users.txt')
-            if not os.path.exists(users_file):
-                logging.error(f"[ISyncEngine] Users file not found: {users_file}")
-                self.send_notification(f"❌ Job Failed: Users file missing `{users_file}`")
+            try:
+                list_mgr = ISyncAuthManager(json_path, domain_cfg['admin_email'])
+                user_list = list_mgr.list_users(domain_cfg['domain_name'])
+                logging.info(f"[ISyncEngine] Fetched {len(user_list)} users from directory.")
+            except Exception as e:
+                logging.error(f"[ISyncEngine] Failed to fetch users: {e}")
+                self.send_notification(f"❌ Job Failed: API Error {str(e)}")
                 return
-
-            with open(users_file, 'r') as f:
-                user_list = [u.strip() for u in f.readlines() if u.strip()]
 
             # Filter Protected Users if Excluded
             if not self.config.get('include_protected_users', False):
