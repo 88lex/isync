@@ -215,6 +215,9 @@ class ISyncEngine:
             
             remote_cmd_str = " ".join(shlex.quote(arg) for arg in cmd)
             
+            # Keep tmux session open after command finishes
+            remote_cmd_str += "; echo 'Remote process finished. Press Enter to close session...'; read line"
+            
             # Wrap in Tmux (New Session)
             session_name = f"isync_{int(time.time())}"
             tmux_cmd_str = f"tmux new-session -s {session_name} {shlex.quote(remote_cmd_str)}"
@@ -226,6 +229,7 @@ class ISyncEngine:
     def run_rclone(self, source, dest, sa_json_path, impersonate_email, job_label, dry_run=False, remote_sa_json_path=None):
         """Runs the rclone command and monitors output."""
         stall_limit = int(self.config.get('stall_timeout_minutes', 10)) * 60
+        upload_limit_str = self.config.get('upload_limit', '700G')
         mode_label = "TEST MODE" if dry_run else "Normal"
         
         # --- SSH CONNECTION CHECK ---
@@ -267,6 +271,10 @@ class ISyncEngine:
             creation_flags = getattr(subprocess, 'CREATE_NEW_CONSOLE', 0)
             stdout_dest = None
             stderr_dest = None
+            
+            # Keep local window open
+            cmd_str = subprocess.list2cmdline(cmd)
+            cmd = ["cmd.exe", "/c", f"{cmd_str} & pause"]
 
         # Start subprocess
         process = subprocess.Popen(cmd, stdout=stdout_dest, stderr=stderr_dest, universal_newlines=True, creationflags=creation_flags)
@@ -367,6 +375,14 @@ class ISyncEngine:
             with open(users_file, 'r') as f:
                 user_list = [u.strip() for u in f.readlines() if u.strip()]
 
+            # Filter Protected Users if Excluded
+            if not self.config.get('include_protected_users', False):
+                protected_set = set(u.lower() for u in self.config.get('protected_users', []))
+                original_count = len(user_list)
+                user_list = [u for u in user_list if u.lower() not in protected_set]
+                if len(user_list) < original_count:
+                    logging.info(f"[ISyncEngine] Excluded {original_count - len(user_list)} protected users from rotation.")
+
             if not user_list:
                 logging.error("[ISyncEngine] User list is empty.")
                 return
@@ -405,48 +421,35 @@ class ISyncEngine:
             protected = self.config.get('protected_users', [])
             auth_mgr = ISyncAuthManager(json_path, domain_cfg['admin_email'], protected_users=protected)
             
-            # --- STEP 1: CREATE USER ---
-            self.announce_step("Provision User", f"Creating temp user in {domain_cfg['domain_name']} and adding to {domain_cfg['group_email']}")
-            try:
-                current_user = auth_mgr.provision_uploader(domain_cfg['domain_name'], domain_cfg['group_email'])
-                self.complete_step("Provision User", success=True)
-            except Exception as e:
-                self.complete_step("Provision User", success=False, error=str(e))
-                return
-
-            next_user = None
             status = "START"
-
             for i in range(1, max_users + 1):
                 if self.stop_event.is_set(): break
                 
                 logging.info(f"--- Cycle {i}/{max_users} ---")
-                self.update_status(job_label, current_user, "0", "0%", "0", mode=mode_label, status_msg=f"Cycle {i}/{max_users}")
+                self.update_status(job_label, "Creating User...", "0", "0%", "0", mode=mode_label, status_msg=f"Cycle {i}/{max_users}: Provisioning")
 
-                # Pre-provision next user
-                if i < max_users and not dry_run:
-                    def prepare_next():
-                        nonlocal next_user
-                        try:
-                            next_user = auth_mgr.provision_uploader(domain_cfg['domain_name'], domain_cfg['group_email'])
-                        except: pass # Background provision errors handled in next cycle or ignored
-                    t = threading.Thread(target=prepare_next)
-                    t.start()
+                # 1. Create User
+                self.announce_step("Provision User", f"Creating temp user in {domain_cfg['domain_name']} and adding to {domain_cfg['group_email']}")
+                current_user = None
+                try:
+                    current_user = auth_mgr.provision_uploader(domain_cfg['domain_name'], domain_cfg['group_email'])
+                    self.complete_step("Provision User", success=True)
+                except Exception as e:
+                    self.complete_step("Provision User", success=False, error=str(e))
+                    return
 
-                # Run transfer
+                # 2. Run Rclone
+                self.update_status(job_label, current_user, "0", "0%", "0", mode=mode_label, status_msg=f"Cycle {i}/{max_users}: Running")
                 try:
                     status = self.run_rclone(source, dest, json_path, current_user, job_label, dry_run=dry_run, remote_sa_json_path=domain_cfg.get('remote_sa_json_path'))
                 except Exception as e:
                     self.complete_step("Execute Rclone Command", success=False, error=str(e))
+                    # Attempt cleanup
+                    try: auth_mgr.delete_user(current_user)
+                    except: pass
                     return
 
-                if i < max_users and not dry_run: t.join()
-
-                # Cleanup old user
-                # Note: We are doing this in background usually, but for Step Check we might want to make it explicit?
-                # The prompt implies "each main step". Deletion is a main step.
-                # To support Step Check properly, we should run it synchronously if step_check is on, or just announce it.
-                # For safety/simplicity in this feature, I will run it synchronously here to show the step.
+                # 3. Delete User
                 self.announce_step("Delete User", f"Deleting user {current_user}")
                 try:
                     auth_mgr.delete_user(current_user)
@@ -464,12 +467,6 @@ class ISyncEngine:
                     self.send_notification(f"⚠️ Rclone Error: `{job_label}`")
                     self.complete_step("Execute Rclone Command", success=False, error="Rclone Error")
                     return
-
-                current_user = next_user
-
-            # Final cleanup for standard mode
-            if current_user: auth_mgr.delete_user(current_user)
-            if next_user: auth_mgr.delete_user(next_user)
 
         if status != "DONE":
              self.update_status(job_label, "None", "-", "-", "0", is_running=False, status_msg="Max Users Reached / List Exhausted")
