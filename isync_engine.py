@@ -36,6 +36,19 @@ class ISyncEngine:
         self.config = config
         self.stop_event = threading.Event()
         self.total_bytes_history = 0.0 
+        self.clear_status()
+
+    def clear_status(self, step="Ready", detail="", status="IDLE"):
+        """Clears the step status file to remove old errors."""
+        data = {
+            "step": step,
+            "detail": detail,
+            "status": status,
+            "error": None,
+            "timestamp": time.time()
+        }
+        with open(STEP_STATUS_FILE, 'w') as f:
+            json.dump(data, f)
 
     def announce_step(self, description, detail):
         """
@@ -86,6 +99,7 @@ class ISyncEngine:
             "detail": "", # Clear detail on completion to reduce clutter or keep it? Keeping it simple.
             "status": status,
             "error": str(error) if error else None,
+            "dismissible": not success,
             "timestamp": time.time()
         }
         with open(STEP_STATUS_FILE, 'w') as f:
@@ -176,7 +190,7 @@ class ISyncEngine:
         if ssh_key: cmd.extend(["-i", ssh_key])
         return cmd
 
-    def build_rclone_cmd(self, source, dest, sa_json_path, impersonate_email, dry_run=False, remote_sa_json_path=None):
+    def build_rclone_cmd(self, source, dest, sa_json_path, impersonate_email, dry_run=False, remote_sa_json_path=None, keep_open=True, session_suffix="", skip_ssh_wrapper=False):
         """Generates the full rclone command list (including SSH wrapping if enabled)."""
         command_type = self.config.get('rclone_command', 'copy')
         upload_limit_str = self.config.get('upload_limit', '700G')
@@ -197,7 +211,7 @@ class ISyncEngine:
             "rclone", command_type, source, dest,
             f"--drive-service-account-file={effective_sa_path}",
             f"--drive-impersonate={impersonate_email}",
-            f"--drive-stop-on-upload-limit={upload_limit_str}",
+            f"--max-transfer={upload_limit_str}",
             f"--transfers={str(self.config.get('transfers', 8))}",
             f"--drive-chunk-size={chunk_size}",
             f"--stats={stats_interval}"
@@ -208,17 +222,18 @@ class ISyncEngine:
         if dry_run: cmd.append("--dry-run")
         
         # Wrap in SSH if enabled
-        if self.config.get('ssh_enabled'):
+        if self.config.get('ssh_enabled') and not skip_ssh_wrapper:
             base_cmd = self._get_ssh_base_cmd()
             base_cmd.append("-t") # Force pseudo-tty for tmux
             
             remote_cmd_str = " ".join(shlex.quote(arg) for arg in cmd)
             
             # Keep tmux session open after command finishes
-            remote_cmd_str += "; echo 'Remote process finished. Press Enter to close session...'; read line"
+            if keep_open:
+                remote_cmd_str += "; echo 'Remote process finished. Press Enter to close session...'; read line"
             
             # Wrap in Tmux (New Session)
-            session_name = f"isync_{int(time.time())}"
+            session_name = f"isync_{int(time.time())}{session_suffix}"
             # Pass as separate arguments to avoid over-quoting by SSH/Windows
             cmd = base_cmd + ["tmux", "new-session", "-s", session_name, remote_cmd_str]
             
@@ -322,12 +337,17 @@ class ISyncEngine:
         self.total_bytes_history += final_bytes_gb
         limit_gb = self.parse_size(upload_limit_str)
         
-        if exit_code == 0:
+        if exit_code == 0 or exit_code == 8:
             # If external window, we assume Limit Reached to ensure rotation continues (safer)
             if stdout_dest is None:
                  logging.info("[ISyncEngine] External Window Mode: Assuming Limit Reached or Continuing.")
                  self.complete_step("Execute Rclone Command", success=True)
                  return "LIMIT_REACHED"
+            
+            if exit_code == 8:
+                logging.info("[ISyncEngine] Hit Upload Limit (Exit Code 8). Rotating.")
+                self.complete_step("Execute Rclone Command", success=True)
+                return "LIMIT_REACHED"
 
             # If successful and transfer size is significantly less than limit, assume done.
             if final_bytes_gb < (limit_gb * 0.9):
@@ -342,6 +362,45 @@ class ISyncEngine:
             logging.warning(f"[ISyncEngine] Rclone exited code {exit_code}.")
             return "ERROR"
 
+    def generate_batch_command(self, pair, dry_run=False):
+        """Generates a single batch command string for all users in the rotation."""
+        source = pair['source']
+        dest = pair['dest']
+        target_domain = pair['domain_reference']
+        
+        domain_cfg = self.get_domain_config(target_domain)
+        json_path = domain_cfg.get('sa_json_path', DEFAULT_SA_JSON_PATH)
+        
+        if self.config.get('rotation_strategy', 'standard') != 'existing':
+            return "Batch command generation is only supported in 'Existing Users' mode."
+
+        try:
+            list_mgr = ISyncAuthManager(json_path, domain_cfg['admin_email'])
+            user_list = list_mgr.list_users(domain_cfg['domain_name'])
+        except Exception as e:
+            return f"Error fetching users: {e}"
+
+        if not self.config.get('include_protected_users', False):
+            protected_set = set(u.lower() for u in self.config.get('protected_users', []))
+            user_list = [u for u in user_list if u.lower() not in protected_set]
+
+        max_users = int(self.config.get('max_users_per_cycle', 10))
+        user_list = user_list[:max_users]
+
+        commands = []
+        for i, user in enumerate(user_list):
+            cmd_list = self.build_rclone_cmd(
+                source, dest, json_path, user, 
+                dry_run=dry_run, 
+                remote_sa_json_path=domain_cfg.get('remote_sa_json_path'),
+                keep_open=False,
+                session_suffix=f"_{i}",
+                skip_ssh_wrapper=True
+            )
+            commands.append(shlex.join(cmd_list))
+
+        return "\n".join(commands)
+
     def execute_job(self, pair, dry_run=False):
         """Orchestrates the full lifecycle of users for one job."""
         source = pair['source']
@@ -349,6 +408,8 @@ class ISyncEngine:
         target_domain = pair['domain_reference']
         job_label = f"{source} -> {dest}"
         mode_label = "TEST" if dry_run else "Normal"
+        
+        self.clear_status(step="Initializing", detail=f"Starting {job_label}", status="RUNNING")
         
         logging.info(f"[ISyncEngine] Job Started ({mode_label}): {job_label}")
         self.send_notification(f"🚀 Job Started: `{job_label}` ({mode_label})")
