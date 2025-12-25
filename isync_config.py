@@ -15,7 +15,12 @@ def get_default_config():
         'upload_limit': '700G',
         'transfers': 8,
         'max_users_per_cycle': 10,
+        'rotation_strategy': 'standard',
+        'existing_users_file': 'users.txt',
         'rclone_command': 'copy',
+        'rclone_chunk_size': '128M',
+        'rclone_stats_interval': '1s',
+        'rclone_verbose': True,
         'stall_timeout_minutes': 10,
         'webhook_url': '',
         'global_rclone_flags': '',
@@ -24,7 +29,11 @@ def get_default_config():
         'ssh_host': '',
         'ssh_user': '',
         'ssh_key_path': '',
+        'ssh_alias': '',
         'ssh_remote_path': '~/isync',
+        'ssh_connect_timeout': 10,
+        'protected_users': [],
+        'step_check': False,
         'domains': []
     }
 
