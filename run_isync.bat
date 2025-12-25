@@ -1,7 +1,14 @@
 @echo off
-TITLE ISync Manager
 CD /D "%~dp0"
 
+REM Check for PowerShell and launch ps1 script if available
+where powershell >nul 2>&1
+IF %ERRORLEVEL% EQU 0 (
+    start "" powershell -NoProfile -ExecutionPolicy Bypass -File "run_isync.ps1"
+    EXIT
+)
+
+TITLE ISync Manager
 IF NOT EXIST keys mkdir keys
 IF NOT EXIST logs mkdir logs
 

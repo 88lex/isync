@@ -16,6 +16,79 @@ from isync_auth import ISyncAuthManager
 
 st.set_page_config(page_title="ISync Manager", layout="wide", initial_sidebar_state="expanded")
 
+# --- CUSTOM CSS ---
+st.markdown("""
+    <style>
+        /* Reduce top padding */
+        .block-container {
+            padding-top: 1rem !important;
+            padding-bottom: 1rem !important;
+        }
+        /* Reduce vertical spacing between widgets */
+        div[data-testid="stVerticalBlock"] {
+            gap: 0.5rem !important;
+        }
+        /* Reduce padding inside expanders */
+        div[data-testid="stExpander"] > details > div {
+            padding-top: 0.5rem !important;
+            padding-bottom: 0.5rem !important;
+        }
+        /* Reduce padding inside forms */
+        div[data-testid="stForm"] {
+            padding: 0.75rem !important;
+        }
+        /* Sticky Command Previews */
+        /* Targets expanders only inside the marked container */
+        div[data-testid="stVerticalBlock"]:has(.sticky-preview-marker) > div > div[data-testid="stExpander"] {
+            position: sticky;
+            top: 3.75rem;
+            z-index: 999;
+            background-color: #0e1117; /* Matches Dark Theme BG. Change to white for light theme. */
+            border-bottom: 1px solid #333;
+        }
+        /* Adjust sticky offset for the second preview (SSH) if present (3rd child: Marker, Expander1, Expander2) */
+        div[data-testid="stVerticalBlock"]:has(.sticky-preview-marker) > div:nth-child(3) > div[data-testid="stExpander"] {
+            top: 6.75rem; /* Header (3.75) + First Expander (3.0) */
+        }
+    </style>
+""", unsafe_allow_html=True)
+
+def ui_text_input_copy(label, value="", key=None, help=None, type="default"):
+    """Renders a text input with a copy button (code block) below it."""
+    val = st.text_input(label, value=value, key=key, help=help, type=type)
+    if val: st.code(val, language=None)
+    return val
+
+def render_step_manager():
+    """Reads step status and renders the top-level step UI."""
+    if os.path.exists("step_status.json"):
+        try:
+            with open("step_status.json", "r") as f:
+                status = json.load(f)
+            
+            st_code = status.get('status')
+            step_name = status.get('step')
+            detail = status.get('detail')
+            err = status.get('error')
+
+            if st_code == "WAITING_USER":
+                st.warning(f"✋ **Step Check Paused**: {step_name}")
+                st.info(f"**Command Detail:**\n`{detail}`")
+                c1, c2 = st.columns(2)
+                if c1.button("✅ Continue"):
+                    with open("step_action.json", "w") as f: json.dump({"action": "CONTINUE"}, f)
+                    st.rerun()
+                if c2.button("🛑 Abort"):
+                    with open("step_action.json", "w") as f: json.dump({"action": "ABORT"}, f)
+                    st.rerun()
+            elif st_code == "RUNNING":
+                st.info(f"⏳ **Executing:** {step_name}\n\n`{detail}`")
+            elif st_code == "SUCCESS":
+                st.success(f"✅ **Step Completed Successfully:** {step_name}")
+            elif st_code == "FAILED":
+                st.error(f"❌ **Step Failed:** {step_name}\n\nError: {err}\n\n*isync has stopped.*")
+        except: pass
+
 def start_isync_thread(selected_pairs, config, is_dry_run):
     """Starts the backend engine in a separate thread."""
     engine = ISyncEngine(config)
@@ -61,32 +134,81 @@ def validate_config_health(conf):
             if not d.get('group_email'): issues.append(f"{name}: Missing 'Group Email'.")
     return issues
 
-st.title("🔄 ISync: Impersonate Sync")
+# Reduced font size title
+st.markdown("<h3 style='position: fixed; top: 0; left: 4rem; z-index: 999999; margin: 0; padding-top: 0.5rem; font-size: 1.2rem;'>🔄 ISync: Impersonate Sync</h3>", unsafe_allow_html=True)
+
+# --- STEP STATUS DISPLAY ---
+render_step_manager()
 
 config = load_config()
 
-# --- COMMAND PREVIEW ---
-with st.expander("👁️ Rclone Command Preview", expanded=False):
-    st.caption("This is how the command will look based on current saved settings.")
-    dummy_eng = ISyncEngine(config)
-    # Get first domain for context or use defaults
-    d_preview = config.get('domains', [{}])[0] if config.get('domains') else {}
-    p_src = "/local/source" if not config.get('ssh_enabled') else "/remote/source"
-    p_dst = "drive:SharedDrive/Dest"
-    
-    cmd_preview = dummy_eng.build_rclone_cmd(p_src, p_dst, d_preview.get('sa_json_path'), d_preview.get('admin_email', 'admin@example.com'), dry_run=False, remote_sa_json_path=d_preview.get('remote_sa_json_path'))
-    st.code(shlex.join(cmd_preview), language="bash")
+# --- LIVE CONFIG PATCHING ---
+# Override loaded config with live session state values for immediate preview updates
+if "ssh_host_input" in st.session_state: config['ssh_host'] = st.session_state.ssh_host_input
+if "ssh_user_input" in st.session_state: config['ssh_user'] = st.session_state.ssh_user_input
+if "ssh_key_input" in st.session_state: config['ssh_key_path'] = st.session_state.ssh_key_input
 
-# --- SIDEBAR: SYSTEM CONTEXT ---
+# --- SYNC STATE LOGIC ---
+if 'shared_max_users' not in st.session_state:
+    st.session_state.shared_max_users = int(config.get('max_users_per_cycle', 10))
+
+def update_max_users_from_config():
+    st.session_state.shared_max_users = st.session_state.config_max_users
+    st.session_state.manual_max_users = st.session_state.config_max_users
+
+def update_max_users_from_manual():
+    st.session_state.shared_max_users = st.session_state.manual_max_users
+    st.session_state.config_max_users = st.session_state.manual_max_users
+
+# --- SIDEBAR: SYSTEM CONTEXT & MODE ---
+# Moved to top so 'ssh_enabled' updates config before Preview renders
 with st.sidebar:
-    st.header("Environment")
-    st.info(f"**Host:** `{socket.gethostname()}`\n\n**OS:** `{platform.system()} {platform.release()}`")
-    st.caption("Verify the Host above matches your intended execution environment (Local vs Remote).")
+    env_help = f"OS: {platform.system()} {platform.release()}\n\nVerify the Host matches your intended execution environment (Local vs Remote)."
+    st.markdown(f"🖥️ **Host:** `{socket.gethostname()}`", help=env_help)
+    
+    st.divider()
+    nav_view = st.radio("Navigation", ["⚙️ Configuration", "📂 Sync Jobs", "📺 Live Console", "🛠️ Manual Ops"], label_visibility="collapsed")
+    st.divider()
+    st.header("Execution Mode")
+    ssh_enabled = st.checkbox("Enable SSH Remote Execution", value=config.get('ssh_enabled', False), help="Run logic locally, execute Rclone on remote server.")
+    config['ssh_enabled'] = ssh_enabled # Update in-memory config for Previews
 
-tab1, tab2, tab3, tab4 = st.tabs(["⚙️ Configuration", "📂 Sync Jobs", "📺 Live Console", "🛠️ Manual Ops"])
+# --- COMMAND PREVIEW ---
+# 1. Rclone Preview (Inner Command)
+# We force ssh_enabled=False here to show the raw rclone command without SSH/Tmux wrappers.
+preview_config = config.copy()
+preview_config['ssh_enabled'] = False
+preview_eng = ISyncEngine(preview_config)
+
+with st.container():
+    st.markdown('<div class="sticky-preview-marker"></div>', unsafe_allow_html=True)
+    
+    with st.expander("👁️ Rclone Command Preview", expanded=False):
+        st.caption("This is the command that will run on the target system.")
+        # Get first domain for context or use defaults
+        d_preview = config.get('domains', [{}])[0] if config.get('domains') else {}
+        p_src = "/local/source" if not config.get('ssh_enabled') else "/remote/source"
+        p_dst = "drive:SharedDrive/Dest"
+        
+        cmd_preview = preview_eng.build_rclone_cmd(p_src, p_dst, d_preview.get('sa_json_path'), d_preview.get('admin_email', 'admin@example.com'), dry_run=False, remote_sa_json_path=d_preview.get('remote_sa_json_path'))
+        
+        if platform.system() == "Windows" and not config.get('ssh_enabled'):
+            ps_bin = shutil.which("pwsh") or shutil.which("powershell")
+            if ps_bin:
+                st.caption(f"ℹ️ Executing via **{os.path.basename(ps_bin)}**")
+                cmd_str = subprocess.list2cmdline(cmd_preview)
+                cmd_preview = [ps_bin, "-NoProfile", "-Command", cmd_str]
+
+        st.code(shlex.join(cmd_preview), language="bash")
+
+    if config.get('ssh_enabled'):
+        ssh_eng = ISyncEngine(config)
+        with st.expander("🔌 SSH Command Preview", expanded=False):
+            st.caption("Base command used for establishing remote connections.")
+            st.code(shlex.join(ssh_eng._get_ssh_base_cmd()), language="bash")
 
 # --- TAB 1: CONFIGURATION ---
-with tab1:
+if nav_view == "⚙️ Configuration":
     st.header("Configuration Health")
     
     issues = validate_config_health(config)
@@ -102,89 +224,118 @@ with tab1:
     
     with st.expander("📝 Edit Configuration", expanded=True):
         st.caption("Fields marked with * are mandatory.")
-        with st.form("global_config"):
-            c1, c2, c3 = st.columns(3)
-            upload_limit = c1.text_input("Upload Limit *", value=config.get('upload_limit', '700G'), help="Stop transfer and rotate user after this amount (e.g. 700G).")
-            transfers = c2.number_input("Rclone Transfers *", value=int(config.get('transfers', 8)), help="Number of parallel file transfers.")
-            max_users = c3.number_input("Max Users/Cycle *", value=int(config.get('max_users_per_cycle', 10)), help="Maximum number of temporary users to create per job run.")
-            
-            c4, c5 = st.columns(2)
-            cmd_type = c4.selectbox("Rclone Command *", ["copy", "sync"], index=0 if config.get('rclone_command', 'copy') == 'copy' else 1, help="'copy' adds files; 'sync' makes dest identical to source (deletes files!).")
-            stall_time = c5.number_input("Stall Timeout (Mins) *", value=int(config.get('stall_timeout_minutes', 10)), help="Restart rclone if no output is received for this many minutes.")
-            
-            c6, c7 = st.columns(2)
-            webhook = c6.text_input("Webhook URL (Optional)", value=config.get('webhook_url', ''), help="Discord or Slack webhook URL for notifications.")
-            flags = c7.text_input("Global Flags (Optional)", value=config.get('global_rclone_flags', ''), help="Extra flags passed to rclone (e.g. --drive-use-trash=false).")
+        c1, c2 = st.columns(2)
+        with c1:
+            upload_limit = ui_text_input_copy("Upload Limit *", value=config.get('upload_limit', '700G'), help="Stop transfer and rotate user after this amount (e.g. 700G).")
+        transfers = c2.number_input("Rclone Transfers *", value=int(config.get('transfers', 8)), help="Number of parallel file transfers.")
+        
+        st.subheader("Run & Stop Mode Settings")
+        c_strat1, c_strat2 = st.columns(2)
+        strategy = c_strat1.selectbox("Mode / Strategy", ["standard", "existing"], index=0 if config.get('rotation_strategy', 'standard') == 'standard' else 1, help="Standard: Create N users. Existing: Use list.")
+        max_users = c_strat2.number_input("# Users to create *", value=st.session_state.shared_max_users, key="config_max_users", on_change=update_max_users_from_config, help="Number of users to rotate through before stopping.")
+        users_file = config.get('existing_users_file', 'users.txt')
+        if strategy == "existing":
+            users_file = ui_text_input_copy("Users List File", value=users_file, help="Path to text file containing one email per line.")
 
-            st.subheader("Remote Execution (SSH)")
-            ssh_enabled = st.checkbox("Enable SSH Remote Execution", value=config.get('ssh_enabled', False), help="Enable this to run ISync logic locally while executing Rclone commands on a remote server (Hybrid Mode).")
+        c4, c5 = st.columns(2)
+        cmd_type = c4.selectbox("Rclone Command *", ["copy", "sync"], index=0 if config.get('rclone_command', 'copy') == 'copy' else 1, help="'copy' adds files; 'sync' makes dest identical to source (deletes files!).")
+        stall_time = c5.number_input("Stall Timeout (Mins) *", value=int(config.get('stall_timeout_minutes', 10)), help="Restart rclone if no output is received for this many minutes.")
+        
+        c6, c7 = st.columns(2)
+        with c6:
+            webhook = ui_text_input_copy("Webhook URL (Optional)", value=config.get('webhook_url', ''), help="Discord or Slack webhook URL for notifications.")
+        with c7:
+            flags = ui_text_input_copy("Global Flags (Optional)", value=config.get('global_rclone_flags', ''), help="Extra flags passed to rclone (e.g. --drive-use-trash=false).")
+        
+        step_check = st.checkbox("Enable Step Check (Pause before execution)", value=config.get('step_check', False), help="If enabled, ISync will pause before every main step (Create User, Run Rclone, Delete User) and ask for confirmation.")
+
+        st.caption("Advanced Rclone Settings")
+        c_adv1, c_adv2, c_adv3 = st.columns(3)
+        with c_adv1:
+            chunk_size = ui_text_input_copy("Chunk Size", value=config.get('rclone_chunk_size', '128M'), help="Rclone --drive-chunk-size (e.g. 128M, 256M).")
+        with c_adv2:
+            stats_int = ui_text_input_copy("Stats Interval", value=config.get('rclone_stats_interval', '1s'), help="Rclone --stats frequency (e.g. 1s, 5s).")
+        verbose_log = c_adv3.checkbox("Verbose Logging", value=config.get('rclone_verbose', True), help="Enable --verbose flag for detailed logs.")
+
+        st.subheader("Remote Execution (SSH)")
+        st.caption(f"SSH Mode is currently: **{'ENABLED' if ssh_enabled else 'DISABLED'}** (Toggle in Sidebar)")
+        
+        ssh_host = config.get('ssh_host', '')
+        ssh_user = config.get('ssh_user', '')
+        ssh_key = config.get('ssh_key_path', '')
+        ssh_remote_path = config.get('ssh_remote_path', '~/isync')
+
+        c_ssh1, c_ssh2, c_ssh3 = st.columns(3)
+        with c_ssh1:
+            ssh_host = ui_text_input_copy("SSH Host / Alias", value=ssh_host, key="ssh_host_input", help="Hostname, IP address, or SSH Config Alias (e.g. 'myserver').")
+        with c_ssh2:
+            ssh_user = ui_text_input_copy("SSH User", value=ssh_user, key="ssh_user_input", help="Optional. Leave empty if using Alias or defined in SSH config.")
+        with c_ssh3:
+            ssh_key = ui_text_input_copy("SSH Key Path", value=ssh_key, key="ssh_key_input", help="Optional. Absolute path to private key file.")
+        
+        c_rem1, c_rem2 = st.columns([3, 1])
+        with c_rem1:
+            ssh_remote_path = ui_text_input_copy("Remote ISync Path", value=ssh_remote_path, help="Directory on remote server where isync is installed (e.g. /home/user/isync). Required for Sync features.")
+        with c_rem2:
+            ssh_timeout = st.number_input("Timeout (s)", value=int(config.get('ssh_connect_timeout', 10)), min_value=1, help="SSH connection timeout in seconds.")
+
+        st.subheader("Safety & Security")
+        protected_list = config.get('protected_users', [])
+        protected_str = "\n".join(protected_list)
+        protected_input = st.text_area("Protected Users (One per line)", value=protected_str, help="Users listed here will NEVER be deleted by ISync (Manual or Automated). Use this for permanent accounts.")
+
+        if st.button("Test SSH Connection"):
+            cmd = ["ssh"]
+            if ssh_key: cmd.extend(["-i", ssh_key])
+            target = f"{ssh_user}@{ssh_host}" if ssh_user else ssh_host
+            cmd.append(target)
+            cmd.extend(["echo", "SSH_SUCCESS"])
+            try:
+                res = subprocess.run(cmd, capture_output=True, text=True, timeout=ssh_timeout)
+                if "SSH_SUCCESS" in res.stdout: st.success(f"✅ Connected to {ssh_host}!")
+                else: st.error(f"❌ Failed: {res.stderr or res.stdout}")
+            except Exception as e: st.error(f"❌ Error: {e}")
+
+        st.divider()
+        st.subheader("Workspace Domains")
+        domains = config.get('domains', [])
+        if not domains: domains = [{'domain_name': '', 'admin_email': '', 'sa_json_path': '', 'group_email': ''}]
+        
+        updated_domains = []
+        for i in range(5): 
+            d = domains[i] if i < len(domains) else {}
+            st.markdown(f"**Domain Config #{i+1}**")
+            col_a, col_b, col_c, col_d, col_e = st.columns(5)
+            with col_a:
+                d_name = ui_text_input_copy(f"Domain Name *", value=d.get('domain_name', ''), key=f"dn_{i}", help="Your Google Workspace domain (e.g. example.com).")
+            with col_b:
+                d_admin = ui_text_input_copy(f"Admin Email *", value=d.get('admin_email', ''), key=f"da_{i}", help="Super Admin email to impersonate.")
+            with col_c:
+                d_json = ui_text_input_copy(f"Local JSON Path", value=d.get('sa_json_path', ''), key=f"dj_{i}", help="Local path to SA JSON. Defaults to keys/master.json.")
+            with col_d:
+                d_group = ui_text_input_copy(f"Group Email *", value=d.get('group_email', ''), key=f"dg_{i}", help="Google Group email that has Shared Drive access.")
+            with col_e:
+                d_remote_json = ui_text_input_copy(f"Remote JSON Path", value=d.get('remote_sa_json_path', ''), key=f"drj_{i}", help="Path to SA JSON on the REMOTE server (required if SSH enabled).")
             
-            ssh_mode = config.get('ssh_mode', 'explicit')
-            ssh_host = config.get('ssh_host', '')
-            ssh_user = config.get('ssh_user', '')
-            ssh_key = config.get('ssh_key_path', '')
-            ssh_remote_path = config.get('ssh_remote_path', '~/isync')
-
-            if ssh_enabled:
-                ssh_mode_sel = st.radio("Connection Type", ["Explicit (User/Host/Key)", "System Alias / Config"], 
-                                        index=0 if ssh_mode == 'explicit' else 1, horizontal=True)
-                ssh_mode = "explicit" if ssh_mode_sel.startswith("Explicit") else "alias"
-
-                c_ssh1, c_ssh2, c_ssh3 = st.columns(3)
-                if ssh_mode == "explicit":
-                    ssh_host = c_ssh1.text_input("SSH Host", value=ssh_host, help="e.g. 192.168.1.50")
-                    ssh_user = c_ssh2.text_input("SSH User", value=ssh_user, help="e.g. root or ubuntu")
-                    ssh_key = c_ssh3.text_input("SSH Key Path (Optional)", value=ssh_key, help="Absolute path to private key file.")
-                else:
-                    ssh_host = c_ssh1.text_input("SSH Alias", value=ssh_host, help="e.g. 'zfbak' (must be configured in ~/.ssh/config)")
-                
-                ssh_remote_path = st.text_input("Remote ISync Path", value=ssh_remote_path, help="Directory on remote server where isync is installed (e.g. /home/user/isync). Required for Sync features.")
-
-                if st.button("Test SSH Connection"):
-                    cmd = ["ssh"]
-                    if ssh_mode == "explicit":
-                        if ssh_key: cmd.extend(["-i", ssh_key])
-                        target = f"{ssh_user}@{ssh_host}" if ssh_user else ssh_host
-                        cmd.append(target)
-                    else:
-                        cmd.append(ssh_host)
-                    cmd.extend(["echo", "SSH_SUCCESS"])
-                    try:
-                        res = subprocess.run(cmd, capture_output=True, text=True, timeout=5)
-                        if "SSH_SUCCESS" in res.stdout: st.success(f"✅ Connected to {ssh_host}!")
-                        else: st.error(f"❌ Failed: {res.stderr or res.stdout}")
-                    except Exception as e: st.error(f"❌ Error: {e}")
-
-            st.divider()
-            st.subheader("Workspace Domains")
-            domains = config.get('domains', [])
-            if not domains: domains = [{'domain_name': '', 'admin_email': '', 'sa_json_path': '', 'group_email': ''}]
-            
-            updated_domains = []
-            for i in range(5): 
-                d = domains[i] if i < len(domains) else {}
-                st.markdown(f"**Domain Config #{i+1}**")
-                col_a, col_b, col_c, col_d, col_e = st.columns(5)
-                d_name = col_a.text_input(f"Domain Name *", value=d.get('domain_name', ''), key=f"dn_{i}", help="Your Google Workspace domain (e.g. example.com).")
-                d_admin = col_b.text_input(f"Admin Email *", value=d.get('admin_email', ''), key=f"da_{i}", help="Super Admin email to impersonate.")
-                d_json = col_c.text_input(f"Local JSON Path", value=d.get('sa_json_path', ''), key=f"dj_{i}", help="Local path to SA JSON. Defaults to keys/master.json.")
-                d_group = col_d.text_input(f"Group Email *", value=d.get('group_email', ''), key=f"dg_{i}", help="Google Group email that has Shared Drive access.")
-                d_remote_json = col_e.text_input(f"Remote JSON Path", value=d.get('remote_sa_json_path', ''), key=f"drj_{i}", help="Path to SA JSON on the REMOTE server (required if SSH enabled).")
-                
-                if d_name: updated_domains.append({'domain_name': d_name, 'admin_email': d_admin, 'sa_json_path': d_json, 'group_email': d_group, 'remote_sa_json_path': d_remote_json})
-            
-            if st.form_submit_button("💾 Save Settings"):
-                new_conf = {
-                    'upload_limit': upload_limit, 'transfers': transfers, 'max_users_per_cycle': max_users,
-                    'rclone_command': cmd_type, 'stall_timeout_minutes': stall_time,
-                    'webhook_url': webhook, 'global_rclone_flags': flags,
-                    'ssh_enabled': ssh_enabled, 'ssh_mode': ssh_mode, 'ssh_host': ssh_host, 'ssh_user': ssh_user, 'ssh_key_path': ssh_key, 'ssh_remote_path': ssh_remote_path,
-                    'domains': updated_domains
-                }
-                save_config(new_conf)
-                st.success("Settings Saved!")
-                time.sleep(1)
-                st.rerun()
+            if d_name: updated_domains.append({'domain_name': d_name, 'admin_email': d_admin, 'sa_json_path': d_json, 'group_email': d_group, 'remote_sa_json_path': d_remote_json})
+        
+        if st.button("💾 Save Settings"):
+            p_users = [u.strip() for u in protected_input.split('\n') if u.strip()]
+            new_conf = {
+                'upload_limit': upload_limit, 'transfers': transfers, 'max_users_per_cycle': max_users,
+                'rotation_strategy': strategy, 'existing_users_file': users_file,
+                'rclone_command': cmd_type, 'stall_timeout_minutes': stall_time,
+                'rclone_chunk_size': chunk_size, 'rclone_stats_interval': stats_int, 'rclone_verbose': verbose_log,
+                'webhook_url': webhook, 'global_rclone_flags': flags,
+                'step_check': step_check,
+                'ssh_enabled': ssh_enabled, 'ssh_host': ssh_host, 'ssh_user': ssh_user, 'ssh_key_path': ssh_key, 'ssh_remote_path': ssh_remote_path, 'ssh_connect_timeout': ssh_timeout,
+                'protected_users': p_users,
+                'domains': updated_domains
+            }
+            save_config(new_conf)
+            st.success("Settings Saved!")
+            time.sleep(1)
+            st.rerun()
 
     with st.expander("📚 Configuration Library (Import/Export)", expanded=False):
         st.caption("Save current settings to a named JSON file or load a previous configuration.")
@@ -293,14 +444,15 @@ with tab1:
             def exec_scp(src, dest, recursive=False):
                 cmd = ["scp"]
                 if recursive: cmd.append("-r")
-                if config.get('ssh_mode') == 'explicit' and config.get('ssh_key_path'):
+                if config.get('ssh_key_path'):
                      cmd.extend(["-i", config.get('ssh_key_path')])
                 cmd.extend([src, dest])
                 return subprocess.run(cmd, capture_output=True, text=True)
 
             remote_base = config.get('ssh_remote_path', '.')
+            
             ssh_target = config.get('ssh_host')
-            if config.get('ssh_mode') == 'explicit' and config.get('ssh_user'):
+            if config.get('ssh_user'):
                 ssh_target = f"{config.get('ssh_user')}@{ssh_target}"
 
             with c_sync1:
@@ -350,7 +502,7 @@ with tab1:
                 
                 def get_remote_content(filename):
                     cmd = ["ssh"]
-                    if config.get('ssh_mode') == 'explicit' and config.get('ssh_key_path'):
+                    if config.get('ssh_key_path'):
                          cmd.extend(["-i", config.get('ssh_key_path')])
                     
                     target = ssh_target
@@ -386,7 +538,7 @@ with tab1:
                         st.success(f"✅ {fname} is identical.")
 
 # --- TAB 2: JOBS ---
-with tab2:
+elif nav_view == "📂 Sync Jobs":
     st.header("Job Manager")
     sync_pairs = load_synclist()
     with st.expander("➕ Add Job", expanded=False):
@@ -424,7 +576,7 @@ with tab2:
                     st.success("Started! Check Live Console.")
 
 # --- TAB 3: MONITOR ---
-with tab3:
+elif nav_view == "📺 Live Console":
     st.header("Live Monitor")
     if st.button("Refresh"): st.rerun()
     status = get_live_status()
@@ -458,7 +610,7 @@ with tab3:
         st.text_area("Output", "".join(lines), height=300)
 
 # --- TAB 4: MANUAL OPS ---
-with tab4:
+elif nav_view == "🛠️ Manual Ops":
     st.header("Manual Operations")
     
     domains = config.get('domains', [])
@@ -484,44 +636,79 @@ with tab4:
 
         st.divider()
         
-        c1, c2 = st.columns(2)
-        with c1:
-            btn_create_text = "Test User Creation" if manual_test_mode else "Create New User"
+        c_n, c_create, c_delete = st.columns([1, 1, 1])
+        with c_n:
+            st.number_input("# Users to create", min_value=1, value=st.session_state.shared_max_users, key="manual_max_users", on_change=update_max_users_from_manual)
+
+        with c_create:
+            num_users = st.session_state.shared_max_users
+            suffix = "s" if num_users > 1 else ""
+            btn_create_text = f"Test User Creation ({num_users})" if manual_test_mode else f"Create New User{suffix}"
+            
             if st.button(btn_create_text):
-                with st.spinner("Creating..."):
+                with st.spinner(f"Processing {num_users} users..."):
                     try:
-                        mgr = ISyncAuthManager(sa_path, admin)
+                        protected = config.get('protected_users', [])
+                        mgr = ISyncAuthManager(sa_path, admin, protected_users=protected)
+                        created_list = []
+
                         if manual_test_mode:
-                            # Test Cycle: Create then Delete
-                            email = mgr.provision_uploader(sel_conf['domain_name'], group)
-                            mgr.delete_user(email)
-                            st.success(f"✅ Test Passed: User {email} created and deleted successfully.")
+                            # Test Cycle: Create then Delete N times
+                            for i in range(num_users):
+                                email = mgr.provision_uploader(sel_conf['domain_name'], group)
+                                mgr.delete_user(email)
+                                created_list.append(email)
+                            st.success(f"✅ Test Passed: {len(created_list)} users created and deleted successfully.")
                         else:
-                            email = mgr.provision_uploader(sel_conf['domain_name'], group)
-                            st.session_state['manual_email'] = email
-                            st.success(f"Created: {email}")
+                            bar = st.progress(0)
+                            for i in range(num_users):
+                                email = mgr.provision_uploader(sel_conf['domain_name'], group)
+                                created_list.append(email)
+                                bar.progress((i + 1) / num_users)
+                            
+                            if created_list:
+                                st.session_state['manual_email'] = created_list[-1]
+                                st.session_state['target_user_input'] = created_list[-1]
+                                st.success(f"Created {len(created_list)} users:")
+                                st.code("\n".join(created_list), language=None)
                     except Exception as e: st.error(f"Failed: {e}")
         
-        target_user = st.text_input("Target User Email", value=st.session_state['manual_email'], help="The temporary user email to operate on.")
+        default_tgt = st.session_state['manual_email'] if st.session_state['manual_email'] else admin
+        target_user = ui_text_input_copy("Target User Email", value=default_tgt, key="target_user_input", help="The temporary user email to operate on. Defaults to Admin Email.")
         
-        with c2:
+        with c_delete:
             btn_del_text = "Verify User Exists" if manual_test_mode else "Delete User"
             if st.button(btn_del_text):
                 if target_user:
                     try:
-                        mgr = ISyncAuthManager(sa_path, admin)
+                        protected = config.get('protected_users', [])
+                        mgr = ISyncAuthManager(sa_path, admin, protected_users=protected)
                         if manual_test_mode:
                             if mgr.user_exists(target_user): st.success(f"✅ User {target_user} exists.")
                             else: st.warning(f"User {target_user} not found.")
                         else:
                             mgr.delete_user(target_user)
-                            st.success(f"Deleted: {target_user}")
+                            st.success("Deleted:"); st.code(target_user, language=None)
                     except Exception as e: st.error(f"Failed: {e}")
+
+        st.subheader("Directory Listing")
+        if st.button("List Users"):
+            try:
+                mgr = ISyncAuthManager(sa_path, admin)
+                with st.spinner(f"Fetching users for {sel_conf['domain_name']}..."):
+                    users = mgr.list_users(sel_conf['domain_name'])
+                
+                if users:
+                    st.success(f"Found {len(users)} users.")
+                    st.text_area("User List", "\n".join(users), height=200)
+                else:
+                    st.info("No users found.")
+            except Exception as e: st.error(f"Failed to list users: {e}")
 
         st.divider()
         st.subheader("Run Single Rclone Job")
-        m_src = st.text_input("Source Path", help="Source for manual run.")
-        m_dst = st.text_input("Destination Path", help="Destination for manual run.")
+        m_src = ui_text_input_copy("Source Path", help="Source for manual run.")
+        m_dst = ui_text_input_copy("Destination Path", help="Destination for manual run.")
         
         c_man1, c_man2 = st.columns(2)
         m_dry_check = c_man1.checkbox("Dry Run", value=True, key="man_dry")
@@ -540,3 +727,28 @@ with tab4:
                 t.start()
                 st.success("Job started! Check Live Console.")
             else: st.error("Missing Source, Destination, or User.")
+
+        st.divider()
+        st.subheader("Run Batch Job (Run & Stop)")
+        st.caption("Execute a full rotation cycle manually with custom settings.")
+        
+        b_src = ui_text_input_copy("Source Path", key="b_src")
+        b_dst = ui_text_input_copy("Destination Path", key="b_dst")
+        
+        c_b1, c_b2 = st.columns(2)
+        b_strat = c_b1.selectbox("Strategy", ["standard", "existing"], key="b_strat")
+        b_n = st.session_state.shared_max_users
+        b_dry = c_b2.checkbox("Dry Run", value=True, key="b_dry_run")
+        
+        if st.button("🚀 Start Batch Job"):
+            if b_src and b_dst and selected_dom:
+                batch_conf = config.copy()
+                batch_conf['rotation_strategy'] = b_strat
+                batch_conf['max_users_per_cycle'] = b_n
+                pair = {'source': b_src, 'dest': b_dst, 'domain_reference': selected_dom}
+                eng = ISyncEngine(batch_conf)
+                t = threading.Thread(target=eng.execute_job, args=(pair, b_dry))
+                t.start()
+                st.success(f"Batch Job Started! (N={b_n}, Strategy={b_strat})")
+            else:
+                st.error("Missing Source, Destination, or Domain Context.")

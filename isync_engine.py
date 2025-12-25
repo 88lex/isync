@@ -8,6 +8,7 @@ import json
 import re
 import shlex
 import requests
+import shutil
 from isync_auth import ISyncAuthManager
 from isync_config import DEFAULT_SA_JSON_PATH, LOG_FILE_PATH, LOGS_DIR
 
@@ -20,6 +21,8 @@ logging.basicConfig(
 )
 
 STATUS_FILE = "current_status.json"
+STEP_STATUS_FILE = "step_status.json"
+STEP_ACTION_FILE = "step_action.json"
 
 class ISyncEngine:
     """
@@ -33,6 +36,64 @@ class ISyncEngine:
         self.config = config
         self.stop_event = threading.Event()
         self.total_bytes_history = 0.0 
+
+    def announce_step(self, description, detail):
+        """
+        Announces a step to the UI. 
+        If step_check is True, pauses and waits for user approval.
+        """
+        # 1. Initial State: Running or Waiting
+        status = "WAITING_USER" if self.config.get('step_check') else "RUNNING"
+        
+        data = {
+            "step": description,
+            "detail": detail,
+            "status": status,
+            "error": None,
+            "timestamp": time.time()
+        }
+        with open(STEP_STATUS_FILE, 'w') as f:
+            json.dump(data, f)
+            
+        # 2. Pause Logic
+        if self.config.get('step_check'):
+            logging.info(f"[Step Check] Paused for: {description}")
+            while True:
+                if self.stop_event.is_set(): raise Exception("Engine Stopped")
+                
+                if os.path.exists(STEP_ACTION_FILE):
+                    try:
+                        with open(STEP_ACTION_FILE, 'r') as f: action_data = json.load(f)
+                        if action_data.get('action') == 'CONTINUE':
+                            # Clear action and proceed
+                            os.remove(STEP_ACTION_FILE)
+                            break
+                        elif action_data.get('action') == 'ABORT':
+                            os.remove(STEP_ACTION_FILE)
+                            raise Exception("User Aborted via Step Check")
+                    except (json.JSONDecodeError, PermissionError): pass
+                time.sleep(0.5)
+            
+            # Update to RUNNING after approval
+            data['status'] = "RUNNING"
+            with open(STEP_STATUS_FILE, 'w') as f: json.dump(data, f)
+
+    def complete_step(self, description, success=True, error=None):
+        """Updates the step status to Success or Failed."""
+        status = "SUCCESS" if success else "FAILED"
+        data = {
+            "step": description,
+            "detail": "", # Clear detail on completion to reduce clutter or keep it? Keeping it simple.
+            "status": status,
+            "error": str(error) if error else None,
+            "timestamp": time.time()
+        }
+        with open(STEP_STATUS_FILE, 'w') as f:
+            json.dump(data, f)
+        
+        if not success:
+            logging.error(f"[Step Failure] {description}: {error}")
+            raise Exception(f"Step Failed: {description} - {error}")
 
     def send_notification(self, message):
         """Sends webhook notification (Discord/Slack)."""
@@ -106,11 +167,24 @@ class ISyncEngine:
                 results.append(f"❌ {name}: {str(e)}")
         return results
 
+    def _get_ssh_base_cmd(self):
+        """Helper to build the base SSH command list."""
+        ssh_host = self.config.get('ssh_host')
+        ssh_user = self.config.get('ssh_user')
+        ssh_key = self.config.get('ssh_key_path')
+        target = f"{ssh_user}@{ssh_host}" if ssh_user else ssh_host
+        cmd = ["ssh", target]
+        if ssh_key: cmd.extend(["-i", ssh_key])
+        return cmd
+
     def build_rclone_cmd(self, source, dest, sa_json_path, impersonate_email, dry_run=False, remote_sa_json_path=None):
         """Generates the full rclone command list (including SSH wrapping if enabled)."""
         command_type = self.config.get('rclone_command', 'copy')
         upload_limit_str = self.config.get('upload_limit', '700G')
         extra_flags = self.config.get('global_rclone_flags', '').split()
+        chunk_size = self.config.get('rclone_chunk_size', '128M')
+        stats_interval = self.config.get('rclone_stats_interval', '1s')
+        is_verbose = self.config.get('rclone_verbose', True)
         
         if not sa_json_path:
             sa_json_path = DEFAULT_SA_JSON_PATH
@@ -126,31 +200,26 @@ class ISyncEngine:
             f"--drive-impersonate={impersonate_email}",
             f"--drive-stop-on-upload-limit={upload_limit_str}",
             f"--transfers={str(self.config.get('transfers', 8))}",
-            "--drive-chunk-size=128M",
-            "--stats=1s",
-            "--verbose"
+            f"--drive-chunk-size={chunk_size}",
+            f"--stats={stats_interval}"
         ]
+        if is_verbose: cmd.append("--verbose")
         
         if extra_flags: cmd.extend(extra_flags)
         if dry_run: cmd.append("--dry-run")
         
         # Wrap in SSH if enabled
         if self.config.get('ssh_enabled'):
-            ssh_mode = self.config.get('ssh_mode', 'explicit')
-            ssh_host = self.config.get('ssh_host')
+            base_cmd = self._get_ssh_base_cmd()
+            base_cmd.append("-t") # Force pseudo-tty for tmux
             
             remote_cmd_str = " ".join(shlex.quote(arg) for arg in cmd)
             
-            if ssh_mode == 'alias':
-                cmd = ["ssh", ssh_host]
-            else:
-                ssh_user = self.config.get('ssh_user')
-                ssh_key = self.config.get('ssh_key_path')
-                target = f"{ssh_user}@{ssh_host}" if ssh_user else ssh_host
-                cmd = ["ssh", target]
-                if ssh_key: cmd.extend(["-i", ssh_key])
+            # Wrap in Tmux (New Session)
+            session_name = f"isync_{int(time.time())}"
+            tmux_cmd_str = f"tmux new-session -s {session_name} {shlex.quote(remote_cmd_str)}"
             
-            cmd.append(remote_cmd_str)
+            cmd = base_cmd + [tmux_cmd_str]
             
         return cmd
 
@@ -159,12 +228,48 @@ class ISyncEngine:
         stall_limit = int(self.config.get('stall_timeout_minutes', 10)) * 60
         mode_label = "TEST MODE" if dry_run else "Normal"
         
+        # --- SSH CONNECTION CHECK ---
+        if self.config.get('ssh_enabled'):
+            base_cmd = self._get_ssh_base_cmd()
+            check_cmd = base_cmd + ["echo", "SSH_READY"]
+            logging.info(f"[ISyncEngine] Verifying SSH connection...")
+            try:
+                # Wait for connection to be established
+                timeout_sec = int(self.config.get('ssh_connect_timeout', 10))
+                chk = subprocess.run(check_cmd, capture_output=True, text=True, timeout=timeout_sec)
+                if chk.returncode != 0 or "SSH_READY" not in chk.stdout:
+                    logging.error(f"[ISyncEngine] SSH Check Failed: {chk.stderr or chk.stdout}")
+                    return "ERROR"
+            except Exception as e:
+                logging.error(f"[ISyncEngine] SSH Check Error: {e}")
+                return "ERROR"
+
         cmd = self.build_rclone_cmd(source, dest, sa_json_path, impersonate_email, dry_run, remote_sa_json_path)
+
+        # Windows Local Execution: Use PowerShell if available
+        if os.name == 'nt' and not self.config.get('ssh_enabled'):
+            ps_bin = shutil.which("pwsh") or shutil.which("powershell")
+            if ps_bin:
+                cmd_str = subprocess.list2cmdline(cmd)
+                cmd = [ps_bin, "-NoProfile", "-Command", cmd_str]
+
+        # --- STEP CHECK: RCLONE ---
+        self.announce_step("Execute Rclone Command", shlex.join(cmd))
 
         logging.info(f"[ISyncEngine] Starting ({mode_label}): {shlex.join(cmd)}")
         
+        # Configure execution flags (Visible Window for SSH/Tmux on Windows)
+        creation_flags = 0
+        stdout_dest = subprocess.PIPE
+        stderr_dest = subprocess.STDOUT
+        
+        if self.config.get('ssh_enabled') and os.name == 'nt':
+            creation_flags = getattr(subprocess, 'CREATE_NEW_CONSOLE', 0)
+            stdout_dest = None
+            stderr_dest = None
+
         # Start subprocess
-        process = subprocess.Popen(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, universal_newlines=True)
+        process = subprocess.Popen(cmd, stdout=stdout_dest, stderr=stderr_dest, universal_newlines=True, creationflags=creation_flags)
 
         current_bytes_str = "0 G"
         last_activity_time = time.time()
@@ -178,9 +283,16 @@ class ISyncEngine:
                 self.update_status(job_label, impersonate_email, "0", "STALLED", current_bytes_str, status_msg="Stalled - Restarting")
                 return "STALLED"
 
-            output = process.stdout.readline()
-            if output == '' and process.poll() is not None: 
-                break
+            if stdout_dest is None:
+                # External Window Mode: Cannot read stats
+                time.sleep(1)
+                if process.poll() is not None: break
+                self.update_status(job_label, impersonate_email, "-", "Running (External Window)", current_bytes_str, mode=mode_label)
+                continue
+            else:
+                output = process.stdout.readline()
+                if output == '' and process.poll() is not None: 
+                    break
             
             if output:
                 last_activity_time = time.time()
@@ -205,12 +317,20 @@ class ISyncEngine:
         limit_gb = self.parse_size(upload_limit_str)
         
         if exit_code == 0:
+            # If external window, we assume Limit Reached to ensure rotation continues (safer)
+            if stdout_dest is None:
+                 logging.info("[ISyncEngine] External Window Mode: Assuming Limit Reached or Continuing.")
+                 self.complete_step("Execute Rclone Command", success=True)
+                 return "LIMIT_REACHED"
+
             # If successful and transfer size is significantly less than limit, assume done.
             if final_bytes_gb < (limit_gb * 0.9):
                 logging.info(f"[ISyncEngine] Process exited 0 and {final_bytes_gb}G < limit. Job Done.")
+                self.complete_step("Execute Rclone Command", success=True)
                 return "DONE"
             else:
                 logging.info("[ISyncEngine] Hit Upload Limit. Rotating.")
+                self.complete_step("Execute Rclone Command", success=True)
                 return "LIMIT_REACHED"
         else:
             logging.warning(f"[ISyncEngine] Rclone exited code {exit_code}.")
@@ -233,47 +353,123 @@ class ISyncEngine:
         if not json_path:
             json_path = DEFAULT_SA_JSON_PATH
             
-        auth_mgr = ISyncAuthManager(json_path, domain_cfg['admin_email'])
+        strategy = self.config.get('rotation_strategy', 'standard')
         max_users = 1 if dry_run else int(self.config.get('max_users_per_cycle', 10))
         
-        current_user = auth_mgr.provision_uploader(domain_cfg['domain_name'], domain_cfg['group_email'])
-        next_user = None
+        if strategy == 'existing':
+            # --- EXISTING USERS MODE ---
+            users_file = self.config.get('existing_users_file', 'users.txt')
+            if not os.path.exists(users_file):
+                logging.error(f"[ISyncEngine] Users file not found: {users_file}")
+                self.send_notification(f"❌ Job Failed: Users file missing `{users_file}`")
+                return
 
-        for i in range(1, max_users + 1):
-            if self.stop_event.is_set(): break
+            with open(users_file, 'r') as f:
+                user_list = [u.strip() for u in f.readlines() if u.strip()]
+
+            if not user_list:
+                logging.error("[ISyncEngine] User list is empty.")
+                return
+
+            count = 0
+            status = "START"
+            for current_user in user_list:
+                if count >= max_users: 
+                    self.update_status(job_label, "None", "-", "-", "0", is_running=False, status_msg="Max Users Reached")
+                    break
+                if self.stop_event.is_set(): break
+                
+                count += 1
+                logging.info(f"--- Cycle {count}/{max_users} (User: {current_user}) ---")
+                self.update_status(job_label, current_user, "0", "0%", "0", mode=mode_label, status_msg=f"Cycle {count}/{max_users}")
+                
+                try:
+                    status = self.run_rclone(source, dest, json_path, current_user, job_label, dry_run=dry_run, remote_sa_json_path=domain_cfg.get('remote_sa_json_path'))
+                except Exception as e:
+                    self.complete_step("Execute Rclone Command", success=False, error=str(e))
+                    self.send_notification(f"❌ Job Aborted: {str(e)}")
+                    return
+                
+                if status == "DONE":
+                    self.send_notification(f"✅ Job Complete: `{job_label}`")
+                    self.update_status(job_label, "None", "-", "100%", "0", is_running=False, status_msg="Success")
+                    break
+                
+                if status == "ERROR":
+                    self.send_notification(f"⚠️ Rclone Error: `{job_label}`")
+                    self.complete_step("Execute Rclone Command", success=False, error="Rclone exited with error code.")
+                    return
+
+        else:
+            # --- STANDARD MODE (Create/Delete) ---
+            protected = self.config.get('protected_users', [])
+            auth_mgr = ISyncAuthManager(json_path, domain_cfg['admin_email'], protected_users=protected)
             
-            logging.info(f"--- Cycle {i}/{max_users} ---")
-            self.update_status(job_label, current_user, "0", "0%", "0", mode=mode_label, status_msg=f"Cycle {i}/{max_users}")
+            # --- STEP 1: CREATE USER ---
+            self.announce_step("Provision User", f"Creating temp user in {domain_cfg['domain_name']} and adding to {domain_cfg['group_email']}")
+            try:
+                current_user = auth_mgr.provision_uploader(domain_cfg['domain_name'], domain_cfg['group_email'])
+                self.complete_step("Provision User", success=True)
+            except Exception as e:
+                self.complete_step("Provision User", success=False, error=str(e))
+                return
 
-            # Pre-provision next user
-            if i < max_users and not dry_run:
-                def prepare_next():
-                    nonlocal next_user
-                    next_user = auth_mgr.provision_uploader(domain_cfg['domain_name'], domain_cfg['group_email'])
-                t = threading.Thread(target=prepare_next)
-                t.start()
+            next_user = None
+            status = "START"
 
-            # Run transfer
-            status = self.run_rclone(source, dest, json_path, current_user, job_label, dry_run=dry_run, remote_sa_json_path=domain_cfg.get('remote_sa_json_path'))
+            for i in range(1, max_users + 1):
+                if self.stop_event.is_set(): break
+                
+                logging.info(f"--- Cycle {i}/{max_users} ---")
+                self.update_status(job_label, current_user, "0", "0%", "0", mode=mode_label, status_msg=f"Cycle {i}/{max_users}")
 
-            if i < max_users and not dry_run: t.join()
+                # Pre-provision next user
+                if i < max_users and not dry_run:
+                    def prepare_next():
+                        nonlocal next_user
+                        try:
+                            next_user = auth_mgr.provision_uploader(domain_cfg['domain_name'], domain_cfg['group_email'])
+                        except: pass # Background provision errors handled in next cycle or ignored
+                    t = threading.Thread(target=prepare_next)
+                    t.start()
 
-            # Cleanup old user
-            threading.Thread(target=auth_mgr.delete_user, args=(current_user,)).start()
+                # Run transfer
+                try:
+                    status = self.run_rclone(source, dest, json_path, current_user, job_label, dry_run=dry_run, remote_sa_json_path=domain_cfg.get('remote_sa_json_path'))
+                except Exception as e:
+                    self.complete_step("Execute Rclone Command", success=False, error=str(e))
+                    return
 
-            if status == "DONE":
-                self.send_notification(f"✅ Job Complete: `{job_label}`")
-                self.update_status(job_label, "None", "-", "100%", "0", is_running=False, status_msg="Success")
-                break
-            
-            if status == "ERROR":
-                self.send_notification(f"⚠️ Rclone Error: `{job_label}`")
+                if i < max_users and not dry_run: t.join()
 
-            current_user = next_user
+                # Cleanup old user
+                # Note: We are doing this in background usually, but for Step Check we might want to make it explicit?
+                # The prompt implies "each main step". Deletion is a main step.
+                # To support Step Check properly, we should run it synchronously if step_check is on, or just announce it.
+                # For safety/simplicity in this feature, I will run it synchronously here to show the step.
+                self.announce_step("Delete User", f"Deleting user {current_user}")
+                try:
+                    auth_mgr.delete_user(current_user)
+                    self.complete_step("Delete User", success=True)
+                except Exception as e:
+                    self.complete_step("Delete User", success=False, error=str(e))
+                    return
 
-        if status != "DONE" and i == max_users:
-             self.update_status(job_label, "None", "-", "-", "0", is_running=False, status_msg="Max Users Reached")
-        
-        # Final cleanup
-        if current_user: auth_mgr.delete_user(current_user)
-        if next_user: auth_mgr.delete_user(next_user)
+                if status == "DONE":
+                    self.send_notification(f"✅ Job Complete: `{job_label}`")
+                    self.update_status(job_label, "None", "-", "100%", "0", is_running=False, status_msg="Success")
+                    break
+                
+                if status == "ERROR":
+                    self.send_notification(f"⚠️ Rclone Error: `{job_label}`")
+                    self.complete_step("Execute Rclone Command", success=False, error="Rclone Error")
+                    return
+
+                current_user = next_user
+
+            # Final cleanup for standard mode
+            if current_user: auth_mgr.delete_user(current_user)
+            if next_user: auth_mgr.delete_user(next_user)
+
+        if status != "DONE":
+             self.update_status(job_label, "None", "-", "-", "0", is_running=False, status_msg="Max Users Reached / List Exhausted")

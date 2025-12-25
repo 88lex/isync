@@ -13,7 +13,8 @@ It utilizes **Service Account Impersonation**, meaning you do **not** need to ma
 4. [Operating Modes & Usage](#usage)
 5. [First Run & Configuration Walkthrough](#first-run)
 6. [Background Persistence (Tmux)](#background-persistence)
-7. [Troubleshooting](#troubleshooting)
+7. [UI Features](#ui-features)
+8. [Troubleshooting](#troubleshooting)
 
 ---
 
@@ -158,6 +159,7 @@ ISync supports three flexible operating modes. Choose the one that fits your net
     1.  Check **Enable SSH Remote Execution**.
     2.  Fill in SSH Host, User, and Key details.
     3.  Set **Remote JSON Path** in the Domain Config to where the keys live *on the remote server*.
+    4.  The UI will now generate Rclone commands that wrap execution via SSH.
 
 ---
 
@@ -171,8 +173,14 @@ Navigate to the ⚙️ **Configuration** tab. You will see a health check at the
 1.  **Upload Limit:** Set this to `700G` (Google's daily limit is 750GB). ISync will rotate users when this is hit.
 2.  **Rclone Transfers:** Default is 8. Higher values use more bandwidth/CPU.
 3.  **Max Users/Cycle:** How many temporary users to create in a single run (e.g., 10).
-4.  **Rclone Command:** Usually `copy`. Use `sync` only if you want the destination to exactly match the source (deletes files at dest!).
-5.  **Stall Timeout:** If Rclone stops outputting stats for this many minutes, the process is killed and restarted.
+4.  **User Rotation Strategy:**
+    *   **Standard (Default):** Automatically creates a temporary user, runs the job, deletes the user, and repeats.
+    *   **Existing:** Rotates through a pre-defined list of emails provided in a text file (e.g., `users.txt`). Does NOT create or delete users. *Note: These users must already have permissions on the destination.*
+5.  **Rclone Command:** Usually `copy`. Use `sync` only if you want the destination to exactly match the source (deletes files at dest!).
+6.  **Advanced Rclone Settings:**
+    *   **Chunk Size:** Default `128M`. Controls memory usage per transfer.
+    *   **Stats Interval:** Default `1s`. How often Rclone reports progress to the UI.
+7.  **Stall Timeout:** If Rclone stops outputting stats for this many minutes, the process is killed and restarted.
 
 ### Step 2: Domain Configuration
 This is the most critical part. You need the files from the Prerequisites section.
@@ -214,7 +222,16 @@ On Linux/Mac, `run_isync.sh` automatically attempts to use `tmux`. This ensures 
 
 ---
 
-## <a name="troubleshooting"></a> 7. Troubleshooting
+## <a name="ui-features"></a> 7. UI Features
+
+*   **Command Preview:** At the top of the UI, expand "Rclone Command Preview" to see the exact command ISync will execute based on your current settings.
+*   **Copy Buttons:** Most input fields have a code block below them for one-click copying of values.
+*   **Manual Ops:** Use the "Manual Operations" tab to test API connectivity, create/delete single users, or run one-off Rclone jobs for debugging.
+*   **Config Library:** Save and load different configuration profiles (e.g., "Production", "Test") from the Configuration tab.
+
+---
+
+## <a name="troubleshooting"></a> 8. Troubleshooting
 
 *   **Stalls:** If Rclone output stops for 10 minutes (configurable), ISync will kill the process and restart the loop.
 *   **Auth Errors:** Use the "Check Auth Connection" button in Manual Ops to verify your Service Account and Admin Email.

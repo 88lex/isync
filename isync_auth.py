@@ -15,13 +15,14 @@ class ISyncAuthManager:
     - Group Membership Management
     - User Deletion
     """
-    def __init__(self, sa_json_path, admin_email):
+    def __init__(self, sa_json_path, admin_email, protected_users=None):
         self.sa_json_path = sa_json_path if sa_json_path else DEFAULT_SA_JSON_PATH
         self.admin_email = admin_email
+        self.protected_users = [u.lower().strip() for u in (protected_users or [])]
         self.scopes = [
             'https://www.googleapis.com/auth/admin.directory.user',
             'https://www.googleapis.com/auth/admin.directory.group',
-            'https://www.googleapis.com/auth/admin.directory.group.member'
+            'https://www.googleapis.com/auth/admin.directory.group.member',
         ]
         self.service = self._get_service()
 
@@ -43,7 +44,9 @@ class ISyncAuthManager:
         try:
             domain = self.admin_email.split('@')[1]
             self.service.users().list(domain=domain, maxResults=1).execute()
-            return True, "Connection Successful"
+            # Also verify group access
+            self.service.groups().list(domain=domain, maxResults=1).execute()
+            return True, "Connection Successful (Users & Groups)"
         except Exception as e:
             return False, str(e)
 
@@ -88,6 +91,10 @@ class ISyncAuthManager:
 
     def delete_user(self, user_email):
         """Deletes the temporary user."""
+        if user_email.lower().strip() in self.protected_users:
+            logging.warning(f"[ISyncAuth] BLOCKED DELETE: {user_email} is in Protected Users list.")
+            return
+
         try:
             logging.info(f"[ISyncAuth] Deleting User: {user_email}")
             self.service.users().delete(userKey=user_email).execute()
@@ -111,4 +118,14 @@ class ISyncAuthManager:
         except HttpError as e:
             if e.resp.status == 404:
                 return False
+            raise
+
+    def list_users(self, domain_name, max_results=500):
+        """Lists users in the domain."""
+        try:
+            results = self.service.users().list(domain=domain_name, maxResults=max_results, orderBy='email').execute()
+            users = results.get('users', [])
+            return [u['primaryEmail'] for u in users]
+        except HttpError as e:
+            logging.error(f"[ISyncAuth] Failed to list users: {e}")
             raise
