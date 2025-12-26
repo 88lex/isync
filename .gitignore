@@ -20,3 +20,5 @@ config_library/
 # OS Files
 .DS_Store
 Thumbs.db
+user_db.csv
+isync.sb
