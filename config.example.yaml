@@ -1,4 +1,4 @@
-upload_limit: 700G
+upload_limit: 750G
 transfers: 8
 max_users_per_cycle: 10
 rclone_command: copy
