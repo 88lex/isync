@@ -20,6 +20,7 @@ def get_hardcoded_defaults():
         'default_source': '',
         'default_dest': '',
         'max_users_per_cycle': 10,
+        'company_name': 'Internal Ops',
         'rotation_strategy': 'standard',
         'existing_users_file': 'users.txt',
         'rclone_command': 'copy',

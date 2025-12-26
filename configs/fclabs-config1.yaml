@@ -1,0 +1,44 @@
+company_name: Internal Ops
+default_dest: fcl-movies-20s:movies/20s
+default_source: /zmedia/movies/20s
+domains:
+- admin_email: admin@flux-core-labs.com
+  domain_name: flux-core-labs.com
+  group_email: isyncusers@flux-core-labs.com
+  remote_sa_json_path: /opt/sa/master-fcl.json
+  sa_json_path: C:\Users\88\opt\isync\keys\master-fcl.json
+existing_users_file: users.txt
+global_rclone_flags: --no-update-dir-modtime --size-only --min-size=5G
+include_protected_users: false
+manual_ops:
+  batch_dst: fcl-movies-20s:movies/20s
+  batch_src: /zmedia/movies/20s
+  create_delay: 10
+  run_dst: ''
+  run_src: ''
+  target_user: admin@flux-core-labs.com
+max_users_per_cycle: 1
+protected_users:
+- admin@flux-core-labs.com
+rclone_chunk_size: 128M
+rclone_command: copy
+rclone_stats_interval: 10s
+rclone_verbose: true
+rotation_strategy: existing
+ssh_alias: ''
+ssh_connect_timeout: 10
+ssh_enabled: true
+ssh_host: zfbak
+ssh_key_path: ''
+ssh_mode: explicit
+ssh_remote_path: ~/isync
+ssh_user: ''
+stall_timeout_minutes: 10
+step_check: false
+sync_pairs:
+- dest: fcl-movies-20s:movies/20s
+  domain_reference: flux-core-labs.com
+  source: /zmedia/movies/20s
+transfers: 16
+upload_limit: 750G
+webhook_url: ''
