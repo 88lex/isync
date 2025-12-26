@@ -1,6 +1,8 @@
 import streamlit as st
 import threading
 import os
+import csv
+import io
 import time
 import json
 import subprocess
@@ -9,6 +11,8 @@ import platform
 import shutil
 import difflib
 import shlex
+import webbrowser
+import pandas as pd
 from datetime import datetime
 from isync_config import load_config, save_config, load_synclist, save_synclist, resolve_sa_path, LOG_FILE_PATH, DEFAULT_CONFIG_FILE, CURRENT_CONFIG_FILE, CONFIGS_DIR
 from isync_engine import ISyncEngine
@@ -316,7 +320,50 @@ if nav_view == "⚙️ Configuration":
         sel_saved = st.selectbox("Select Saved Config", [""] + saved_configs, label_visibility="collapsed")
         if st.button("Load Saved Config"):
             if sel_saved:
-                shutil.copy(os.path.join(CONFIGS_DIR, sel_saved), CURRENT_CONFIG_FILE)
+                # Load the full config bundle
+                full_conf = load_config(os.path.join(CONFIGS_DIR, sel_saved))
+                
+                # 1. Extract and Save Sync Jobs
+                if 'sync_pairs' in full_conf:
+                    save_synclist(full_conf['sync_pairs'])
+                    del full_conf['sync_pairs'] # Remove from main config to keep it clean
+                
+                # 2. Save Main Config
+                save_config(full_conf, CURRENT_CONFIG_FILE)
+                
+                # 3. Update Session State (UI Refresh)
+                # Map config keys to UI widget keys to ensure immediate update
+                st.session_state['cfg_upload_limit'] = full_conf.get('upload_limit')
+                st.session_state['cfg_transfers'] = full_conf.get('transfers')
+                st.session_state['def_src_input'] = full_conf.get('default_source')
+                st.session_state['def_dst_input'] = full_conf.get('default_dest')
+                st.session_state['config_max_users'] = full_conf.get('max_users_per_cycle')
+                st.session_state['cfg_company_name'] = full_conf.get('company_name')
+                st.session_state['cfg_users_file'] = full_conf.get('existing_users_file')
+                st.session_state['cfg_cmd_type'] = 0 if full_conf.get('rclone_command') == 'copy' else 1
+                st.session_state['cfg_stall_time'] = full_conf.get('stall_timeout_minutes')
+                st.session_state['cfg_webhook'] = full_conf.get('webhook_url')
+                st.session_state['global_flags_input'] = full_conf.get('global_rclone_flags')
+                st.session_state['cfg_step_check'] = full_conf.get('step_check')
+                st.session_state['cfg_chunk_size'] = full_conf.get('rclone_chunk_size')
+                st.session_state['cfg_stats_int'] = full_conf.get('rclone_stats_interval')
+                st.session_state['cfg_verbose'] = full_conf.get('rclone_verbose')
+                st.session_state['ssh_host_input'] = full_conf.get('ssh_host')
+                st.session_state['ssh_user_input'] = full_conf.get('ssh_user')
+                st.session_state['ssh_key_input'] = full_conf.get('ssh_key_path')
+                st.session_state['cfg_ssh_path'] = full_conf.get('ssh_remote_path')
+                st.session_state['cfg_ssh_timeout'] = full_conf.get('ssh_connect_timeout')
+                st.session_state['protected_users_input'] = "\n".join(full_conf.get('protected_users', []))
+                
+                # Manual Ops Fields
+                man_ops = full_conf.get('manual_ops', {})
+                st.session_state['man_create_delay'] = man_ops.get('create_delay', 10)
+                st.session_state['target_user_input'] = man_ops.get('target_user', '')
+                st.session_state['man_run_src'] = man_ops.get('run_src', '')
+                st.session_state['man_run_dst'] = man_ops.get('run_dst', '')
+                st.session_state['b_src'] = man_ops.get('batch_src', '')
+                st.session_state['b_dst'] = man_ops.get('batch_dst', '')
+
                 st.success(f"Loaded {sel_saved}!")
                 time.sleep(0.5)
                 st.rerun()
@@ -331,7 +378,50 @@ if nav_view == "⚙️ Configuration":
         if st.button("Save as Named Config"):
             if new_name:
                 fname = new_name if new_name.endswith('.yaml') else f"{new_name}.yaml"
-                save_config(config, os.path.join(CONFIGS_DIR, fname))
+                
+                # Gather FULL state (Config + Sync Jobs + Manual Ops)
+                full_save = config.copy()
+                
+                # 1. Gather Config Tab Values (Prefer Session State > Config > Default)
+                def get_val(key, conf_key, default):
+                    return st.session_state.get(key, config.get(conf_key, default))
+
+                full_save['upload_limit'] = get_val('cfg_upload_limit', 'upload_limit', '700G')
+                full_save['transfers'] = get_val('cfg_transfers', 'transfers', 8)
+                full_save['default_source'] = get_val('def_src_input', 'default_source', '')
+                full_save['default_dest'] = get_val('def_dst_input', 'default_dest', '')
+                full_save['max_users_per_cycle'] = get_val('config_max_users', 'max_users_per_cycle', 10)
+                full_save['company_name'] = get_val('cfg_company_name', 'company_name', 'Internal Ops')
+                full_save['existing_users_file'] = get_val('cfg_users_file', 'existing_users_file', 'users.txt')
+                full_save['rclone_command'] = 'sync' if st.session_state.get('cfg_cmd_type', 0) == 1 else 'copy'
+                full_save['stall_timeout_minutes'] = get_val('cfg_stall_time', 'stall_timeout_minutes', 10)
+                full_save['webhook_url'] = get_val('cfg_webhook', 'webhook_url', '')
+                full_save['global_rclone_flags'] = get_val('global_flags_input', 'global_rclone_flags', '')
+                full_save['step_check'] = get_val('cfg_step_check', 'step_check', False)
+                full_save['rclone_chunk_size'] = get_val('cfg_chunk_size', 'rclone_chunk_size', '128M')
+                full_save['rclone_stats_interval'] = get_val('cfg_stats_int', 'rclone_stats_interval', '1s')
+                full_save['rclone_verbose'] = get_val('cfg_verbose', 'rclone_verbose', True)
+                full_save['ssh_host'] = get_val('ssh_host_input', 'ssh_host', '')
+                full_save['ssh_user'] = get_val('ssh_user_input', 'ssh_user', '')
+                full_save['ssh_key_path'] = get_val('ssh_key_input', 'ssh_key_path', '')
+                full_save['ssh_remote_path'] = get_val('cfg_ssh_path', 'ssh_remote_path', '~/isync')
+                full_save['ssh_connect_timeout'] = get_val('cfg_ssh_timeout', 'ssh_connect_timeout', 10)
+                full_save['protected_users'] = [u.strip() for u in get_val('protected_users_input', 'protected_users', []).split('\n') if u.strip()] if isinstance(get_val('protected_users_input', 'protected_users', []), str) else get_val('protected_users_input', 'protected_users', [])
+
+                # 2. Gather Sync Jobs
+                full_save['sync_pairs'] = load_synclist()
+
+                # 3. Gather Manual Ops Fields
+                full_save['manual_ops'] = {
+                    'create_delay': st.session_state.get('man_create_delay', 10),
+                    'target_user': st.session_state.get('target_user_input', ''),
+                    'run_src': st.session_state.get('man_run_src', ''),
+                    'run_dst': st.session_state.get('man_run_dst', ''),
+                    'batch_src': st.session_state.get('b_src', ''),
+                    'batch_dst': st.session_state.get('b_dst', '')
+                }
+
+                save_config(full_save, os.path.join(CONFIGS_DIR, fname))
                 st.success(f"Saved to configs/{fname}")
                 time.sleep(0.5)
                 st.rerun()
@@ -342,8 +432,8 @@ if nav_view == "⚙️ Configuration":
         st.caption("Fields marked with * are mandatory.")
         c1, c2 = st.columns(2)
         with c1:
-            upload_limit = ui_text_input_copy("Upload Limit *", value=config.get('upload_limit', '700G'), help="Stop transfer and rotate user after this amount (e.g. 700G).")
-        transfers = c2.number_input("Rclone Transfers *", value=int(config.get('transfers', 8)), on_change=save_session_state, help="Number of parallel file transfers.")
+            upload_limit = ui_text_input_copy("Upload Limit *", value=config.get('upload_limit', '700G'), key="cfg_upload_limit", help="Stop transfer and rotate user after this amount (e.g. 700G).")
+        transfers = c2.number_input("Rclone Transfers *", value=int(config.get('transfers', 8)), key="cfg_transfers", on_change=save_session_state, help="Number of parallel file transfers.")
         
         c_src, c_dst = st.columns(2)
         with c_src:
@@ -355,27 +445,28 @@ if nav_view == "⚙️ Configuration":
         max_users = st.number_input("# Users to create *", value=st.session_state.shared_max_users, key="config_max_users", on_change=update_max_users_from_config, help="Number of users to rotate through before stopping.")
         users_file = config.get('existing_users_file', 'users.txt')
         if config.get('rotation_strategy') == "existing":
-            users_file = ui_text_input_copy("Users List File", value=users_file, help="Path to text file containing one email per line.")
+            users_file = ui_text_input_copy("Users List File", value=users_file, key="cfg_users_file", help="Path to text file containing one email per line.")
+        company_name = ui_text_input_copy("Company Name", value=config.get('company_name', 'Internal Ops'), key="cfg_company_name", help="Company name used in created user profiles. Leave as 'Internal Ops' to auto-generate random legitimate names.")
 
         c4, c5 = st.columns(2)
-        cmd_type = c4.selectbox("Rclone Command *", ["copy", "sync"], index=0 if config.get('rclone_command', 'copy') == 'copy' else 1, on_change=save_session_state, help="'copy' adds files; 'sync' makes dest identical to source (deletes files!).")
-        stall_time = c5.number_input("Stall Timeout (Mins) *", value=int(config.get('stall_timeout_minutes', 10)), on_change=save_session_state, help="Restart rclone if no output is received for this many minutes.")
+        cmd_type = c4.selectbox("Rclone Command *", ["copy", "sync"], index=0 if config.get('rclone_command', 'copy') == 'copy' else 1, key="cfg_cmd_type", on_change=save_session_state, help="'copy' adds files; 'sync' makes dest identical to source (deletes files!).")
+        stall_time = c5.number_input("Stall Timeout (Mins) *", value=int(config.get('stall_timeout_minutes', 10)), key="cfg_stall_time", on_change=save_session_state, help="Restart rclone if no output is received for this many minutes.")
         
         c6, c7 = st.columns(2)
         with c6:
-            webhook = ui_text_input_copy("Webhook URL (Optional)", value=config.get('webhook_url', ''), help="Discord or Slack webhook URL for notifications.")
+            webhook = ui_text_input_copy("Webhook URL (Optional)", value=config.get('webhook_url', ''), key="cfg_webhook", help="Discord or Slack webhook URL for notifications.")
         with c7:
             flags = ui_text_input_copy("Global Flags (Optional)", value=config.get('global_rclone_flags', ''), key="global_flags_input", help="Extra flags passed to rclone (e.g. --drive-use-trash=false).")
         
-        step_check = st.checkbox("Enable Step Check (Pause before execution)", value=config.get('step_check', False), on_change=save_session_state, help="If enabled, ISync will pause before every main step (Create User, Run Rclone, Delete User) and ask for confirmation.")
+        step_check = st.checkbox("Enable Step Check (Pause before execution)", value=config.get('step_check', False), key="cfg_step_check", on_change=save_session_state, help="If enabled, ISync will pause before every main step (Create User, Run Rclone, Delete User) and ask for confirmation.")
 
         st.caption("Advanced Rclone Settings")
         c_adv1, c_adv2, c_adv3 = st.columns(3)
         with c_adv1:
-            chunk_size = ui_text_input_copy("Chunk Size", value=config.get('rclone_chunk_size', '128M'), help="Rclone --drive-chunk-size (e.g. 128M, 256M).")
+            chunk_size = ui_text_input_copy("Chunk Size", value=config.get('rclone_chunk_size', '128M'), key="cfg_chunk_size", help="Rclone --drive-chunk-size (e.g. 128M, 256M).")
         with c_adv2:
-            stats_int = ui_text_input_copy("Stats Interval", value=config.get('rclone_stats_interval', '1s'), help="Rclone --stats frequency (e.g. 1s, 5s).")
-        verbose_log = c_adv3.checkbox("Verbose Logging", value=config.get('rclone_verbose', True), on_change=save_session_state, help="Enable --verbose flag for detailed logs.")
+            stats_int = ui_text_input_copy("Stats Interval", value=config.get('rclone_stats_interval', '1s'), key="cfg_stats_int", help="Rclone --stats frequency (e.g. 1s, 5s).")
+        verbose_log = c_adv3.checkbox("Verbose Logging", value=config.get('rclone_verbose', True), key="cfg_verbose", on_change=save_session_state, help="Enable --verbose flag for detailed logs.")
 
         st.subheader("Remote Execution (SSH)")
         st.caption(f"SSH Mode is currently: **{'ENABLED' if ssh_enabled else 'DISABLED'}** (Toggle in Sidebar)")
@@ -395,9 +486,9 @@ if nav_view == "⚙️ Configuration":
         
         c_rem1, c_rem2 = st.columns([3, 1])
         with c_rem1:
-            ssh_remote_path = ui_text_input_copy("Remote ISync Path", value=ssh_remote_path, help="Directory on remote server where isync is installed (e.g. /home/user/isync). Required for Sync features.")
+            ssh_remote_path = ui_text_input_copy("Remote ISync Path", value=ssh_remote_path, key="cfg_ssh_path", help="Directory on remote server where isync is installed (e.g. /home/user/isync). Required for Sync features.")
         with c_rem2:
-            ssh_timeout = st.number_input("Timeout (s)", value=int(config.get('ssh_connect_timeout', 10)), min_value=1, on_change=save_session_state, help="SSH connection timeout in seconds.")
+            ssh_timeout = st.number_input("Timeout (s)", value=int(config.get('ssh_connect_timeout', 10)), min_value=1, key="cfg_ssh_timeout", on_change=save_session_state, help="SSH connection timeout in seconds.")
 
         st.subheader("Safety & Security")
         protected_list = config.get('protected_users', [])
@@ -444,6 +535,7 @@ if nav_view == "⚙️ Configuration":
             new_conf = {
                 'default_source': def_src, 'default_dest': def_dst,
                 'upload_limit': upload_limit, 'transfers': transfers, 'max_users_per_cycle': max_users,
+                'company_name': company_name,
                 'rotation_strategy': config.get('rotation_strategy'), 'existing_users_file': users_file,
                 'rclone_command': cmd_type, 'stall_timeout_minutes': stall_time,
                 'rclone_chunk_size': chunk_size, 'rclone_stats_interval': stats_int, 'rclone_verbose': verbose_log,
@@ -701,16 +793,51 @@ elif nav_view == "🛠️ Manual Ops":
             try:
                 mgr = ISyncAuthManager(sa_path, admin)
                 ok, msg = mgr.test_api_connection()
-                if ok: st.success(msg)
-                else: st.error(msg)
-            except Exception as e: st.error(f"Error: {e}")
+                if ok: 
+                    st.success(msg)
+                else:
+                    if "unauthorized_client" in str(msg):
+                        st.error("❌ **Authorization Failed:** Domain-Wide Delegation (DWD) is missing or incorrect.")
+                        st.markdown(f"""
+                        ### 🛠️ Troubleshooting Guide
+                        Google refused the Service Account's attempt to impersonate **{admin}**.
+                        
+                        **Check the following in [Google Admin Console](https://admin.google.com):**
+                        1. Go to **Security > Access and data control > API controls > Manage Domain Wide Delegation**.
+                        2. Look for the **Client ID** found in your JSON file (`client_id`).
+                        3. Ensure the **Scopes** listed there match exactly:
+                           * `https://www.googleapis.com/auth/admin.directory.user`
+                           * `https://www.googleapis.com/auth/admin.directory.group`
+                           * `https://www.googleapis.com/auth/admin.directory.group.member`
+                        """)
+                        with st.expander("View Raw Error"):
+                            st.code(msg)
+                    else:
+                        st.error(f"API Error: {msg}")
+            except Exception as e: st.error(f"Initialization Error: {e}")
 
         st.divider()
         st.subheader("User Creation")
         
-        c_n, c_create = st.columns([1, 1])
+        if 'creation_result' in st.session_state:
+            res = st.session_state['creation_result']
+            if res['type'] == 'success':
+                st.success(res['msg'])
+                if 'created_users_list' in res:
+                    st.code(res['created_users_list'], language=None)
+            else:
+                st.error(res['msg'])
+            
+            if st.button("Clear Status", key="clear_create_status"):
+                del st.session_state['creation_result']
+                st.rerun()
+
+        c_n, c_delay, c_create = st.columns([1, 1, 2])
         with c_n:
             st.number_input("# Users to create", min_value=1, value=st.session_state.shared_max_users, key="manual_max_users", on_change=update_max_users_from_manual)
+
+        with c_delay:
+            create_delay = st.number_input("Delay (s)", min_value=0, value=10, key="man_create_delay", help="Seconds to wait between user creations.")
 
         with c_create:
             num_users = st.session_state.shared_max_users
@@ -718,43 +845,149 @@ elif nav_view == "🛠️ Manual Ops":
             btn_create_text = f"Test User Creation ({num_users})" if manual_test_mode else f"Create New User{suffix}"
             
             if st.button(btn_create_text):
-                with st.spinner(f"Processing {num_users} users..."):
-                    try:
-                        protected = config.get('protected_users', [])
-                        mgr = ISyncAuthManager(sa_path, admin, protected_users=protected)
-                        created_list = []
+                try:
+                    protected = config.get('protected_users', [])
+                    mgr = ISyncAuthManager(sa_path, admin, protected_users=protected, company_name=config.get('company_name', 'Internal Ops'))
+                    preview_body = mgr.prepare_user_body(sel_conf['domain_name'])
+                    st.session_state['create_preview_body'] = preview_body
+                    st.session_state['show_create_confirm'] = True
+                    st.rerun()
+                except Exception as e:
+                    st.error(f"Failed to generate preview: {e}")
 
-                        if manual_test_mode:
-                            # Test Cycle: Create then Delete N times
-                            for i in range(num_users):
-                                email = mgr.provision_uploader(sel_conf['domain_name'], group)
-                                mgr.delete_user(email)
-                                created_list.append(email)
-                            st.success(f"✅ Test Passed: {len(created_list)} users created and deleted successfully.")
-                        else:
-                            bar = st.progress(0)
-                            for i in range(num_users):
-                                email = mgr.provision_uploader(sel_conf['domain_name'], group)
-                                created_list.append(email)
-                                bar.progress((i + 1) / num_users)
+        if st.session_state.get('show_create_confirm'):
+            st.info("ℹ️ **Review First User:** This is the data that will be sent to Google.")
+            st.json(st.session_state.get('create_preview_body', {}))
+            
+            # Pre-generate CSV data for the download button
+            csv_buffer = io.StringIO()
+            try:
+                csv_writer = csv.writer(csv_buffer)
+                # Google Bulk Upload Headers
+                headers = [
+                    "First Name [Required]", "Last Name [Required]", "Email Address [Required]", 
+                    "Password [Required]", "Password Hash Function [UPLOAD ONLY]", "Org Unit Path [Required]", 
+                    "New Primary Email [UPLOAD ONLY]", "Recovery Email", "Home Secondary Email", 
+                    "Work Secondary Email", "Recovery Phone [MUST BE IN THE E.164 FORMAT]", "Work Phone", 
+                    "Home Phone", "Mobile Phone", "Work Address", "Home Address", "Employee ID", 
+                    "Employee Type", "Employee Title", "Manager Email", "Department", "Cost Center", 
+                    "Building ID", "Floor Name", "Floor Section", "Change Password at Next Sign-In", 
+                    "New Status [UPLOAD ONLY]", "New Licenses [UPLOAD ONLY]", "Advanced Protection Program enrollment"
+                ]
+                csv_writer.writerow(headers)
+                
+                # Re-init manager to generate N users
+                p_mgr = ISyncAuthManager(sa_path, admin, protected_users=config.get('protected_users', []), company_name=config.get('company_name', 'Internal Ops'))
+                
+                # Use the preview body for the first row, generate fresh ones for the rest
+                for i in range(num_users):
+                    body = st.session_state.get('create_preview_body') if i == 0 else p_mgr.prepare_user_body(sel_conf['domain_name'])
+                    
+                    name = body.get('name', {})
+                    orgs = body.get('organizations', [{}])[0] if body.get('organizations') else {}
+                    addrs = body.get('addresses', [{}])[0] if body.get('addresses') else {}
+                    ext_ids = body.get('externalIds', [{}])[0] if body.get('externalIds') else {}
+                    addr_str = f"{addrs.get('streetAddress', '')}, {addrs.get('locality', '')} {addrs.get('postalCode', '')}".strip(", ")
+
+                    csv_writer.writerow([
+                        name.get('givenName', ''), name.get('familyName', ''), body.get('primaryEmail', ''),
+                        body.get('password', ''), "", "/", "", body.get('recoveryEmail', ''),
+                        "", "", body.get('recoveryPhone', ''), "", "", "", addr_str, "",
+                        ext_ids.get('value', ''), "", orgs.get('title', ''), "", orgs.get('department', ''),
+                        "", "", "", "", "True", "", "", "False"
+                    ])
+            except Exception as e:
+                csv_buffer.write(f"Error generating CSV: {e}")
+
+            cc1, cc2, cc3 = st.columns([1, 2, 4])
+            
+            if cc1.button("✅ Proceed"):
+                status_box = st.empty()
+                progress_bar = st.progress(0)
+                try:
+                    protected = config.get('protected_users', [])
+                    mgr = ISyncAuthManager(sa_path, admin, protected_users=protected, company_name=config.get('company_name', 'Internal Ops'))
+                    created_list = []
+                    
+                    # Use the preview body for the first one
+                    first_body = st.session_state.get('create_preview_body')
+
+                    if manual_test_mode:
+                        # Test Cycle: Create then Delete N times
+                        for i in range(num_users):
+                            status_box.info(f"Processing user {i+1}/{num_users} (Create -> Delete)...")
+                            body_to_use = first_body if i == 0 else None
+                            email = mgr.provision_uploader(sel_conf['domain_name'], group, user_body=body_to_use)
+                            mgr.delete_user(email)
+                            created_list.append(email)
+                            progress_bar.progress((i + 1) / num_users)
+                            if i < num_users - 1: time.sleep(create_delay)
+                        
+                        st.session_state['creation_result'] = {
+                            'type': 'success', 
+                            'msg': f"✅ Test Passed: {len(created_list)} users created and deleted successfully.",
+                            'created_users_list': "\n".join(created_list)
+                        }
+                    else:
+                        for i in range(num_users):
+                            status_box.info(f"Creating user {i+1}/{num_users}...")
+                            body_to_use = first_body if i == 0 else None
+                            email = mgr.provision_uploader(sel_conf['domain_name'], group, user_body=body_to_use)
+                            created_list.append(email)
+                            progress_bar.progress((i + 1) / num_users)
+                            if i < num_users - 1: time.sleep(create_delay)
+                        
+                        if created_list:
+                            st.session_state['manual_email'] = created_list[-1]
+                            st.session_state['target_user_input'] = created_list[-1]
                             
-                            if created_list:
-                                st.session_state['manual_email'] = created_list[-1]
-                                st.session_state['target_user_input'] = created_list[-1]
-                                st.success(f"Created {len(created_list)} users:")
-                                st.code("\n".join(created_list), language=None)
-                    except Exception as e: st.error(f"Failed: {e}")
+                            # Clear selection state
+                            if 'fetched_users' in st.session_state:
+                                for u_obj in st.session_state['fetched_users']:
+                                    u = u_obj['email'] if isinstance(u_obj, dict) else u_obj
+                                    st.session_state[f"chk_{u}"] = False
+
+                            # Refresh list
+                            status_box.info("Refreshing user list...")
+                            try:
+                                users = mgr.list_users(sel_conf['domain_name'], return_detailed=True)
+                                st.session_state['fetched_users'] = users
+                            except Exception as e:
+                                status_box.warning(f"Failed to refresh list: {e}")
+                            
+                            st.session_state['creation_result'] = {
+                                'type': 'success', 
+                                'msg': f"✅ Created {len(created_list)} users:",
+                                'created_users_list': "\n".join(created_list)
+                            }
+                except Exception as e:
+                    st.session_state['creation_result'] = {'type': 'error', 'msg': f"❌ Failed: {str(e)}"}
+                
+                st.session_state['show_create_confirm'] = False
+                st.rerun()
+
+            with cc2:
+                st.download_button(
+                    label="📄 Download Bulk CSV",
+                    data=csv_buffer.getvalue(),
+                    file_name=f"bulk_users_{int(time.time())}.csv",
+                    mime="text/csv"
+                )
+
+            if cc3.button("❌ Cancel"):
+                st.session_state['show_create_confirm'] = False
+                st.rerun()
         
         st.subheader("User Management")
         
         # Row 1: List & Selection
-        c_list, c_sel_all, c_clear = st.columns([1, 1, 1])
+        c_list, c_sel_all, c_unsel_all, c_clear = st.columns([1, 1, 1, 1])
         
         if c_list.button("List Users"):
             try:
                 mgr = ISyncAuthManager(sa_path, admin)
                 with st.spinner(f"Fetching users for {sel_conf['domain_name']}..."):
-                    users = mgr.list_users(sel_conf['domain_name'])
+                    users = mgr.list_users(sel_conf['domain_name'], return_detailed=True)
                 
                 if users:
                     st.session_state['fetched_users'] = users
@@ -767,27 +1000,78 @@ elif nav_view == "🛠️ Manual Ops":
         if c_sel_all.button("Select All"):
             if 'fetched_users' in st.session_state:
                 protected_set = set(u.lower().strip() for u in config.get('protected_users', []))
-                for u in st.session_state['fetched_users']:
+                for u_obj in st.session_state['fetched_users']:
+                    u = u_obj['email'] if isinstance(u_obj, dict) else u_obj
                     if u.lower().strip() not in protected_set:
                         st.session_state[f"chk_{u}"] = True
+            st.rerun()
+
+        if c_unsel_all.button("Unselect All"):
+            if 'fetched_users' in st.session_state:
+                for u_obj in st.session_state['fetched_users']:
+                    u = u_obj['email'] if isinstance(u_obj, dict) else u_obj
+                    st.session_state[f"chk_{u}"] = False
             st.rerun()
 
         if c_clear.button("Clear List"):
             st.session_state['fetched_users'] = []
             st.rerun()
 
+        # Filter Row
+        c_filt_in, c_filt_go = st.columns([3, 1])
+        filt_reason = c_filt_in.text_input("Filter by Suspension Reason", placeholder="e.g. WEB_SPAM_SIGNUP (Leave empty for ANY)", label_visibility="collapsed")
+        if c_filt_go.button("Filter List"):
+            if 'fetched_users' in st.session_state and st.session_state['fetched_users']:
+                # Extract emails for the engine call
+                users_input = st.session_state['fetched_users']
+                emails_to_check = [u['email'] if isinstance(u, dict) else u for u in users_input]
+
+                eng = ISyncEngine(config)
+                with st.spinner(f"Scanning {len(emails_to_check)} users..."):
+                    results = eng.batch_check_suspension(sel_conf['domain_name'], emails_to_check)
+                
+                filtered = []
+                for email, data in results.items():
+                    if 'error' in data: continue
+                    
+                    is_susp = data.get('suspended', False)
+                    reason = str(data.get('reason', ''))
+                    
+                    if not filt_reason:
+                        if is_susp: filtered.append({'email': email, 'suspended': is_susp, 'suspensionReason': reason})
+                    else:
+                        if filt_reason.lower() in reason.lower():
+                            filtered.append({'email': email, 'suspended': is_susp, 'suspensionReason': reason})
+                
+                st.session_state['fetched_users'] = filtered
+                st.success(f"Filtered to {len(filtered)} users.")
+                time.sleep(0.5)
+                st.rerun()
+            else:
+                st.warning("No users in list to filter.")
+
         # Row 2: Actions
-        c_del_sel, c_add_prot = st.columns([1, 1])
+        c_del_sel, c_unsuspend, c_check_susp, c_login, c_details, c_copy, c_add_group, c_add_prot = st.columns([1, 1, 1, 1, 1, 1, 1, 1])
 
         if c_del_sel.button("Delete Selected Users"):
-            if 'fetched_users' in st.session_state and st.session_state['fetched_users']:
-                to_delete = []
-                for u in st.session_state['fetched_users']:
+            st.session_state['show_delete_confirm'] = True
+
+        if st.session_state.get('show_delete_confirm'):
+            to_delete = []
+            if 'fetched_users' in st.session_state:
+                for u_obj in st.session_state['fetched_users']:
+                    u = u_obj['email'] if isinstance(u_obj, dict) else u_obj
                     if st.session_state.get(f"chk_{u}", False):
                         to_delete.append(u)
-                
-                if to_delete:
-                    mgr = ISyncAuthManager(sa_path, admin, protected_users=config.get('protected_users', []))
+            
+            if not to_delete:
+                st.warning("No users selected.")
+                st.session_state['show_delete_confirm'] = False
+            else:
+                st.warning(f"⚠️ Are you sure you want to delete {len(to_delete)} users? This cannot be undone.")
+                cd1, cd2 = st.columns([1, 5])
+                if cd1.button("Yes, Delete", type="primary"):
+                    mgr = ISyncAuthManager(sa_path, admin, protected_users=config.get('protected_users', []), company_name=config.get('company_name', 'Internal Ops'))
                     progress_text = "Verifying..." if manual_test_mode else "Deleting..."
                     bar = st.progress(0, text=progress_text)
                     for i, u in enumerate(to_delete):
@@ -797,7 +1081,207 @@ elif nav_view == "🛠️ Manual Ops":
                             mgr.delete_user(u)
                         bar.progress((i + 1) / len(to_delete))
                     st.success(f"Processed {len(to_delete)} users.")
-                    # Refresh list logic could go here, but requires re-fetch
+                    
+                    # Clear selection state
+                    for u_obj in st.session_state['fetched_users']:
+                        u = u_obj['email'] if isinstance(u_obj, dict) else u_obj
+                        st.session_state[f"chk_{u}"] = False
+
+                    # Refresh list
+                    with st.spinner("Refreshing user list..."):
+                        try:
+                            users = mgr.list_users(sel_conf['domain_name'], return_detailed=True)
+                            st.session_state['fetched_users'] = users
+                        except Exception as e:
+                            st.error(f"Failed to refresh list: {e}")
+                    
+                    st.session_state['show_delete_confirm'] = False
+                    time.sleep(0.5)
+                    st.rerun()
+                
+                if cd2.button("Cancel"):
+                    st.session_state['show_delete_confirm'] = False
+                    st.rerun()
+
+        if c_unsuspend.button("Unsuspend Selected Users"):
+            if 'fetched_users' in st.session_state and st.session_state['fetched_users']:
+                to_unsuspend = []
+                for u_obj in st.session_state['fetched_users']:
+                    u = u_obj['email'] if isinstance(u_obj, dict) else u_obj
+                    if st.session_state.get(f"chk_{u}", False):
+                        to_unsuspend.append(u)
+                
+                if to_unsuspend:
+                    eng = ISyncEngine(config)
+                    with st.spinner(f"Unsuspending {len(to_unsuspend)} users..."):
+                        results = eng.batch_unsuspend_users(sel_conf['domain_name'], to_unsuspend)
+                    
+                    success_count = 0
+                    for email, res in results.items():
+                        if "Success" in res:
+                            success_count += 1
+                        else:
+                            st.error(f"{email}: {res}")
+                    
+                    if success_count > 0:
+                        st.success(f"Successfully reactivated {success_count} users.")
+                else:
+                    st.warning("No users selected.")
+
+        if c_login.button("Login Selected"):
+            if 'fetched_users' in st.session_state and st.session_state['fetched_users']:
+                to_login = []
+                for u_obj in st.session_state['fetched_users']:
+                    u = u_obj['email'] if isinstance(u_obj, dict) else u_obj
+                    if st.session_state.get(f"chk_{u}", False):
+                        to_login.append(u)
+                
+                if to_login:
+                    # Load passwords
+                    pass_map = {}
+                    if os.path.exists("user_db.csv"):
+                        try:
+                            df = pd.read_csv("user_db.csv")
+                            # Create dict of Email -> Password (last entry wins)
+                            pass_map = dict(zip(df['Email'], df['Password']))
+                        except Exception as e:
+                            st.error(f"Failed to load password DB: {e}")
+
+                    st.info(f"Opening browser for {len(to_login)} users...")
+                    
+                    for email in to_login:
+                        login_url = f"https://accounts.google.com/ServiceLogin?hl=en&Email={email}"
+                        webbrowser.open(login_url)
+                        pwd = pass_map.get(email, "Unknown (Not in DB)")
+                        st.markdown(f"**{email}**")
+                        st.code(pwd, language=None)
+                else:
+                    st.warning("No users selected.")
+
+        if c_details.button("View Details"):
+            st.session_state['show_details_panel'] = not st.session_state.get('show_details_panel', False)
+            st.rerun()
+
+        if c_copy.button("Copy List"):
+            if 'fetched_users' in st.session_state:
+                to_copy = []
+                for u_obj in st.session_state['fetched_users']:
+                    u = u_obj['email'] if isinstance(u_obj, dict) else u_obj
+                    if st.session_state.get(f"chk_{u}", False):
+                        to_copy.append(u)
+                if to_copy:
+                    st.info(f"Copy the list below ({len(to_copy)} users):")
+                    st.code("\n".join(to_copy), language="text")
+                else:
+                    st.warning("No users selected to copy.")
+
+        if c_add_group.button("Add to Group"):
+            if 'fetched_users' in st.session_state and st.session_state['fetched_users']:
+                to_add = []
+                for u_obj in st.session_state['fetched_users']:
+                    u = u_obj['email'] if isinstance(u_obj, dict) else u_obj
+                    if st.session_state.get(f"chk_{u}", False):
+                        to_add.append(u)
+                
+                if to_add:
+                    if not group:
+                        st.error("No Group Email configured for this domain.")
+                    else:
+                        mgr = ISyncAuthManager(sa_path, admin)
+                        progress_text = f"Adding users to {group}..."
+                        bar = st.progress(0, text=progress_text)
+                        
+                        for i, u in enumerate(to_add):
+                            try:
+                                mgr.add_to_group(u, group)
+                            except Exception as e:
+                                st.error(f"Failed to add {u}: {e}")
+                            bar.progress((i + 1) / len(to_add))
+                        st.success(f"Processed {len(to_add)} users.")
+                else:
+                    st.warning("No users selected.")
+
+        # Persistent Details Panel
+        if st.session_state.get('show_details_panel'):
+            st.divider()
+            st.subheader("User Details View")
+            if 'fetched_users' in st.session_state and st.session_state['fetched_users']:
+                to_view = []
+                for u_obj in st.session_state['fetched_users']:
+                    u = u_obj['email'] if isinstance(u_obj, dict) else u_obj
+                    if st.session_state.get(f"chk_{u}", False):
+                        to_view.append(u)
+                
+                if to_view:
+                    if os.path.exists("user_db.csv"):
+                        try:
+                            # Robust CSV reading
+                            all_cols = [
+                                "Timestamp", "Email", "Password", "Google_ID", "ETag", "Is_Admin", 
+                                "Org_Unit", "Recovery_Email", "Status", "Suspended", 
+                                "First_Name", "Last_Name", "Recovery_Phone", "Address", "Job_Title", "Department",
+                                "External_ID", "Notes"
+                            ]
+                            data_rows = []
+                            with open("user_db.csv", "r", encoding="utf-8") as f:
+                                reader = csv.reader(f)
+                                for row in reader:
+                                    if not row: continue
+                                    if row[0] == "Timestamp": continue 
+                                    if len(row) < len(all_cols):
+                                        row += [""] * (len(all_cols) - len(row))
+                                    data_rows.append(row[:len(all_cols)])
+                            
+                            df = pd.DataFrame(data_rows, columns=all_cols)
+                            subset = df[df['Email'].isin(to_view)]
+                            
+                            if not subset.empty:
+                                # Column Selector
+                                sel_cols = st.multiselect("Select Columns to View/Copy", all_cols, default=all_cols)
+                                if sel_cols:
+                                    final_df = subset[sel_cols]
+                                    st.dataframe(final_df)
+                                    
+                                    st.caption("Copy Data (CSV):")
+                                    csv_txt = final_df.to_csv(index=False)
+                                    st.code(csv_txt, language="csv")
+                                else:
+                                    st.warning("Select at least one column.")
+                            else:
+                                st.warning("Selected users not found in local database.")
+                        except Exception as e:
+                            st.error(f"Error reading DB: {e}")
+                    else:
+                        st.warning("No user database found.")
+                else:
+                    st.warning("No users selected.")
+            if st.button("Close Details Panel"):
+                st.session_state['show_details_panel'] = False
+                st.rerun()
+
+        if c_check_susp.button("Check Suspension"):
+            if 'fetched_users' in st.session_state and st.session_state['fetched_users']:
+                to_check = []
+                for u_obj in st.session_state['fetched_users']:
+                    u = u_obj['email'] if isinstance(u_obj, dict) else u_obj
+                    if st.session_state.get(f"chk_{u}", False):
+                        to_check.append(u)
+                
+                if to_check:
+                    eng = ISyncEngine(config)
+                    with st.spinner(f"Checking {len(to_check)} users..."):
+                        results = eng.batch_check_suspension(sel_conf['domain_name'], to_check)
+                    
+                    for email, data in results.items():
+                        if 'error' in data:
+                            st.error(f"{email}: {data['error']}")
+                        else:
+                            status = "Suspended" if data['suspended'] else "Active"
+                            reason = data['reason']
+                            if data['suspended']:
+                                st.warning(f"{email}: {status} - Reason: {reason}")
+                            else:
+                                st.success(f"{email}: {status} - Reason: {reason}")
                 else:
                     st.warning("No users selected.")
 
@@ -807,7 +1291,8 @@ elif nav_view == "🛠️ Manual Ops":
                 new_protected_list = list(config.get('protected_users', []))
                 added_count = 0
                 
-                for u in st.session_state['fetched_users']:
+                for u_obj in st.session_state['fetched_users']:
+                    u = u_obj['email'] if isinstance(u_obj, dict) else u_obj
                     if st.session_state.get(f"chk_{u}", False):
                         if u.lower().strip() not in existing_lower:
                             new_protected_list.append(u.strip())
@@ -827,8 +1312,12 @@ elif nav_view == "🛠️ Manual Ops":
         if 'fetched_users' in st.session_state and st.session_state['fetched_users']:
             protected_set = set(u.lower().strip() for u in config.get('protected_users', []))
             with st.container():
-                st.write("Select users to delete:")
-                for u in st.session_state['fetched_users']:
+                st.write("Select users:")
+                for u_obj in st.session_state['fetched_users']:
+                    u = u_obj['email'] if isinstance(u_obj, dict) else u_obj
+                    is_susp = u_obj.get('suspended', False) if isinstance(u_obj, dict) else False
+                    susp_reason = u_obj.get('suspensionReason', '') if isinstance(u_obj, dict) else ''
+
                     c_chk, c_email = st.columns([1, 15])
                     with c_chk:
                         if u.lower().strip() in protected_set:
@@ -836,15 +1325,18 @@ elif nav_view == "🛠️ Manual Ops":
                         else:
                             st.checkbox("Select", key=f"chk_{u}", label_visibility="collapsed", help=f"Select {u}")
                     with c_email:
-                        st.code(u, language=None)
+                        if is_susp:
+                            st.markdown(f"`{u}` ❌ (Suspended: {susp_reason})")
+                        else:
+                            st.code(u, language=None)
 
         st.divider()
         st.subheader("Run Single Rclone Job")
         
         default_tgt = st.session_state['manual_email'] if st.session_state['manual_email'] else admin
         target_user = ui_text_input_copy("Target User Email", value=default_tgt, key="target_user_input", help="The temporary user email to operate on. Defaults to Admin Email.")
-        m_src = ui_text_input_copy("Source Path", value=config.get('default_source', ''), help="Source for manual run.")
-        m_dst = ui_text_input_copy("Destination Path", value=config.get('default_dest', ''), help="Destination for manual run.")
+        m_src = ui_text_input_copy("Source Path", value=config.get('default_source', ''), key="man_run_src", help="Source for manual run.")
+        m_dst = ui_text_input_copy("Destination Path", value=config.get('default_dest', ''), key="man_run_dst", help="Destination for manual run.")
         
         c_man1, c_man2 = st.columns(2)
         m_dry_check = c_man1.checkbox("Dry Run", value=True, key="man_dry", on_change=save_session_state)
@@ -942,8 +1434,16 @@ elif nav_view == "🛠️ Manual Ops":
                 pair = {'source': b_src, 'dest': b_dst, 'domain_reference': selected_dom}
                 eng = ISyncEngine(batch_conf)
                 
+                # Gather selected users
+                selected_users = []
+                if 'fetched_users' in st.session_state:
+                    for u_obj in st.session_state['fetched_users']:
+                        u = u_obj['email'] if isinstance(u_obj, dict) else u_obj
+                        if st.session_state.get(f"chk_{u}", False):
+                            selected_users.append(u)
+
                 with st.spinner("Generating batch command..."):
-                    cmd_str = eng.generate_batch_command(pair, dry_run=b_dry)
+                    cmd_str = eng.generate_batch_command(pair, dry_run=b_dry, user_list=selected_users if selected_users else None)
                 
                 st.success("Batch Command Generated:")
                 st.code(cmd_str, language="bash")

@@ -6,3 +6,4 @@ google-auth-oauthlib
 pyyaml
 pandas
 requests
+faker

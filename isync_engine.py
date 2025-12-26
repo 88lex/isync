@@ -9,6 +9,8 @@ import re
 import shlex
 import requests
 import shutil
+from google.oauth2 import service_account
+from googleapiclient.discovery import build
 from isync_auth import ISyncAuthManager
 from isync_config import DEFAULT_SA_JSON_PATH, LOG_FILE_PATH, LOGS_DIR
 
@@ -175,9 +177,76 @@ class ISyncEngine:
                 auth = ISyncAuthManager(json_path, d['admin_email'])
                 ok, msg = auth.test_api_connection()
                 if ok: results.append(f"✅ {name}: API OK")
-                else: results.append(f"❌ {name}: API Error ({msg})")
+                else: 
+                    if "unauthorized_client" in str(msg):
+                        results.append(f"❌ {name}: DWD Auth Failed (Check Client ID & Scopes)")
+                    else:
+                        results.append(f"❌ {name}: API Error ({msg})")
             except Exception as e:
                 results.append(f"❌ {name}: {str(e)}")
+        return results
+
+    def batch_unsuspend_users(self, domain_name, user_emails):
+        """
+        Reactivates (unsuspends) a list of users for a given domain.
+        Returns a dict of {email: status_message}.
+        """
+        results = {}
+        try:
+            domain_cfg = self.get_domain_config(domain_name)
+            json_path = domain_cfg.get('sa_json_path', DEFAULT_SA_JSON_PATH)
+            admin_email = domain_cfg['admin_email']
+            
+            SCOPES = ['https://www.googleapis.com/auth/admin.directory.user']
+            creds = service_account.Credentials.from_service_account_file(
+                json_path, scopes=SCOPES, subject=admin_email
+            )
+            service = build('admin', 'directory_v1', credentials=creds)
+
+            for email in user_emails:
+                try:
+                    service.users().patch(userKey=email, body={'suspended': False}).execute()
+                    results[email] = "Success: Reactivated"
+                    logging.info(f"[ISyncEngine] Unsuspended user: {email}")
+                except Exception as e:
+                    results[email] = f"Failed: {str(e)}"
+                    logging.error(f"[ISyncEngine] Failed to unsuspend {email}: {e}")
+        except Exception as e:
+            logging.error(f"[ISyncEngine] Batch Unsuspend Error: {e}")
+            return {"Global Error": str(e)}
+            
+        return results
+
+    def batch_check_suspension(self, domain_name, user_emails):
+        """
+        Checks suspension status and reason for a list of users.
+        Returns a dict of {email: {'suspended': bool, 'reason': str}}.
+        """
+        results = {}
+        try:
+            domain_cfg = self.get_domain_config(domain_name)
+            json_path = domain_cfg.get('sa_json_path', DEFAULT_SA_JSON_PATH)
+            admin_email = domain_cfg['admin_email']
+            
+            SCOPES = ['https://www.googleapis.com/auth/admin.directory.user']
+            creds = service_account.Credentials.from_service_account_file(
+                json_path, scopes=SCOPES, subject=admin_email
+            )
+            service = build('admin', 'directory_v1', credentials=creds)
+
+            for email in user_emails:
+                try:
+                    user = service.users().get(userKey=email).execute()
+                    is_suspended = user.get('suspended', False)
+                    reason = user.get('suspensionReason', 'None')
+                    results[email] = {'suspended': is_suspended, 'reason': reason}
+                except Exception as e:
+                    results[email] = {'error': str(e)}
+                    logging.error(f"[ISyncEngine] Failed to check suspension for {email}: {e}")
+        except Exception as e:
+            logging.error(f"[ISyncEngine] Batch Check Suspension Error: {e}")
+            return {"Global Error": str(e)}
+            
         return results
 
     def _get_ssh_base_cmd(self):
@@ -362,7 +431,7 @@ class ISyncEngine:
             logging.warning(f"[ISyncEngine] Rclone exited code {exit_code}.")
             return "ERROR"
 
-    def generate_batch_command(self, pair, dry_run=False):
+    def generate_batch_command(self, pair, dry_run=False, user_list=None):
         """Generates a single batch command string for all users in the rotation."""
         source = pair['source']
         dest = pair['dest']
@@ -371,24 +440,28 @@ class ISyncEngine:
         domain_cfg = self.get_domain_config(target_domain)
         json_path = domain_cfg.get('sa_json_path', DEFAULT_SA_JSON_PATH)
         
-        if self.config.get('rotation_strategy', 'standard') != 'existing':
-            return "Batch command generation is only supported in 'Existing Users' mode."
+        users_to_process = []
+        if user_list:
+            users_to_process = user_list
+        else:
+            if self.config.get('rotation_strategy', 'standard') != 'existing':
+                return "Batch command generation is only supported in 'Existing Users' mode (or with manually selected users)."
 
-        try:
-            list_mgr = ISyncAuthManager(json_path, domain_cfg['admin_email'])
-            user_list = list_mgr.list_users(domain_cfg['domain_name'])
-        except Exception as e:
-            return f"Error fetching users: {e}"
+            try:
+                list_mgr = ISyncAuthManager(json_path, domain_cfg['admin_email'])
+                fetched_users = list_mgr.list_users(domain_cfg['domain_name'])
+            except Exception as e:
+                return f"Error fetching users: {e}"
 
-        if not self.config.get('include_protected_users', False):
-            protected_set = set(u.lower() for u in self.config.get('protected_users', []))
-            user_list = [u for u in user_list if u.lower() not in protected_set]
+            if not self.config.get('include_protected_users', False):
+                protected_set = set(u.lower() for u in self.config.get('protected_users', []))
+                fetched_users = [u for u in fetched_users if u.lower() not in protected_set]
 
-        max_users = int(self.config.get('max_users_per_cycle', 10))
-        user_list = user_list[:max_users]
+            max_users = int(self.config.get('max_users_per_cycle', 10))
+            users_to_process = fetched_users[:max_users]
 
         commands = []
-        for i, user in enumerate(user_list):
+        for i, user in enumerate(users_to_process):
             cmd_list = self.build_rclone_cmd(
                 source, dest, json_path, user, 
                 dry_run=dry_run, 
@@ -478,8 +551,7 @@ class ISyncEngine:
         else:
             # --- STANDARD MODE (Create/Delete) ---
             protected = self.config.get('protected_users', [])
-            auth_mgr = ISyncAuthManager(json_path, domain_cfg['admin_email'], protected_users=protected)
-            
+            auth_mgr = ISyncAuthManager(json_path, domain_cfg['admin_email'], protected_users=protected, company_name=self.config.get('company_name', 'Internal Ops'))
             status = "START"
             for i in range(1, max_users + 1):
                 if self.stop_event.is_set(): break

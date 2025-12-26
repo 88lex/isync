@@ -14,7 +14,8 @@ It utilizes **Service Account Impersonation**, meaning you do **not** need to ma
 5. [First Run & Configuration Walkthrough](#first-run)
 6. [Background Persistence (Tmux)](#background-persistence)
 7. [UI Features](#ui-features)
-8. [Troubleshooting](#troubleshooting)
+8. [User Guide](#user-guide)
+9. [Troubleshooting](#troubleshooting)
 
 ---
 
@@ -226,12 +227,50 @@ On Linux/Mac, `run_isync.sh` automatically attempts to use `tmux`. This ensures 
 
 *   **Command Preview:** At the top of the UI, expand "Rclone Command Preview" to see the exact command ISync will execute based on your current settings.
 *   **Copy Buttons:** Most input fields have a code block below them for one-click copying of values.
-*   **Manual Ops:** Use the "Manual Operations" tab to test API connectivity, create/delete single users, or run one-off Rclone jobs for debugging.
 *   **Config Library:** Save and load different configuration profiles (e.g., "Production", "Test") from the Configuration tab.
+*   **Step Checks:** Pause execution before critical actions (Create/Delete) to allow manual verification.
 
 ---
 
-## <a name="troubleshooting"></a> 8. Troubleshooting
+## <a name="user-guide"></a> 8. User Guide
+
+### ⚙️ Configuration Tab
+This is the control center for ISync.
+*   **Health Check:** The top of the page validates your setup. It checks for missing fields or invalid file paths.
+*   **Config Management:**
+    *   **Load/Save:** Switch between different configuration profiles (YAML files stored in `configs/`).
+    *   **Backup:** Create a `.zip` backup of your current config and keys.
+    *   **Remote Sync:** If SSH is enabled, use **Push/Pull** to synchronize your configuration and JSON keys between your local machine and the remote server. You can also **Compare** files to see differences.
+*   **Protected Users:** Add emails here (one per line) to prevent ISync from ever deleting them, even if they are selected in Manual Ops.
+
+### 📂 Sync Jobs Tab
+Manage your transfer queue.
+*   **Add Job:** Define a Source (Local path or Rclone remote) and a Destination (Shared Drive path). Link it to a specific Domain Config for user generation.
+*   **Queue:** Select which jobs to run.
+*   **Test Mode (Dry Run):** Simulates the transfer without moving data.
+*   **Run via SSH:** Offloads the heavy Rclone process to your configured SSH host while you monitor from the local UI.
+
+### 📺 Live Console Tab
+Monitor active jobs.
+*   **Metrics:** View current speed, total transferred data, and the active user.
+*   **Logs:** View the `isync.log` file in real-time. Use the **Filter** box to search for specific errors or events.
+
+### 🛠️ Manual Ops Tab
+A toolbox for administrative tasks and debugging.
+*   **User Management:**
+    *   **List Users:** Fetch all users from the domain.
+    *   **Unsuspend:** Select suspended accounts and reactivate them in bulk (useful if Google suspends accounts for "Spamming").
+    *   **Delete:** Bulk delete temporary users.
+    *   **Add to Protected:** Quickly add selected users to the safety list.
+*   **Single Job:** Run a specific Rclone command immediately (bypassing the queue).
+*   **Batch Job:**
+    *   **Start:** Manually trigger a rotation cycle (Create -> Transfer -> Delete) for N users.
+    *   **Preview/Copy:** Generate the raw Bash commands for the rotation cycle. Useful if you want to copy-paste the logic into a terminal manually.
+*   **Session Management:** Terminate stuck `isync_` tmux sessions on the remote server.
+
+---
+
+## <a name="troubleshooting"></a> 9. Troubleshooting
 
 *   **Stalls:** If Rclone output stops for 10 minutes (configurable), ISync will kill the process and restart the loop.
 *   **Auth Errors:** Use the "Check Auth Connection" button in Manual Ops to verify your Service Account and Admin Email.
