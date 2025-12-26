@@ -1,24 +1,35 @@
-# Python & Environment
+# --- Python & Virtual Environment ---
 __pycache__/
 *.py[cod]
 venv/
 
-# Logs & Runtime Status
-logs/*.log
-current_status.json
-
-# Configuration & Secrets (Do NOT commit these)
+# --- Configuration & Secrets (CRITICAL) ---
+keys/
 *config.yaml
 synclist.yaml
-*.json
-*.zip
-
-# App Data
-backups/
+configs/
 config_library/
 
-# OS Files
+# --- Runtime State & Databases ---
+current_status.json
+step_status.json
+step_action.json
+session_state.json
+user_db.csv
+
+# --- Logs & Output ---
+logs/
+*.log
+
+# --- Backups & Archives ---
+backups/
+*.zip
+*.bak
+
+# --- OS & Misc ---
 .DS_Store
 Thumbs.db
-user_db.csv
 isync.sb
+
+# --- General Wildcards ---
+*.json
