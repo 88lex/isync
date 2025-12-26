@@ -3,8 +3,16 @@ __pycache__/
 *.py[cod]
 venv/
 
+<<<<<<< HEAD
 # --- Configuration & Secrets (CRITICAL) ---
 keys/
+=======
+# Logs & Runtime Status
+logs/*.log
+current_status.json
+
+# Configuration & Secrets (Do NOT commit these)
+>>>>>>> c6ccc8e9e83db98e4974c988b99bb2b4378a6111
 *config.yaml
 synclist.yaml
 configs/
@@ -29,7 +37,12 @@ backups/
 # --- OS & Misc ---
 .DS_Store
 Thumbs.db
+<<<<<<< HEAD
 isync.sb
 
 # --- General Wildcards ---
 *.json
+=======
+user_db.csv
+isync.sb
+>>>>>>> c6ccc8e9e83db98e4974c988b99bb2b4378a6111
