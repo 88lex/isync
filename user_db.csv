@@ -1,4 +1,0 @@
-Timestamp,Email,Password,Google_ID,ETag,Is_Admin,Org_Unit,Recovery_Email,Status,Suspended
-2025-12-26 14:10:01,isync-ndvkoi@flux-core-labs.com,u!#wvltTSF663GSO,112904477525053380910,"""a0MrymbZ8nTmXOww6Hk62tL1tim_YacIfw32gCjCXVI/G5x5hT_PjWE6-wayBhd1uDPfM4s""",False,/,admin@flux-core-labs.com,Deleted,False
-2025-12-26 14:34:44,isync-r5553p@flux-core-labs.com,XF%fBsraWWcZj773,100860636198510822333,"""a0MrymbZ8nTmXOww6Hk62tL1tim_YacIfw32gCjCXVI/DXLwKSVsuy4ZB8sBcCl2Tr_6dBM""",False,/,admin@flux-core-labs.com,Current,False,ISync,Bot-r5553p,,,,,,ISync Automated User (Basic Profile)
-2025-12-26 15:14:17,barbara.miller.pjb0@flux-core-labs.com,f!$YQwkEjsc6OLuy,108658364525827003658,"""a0MrymbZ8nTmXOww6Hk62tL1tim_YacIfw32gCjCXVI/5lRLvSz1G6jDFk3awqW6OStptUc""",False,/,admin@flux-core-labs.com,Current,False,Barbara,Miller,+13276737553,"983 Oak St, Los Angeles 20582",Manager,Operations,EMP-76188,ISync Automated User (Fallback Profile)
