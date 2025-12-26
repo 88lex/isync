@@ -24,7 +24,7 @@ logs/
 # --- Backups & Archives ---
 backups/
 *.zip
-*.bak
+#*.bak
 
 # --- OS & Misc ---
 .DS_Store
