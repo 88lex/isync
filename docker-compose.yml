@@ -1,0 +1,43 @@
+version: '3.8'
+
+services:
+  backend:
+    build: .
+    container_name: isync-backend
+    ports:
+      - "8000:8000"
+    volumes:
+      # Persist configuration and data
+      - ./config.yaml:/app/config.yaml
+      - ./synclist.yaml:/app/synclist.yaml
+      - ./keys:/app/keys:ro
+      - ./configs:/app/configs
+      - ./logs:/app/logs
+      - ./backups:/app/backups
+      # SQLite database
+      - ./isync_history.db:/app/isync_history.db
+    environment:
+      - ISYNC_CORS_ORIGINS=http://localhost:5173,http://localhost:3000,http://frontend:80
+      # Uncomment to enable API key authentication:
+      # - ISYNC_API_KEY=your-secret-api-key
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: isync-frontend
+    ports:
+      - "3000:80"
+    depends_on:
+      - backend
+    restart: unless-stopped
+
+networks:
+  default:
+    name: isync-network

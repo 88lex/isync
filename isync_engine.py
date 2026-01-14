@@ -34,10 +34,11 @@ class ISyncEngine:
     - Parses rclone stdout for stats
     - Sends notifications
     """
-    def __init__(self, config):
+    def __init__(self, config, status_callback=None):
         self.config = config
         self.stop_event = threading.Event()
         self.total_bytes_history = 0.0 
+        self.status_callback = status_callback
         self.clear_status()
 
     def clear_status(self, step="Ready", detail="", status="IDLE"):
@@ -153,6 +154,12 @@ class ISyncEngine:
         }
         with open(STATUS_FILE, 'w') as f:
             json.dump(data, f)
+            
+        if self.status_callback:
+            try:
+                self.status_callback(data)
+            except Exception as e:
+                logging.error(f"Callback failed: {e}")
 
     def get_domain_config(self, domain_name):
         """Finds configuration for a specific domain."""
@@ -259,14 +266,13 @@ class ISyncEngine:
         if ssh_key: cmd.extend(["-i", ssh_key])
         return cmd
 
-    def build_rclone_cmd(self, source, dest, sa_json_path, impersonate_email, dry_run=False, remote_sa_json_path=None, keep_open=True, session_suffix="", skip_ssh_wrapper=False):
+    def build_rclone_cmd(self, source, dest, sa_json_path, impersonate_email, dry_run=False, remote_sa_json_path=None, keep_open=True, session_suffix="", skip_ssh_wrapper=False, forced_session_name=None):
         """Generates the full rclone command list (including SSH wrapping if enabled)."""
         command_type = self.config.get('rclone_command', 'copy')
         upload_limit_str = self.config.get('upload_limit', '700G')
         extra_flags = self.config.get('global_rclone_flags', '').split()
         chunk_size = self.config.get('rclone_chunk_size', '128M')
         stats_interval = self.config.get('rclone_stats_interval', '1s')
-        is_verbose = self.config.get('rclone_verbose', True)
         
         if not sa_json_path:
             sa_json_path = DEFAULT_SA_JSON_PATH
@@ -285,7 +291,6 @@ class ISyncEngine:
             f"--drive-chunk-size={chunk_size}",
             f"--stats={stats_interval}"
         ]
-        if is_verbose: cmd.append("--verbose")
         
         if extra_flags: cmd.extend(extra_flags)
         if dry_run: cmd.append("--dry-run")
@@ -302,7 +307,7 @@ class ISyncEngine:
                 remote_cmd_str += "; echo 'Remote process finished. Press Enter to close session...'; read line"
             
             # Wrap in Tmux (New Session)
-            session_name = f"isync_{int(time.time())}{session_suffix}"
+            session_name = forced_session_name if forced_session_name else f"isync_{int(time.time())}{session_suffix}"
             # Pass as separate arguments to avoid over-quoting by SSH/Windows
             cmd = base_cmd + ["tmux", "new-session", "-s", session_name, remote_cmd_str]
             
@@ -330,7 +335,12 @@ class ISyncEngine:
                 logging.error(f"[ISyncEngine] SSH Check Error: {e}")
                 return "ERROR"
 
-        cmd = self.build_rclone_cmd(source, dest, sa_json_path, impersonate_email, dry_run, remote_sa_json_path)
+                logging.error(f"[ISyncEngine] SSH Check Error: {e}")
+                return "ERROR"
+
+        # Generate a deterministic session name for tracking
+        session_name = f"isync_{int(time.time())}"
+        cmd = self.build_rclone_cmd(source, dest, sa_json_path, impersonate_email, dry_run, remote_sa_json_path, forced_session_name=session_name)
 
         # Windows Local Execution: Use PowerShell if available
         if os.name == 'nt' and not self.config.get('ssh_enabled'):
@@ -398,8 +408,35 @@ class ISyncEngine:
                             if "Bytes/s" in p or "bits/s" in p: speed = p.strip()
                             if "%" in p: progress = p.strip()
                         self.update_status(job_label, impersonate_email, speed, progress, current_bytes_str, mode=mode_label)
-                    except: pass
+                    except Exception as parse_err:
+                        logging.debug(f"[ISyncEngine] Failed to parse rclone stats: {parse_err}")
+
                 print(output)
+            
+            # --- STOP CHECK ---
+            if self.stop_event.is_set():
+                logging.info("[ISyncEngine] Stop Signal Received. Terminating process...")
+                
+                # 1. Kill Local Process
+                try:
+                    process.terminate()
+                    time.sleep(1)
+                    if process.poll() is None: process.kill()
+                except Exception as e:
+                    logging.error(f"[ISyncEngine] Failed to kill local process: {e}")
+                
+                # 2. Kill Remote Tmux Session if SSH
+                if self.config.get('ssh_enabled'):
+                     try:
+                         logging.info(f"[ISyncEngine] Killing remote tmux session: {session_name}")
+                         base_cmd = self._get_ssh_base_cmd()
+                         kill_cmd = base_cmd + ["tmux", "kill-session", "-t", session_name]
+                         subprocess.run(kill_cmd, capture_output=True, timeout=10)
+                     except Exception as e:
+                         logging.error(f"[ISyncEngine] Failed to kill remote tmux: {e}")
+
+                self.update_status(job_label, impersonate_email, "0", "STOPPED", current_bytes_str, status_msg="Stopped by User", is_running=False)
+                return "STOPPED"
 
         exit_code = process.poll()
         final_bytes_gb = self.parse_size(current_bytes_str)
@@ -431,14 +468,36 @@ class ISyncEngine:
             logging.warning(f"[ISyncEngine] Rclone exited code {exit_code}.")
             return "ERROR"
 
+    def _resolve_user_domain_config(self, user_email, default_domain_cfg):
+        """
+        Resolves the correct domain configuration and JSON path for a specific user.
+        Falls back to default_domain_cfg if no specific domain match is found.
+        """
+        if not user_email or '@' not in user_email:
+            return default_domain_cfg # Fallback
+
+        user_domain = user_email.split('@')[1].lower()
+        
+        # Check if user's domain matches the default setup first (optimization)
+        if default_domain_cfg.get('domain_name', '').lower() == user_domain:
+            return default_domain_cfg
+
+        # Search in global config
+        for d in self.config.get('domains', []):
+            if d.get('domain_name', '').lower() == user_domain:
+                return d
+        
+        # If not found, return default (or could log warning)
+        return default_domain_cfg
+
     def generate_batch_command(self, pair, dry_run=False, user_list=None):
         """Generates a single batch command string for all users in the rotation."""
         source = pair['source']
         dest = pair['dest']
         target_domain = pair['domain_reference']
         
-        domain_cfg = self.get_domain_config(target_domain)
-        json_path = domain_cfg.get('sa_json_path', DEFAULT_SA_JSON_PATH)
+        # Default config from SyncPair
+        default_domain_cfg = self.get_domain_config(target_domain)
         
         users_to_process = []
         if user_list:
@@ -446,15 +505,17 @@ class ISyncEngine:
         else:
             if self.config.get('rotation_strategy', 'standard') != 'existing':
                 return "Batch command generation is only supported in 'Existing Users' mode (or with manually selected users)."
-
+            
+            # Use default domain to fetch list if none provided
+            json_path = default_domain_cfg.get('sa_json_path', DEFAULT_SA_JSON_PATH)
             try:
-                list_mgr = ISyncAuthManager(json_path, domain_cfg['admin_email'])
-                fetched_users = list_mgr.list_users(domain_cfg['domain_name'])
+                list_mgr = ISyncAuthManager(json_path, default_domain_cfg['admin_email'])
+                fetched_users = list_mgr.list_users(default_domain_cfg['domain_name'])
             except Exception as e:
                 return f"Error fetching users: {e}"
 
             if not self.config.get('include_protected_users', False):
-                protected_set = set(u.lower() for u in self.config.get('protected_users', []))
+                protected_set = set(u.lower().strip() for u in self.config.get('protected_users', []) if u.strip())
                 fetched_users = [u for u in fetched_users if u.lower() not in protected_set]
 
             max_users = int(self.config.get('max_users_per_cycle', 10))
@@ -462,10 +523,14 @@ class ISyncEngine:
 
         commands = []
         for i, user in enumerate(users_to_process):
+            # Resolve config per user (handle multi-domain selection)
+            user_cfg = self._resolve_user_domain_config(user, default_domain_cfg)
+            user_json_path = user_cfg.get('sa_json_path', DEFAULT_SA_JSON_PATH)
+            
             cmd_list = self.build_rclone_cmd(
-                source, dest, json_path, user, 
+                source, dest, user_json_path, user, 
                 dry_run=dry_run, 
-                remote_sa_json_path=domain_cfg.get('remote_sa_json_path'),
+                remote_sa_json_path=user_cfg.get('remote_sa_json_path'),
                 keep_open=False,
                 session_suffix=f"_{i}",
                 skip_ssh_wrapper=True
@@ -474,7 +539,81 @@ class ISyncEngine:
 
         return "\n".join(commands)
 
-    def execute_job(self, pair, dry_run=False):
+    def generate_preview(self, pair):
+        """Generates a preview of the execution context and the first command."""
+        source = pair['source']
+        dest = pair['dest']
+        target_domain = pair['domain_reference']
+        
+        # 1. Determine Context
+        if self.config.get('ssh_enabled'):
+            user = self.config.get('ssh_user')
+            host = self.config.get('ssh_host')
+            context = f"Remote SSH: {user}@{host}" if user else f"Remote SSH: {host}"
+        else:
+            hostname = os.environ.get('COMPUTERNAME', 'localhost') if os.name == 'nt' else os.uname()[1]
+            context = f"Local Machine: {hostname}"
+
+        # 2. Generate First Command
+        default_domain_cfg = self.get_domain_config(target_domain)
+        default_json_path = default_domain_cfg.get('sa_json_path', DEFAULT_SA_JSON_PATH)
+        
+        user_to_preview = "[TEMP_USER]"
+        
+        strategy = self.config.get('rotation_strategy', 'standard')
+        if strategy == 'existing':
+             try:
+                 # Fetch actual first user if possible
+                 list_mgr = ISyncAuthManager(default_json_path, default_domain_cfg['admin_email'])
+                 fetched_users = list_mgr.list_users(default_domain_cfg['domain_name'])
+                 if fetched_users:
+                     user_to_preview = fetched_users[0]
+             except Exception as e:
+                 logging.debug(f"[ISyncEngine] Could not fetch users for preview: {e}")
+        
+        # Resolve config for preview user
+        user_cfg = self._resolve_user_domain_config(user_to_preview, default_domain_cfg)
+        user_json_path = user_cfg.get('sa_json_path', DEFAULT_SA_JSON_PATH)
+
+        # Build Command (Force dry_run=False to show real command, but we won't execute it)
+        # We want to show what WOULD happen.
+        cmd_list = self.build_rclone_cmd(
+            source, dest, user_json_path, user_to_preview, 
+            dry_run=False, 
+            remote_sa_json_path=user_cfg.get('remote_sa_json_path'),
+            keep_open=False, # Standard flags
+            skip_ssh_wrapper=False # We want to show the FULL command including SSH if applicable? 
+            # Actually user asked for "first rclone command". 
+            # If SSH is enabled, the rclone command runs ON the remote. 
+            # So we should probably show the rclone command itself, OR the ssh wrapper?
+            # Request says: "first rclone command which would be executed"
+            # If wrapped in SSH, the "rclone command" is inside. 
+            # Let's show the rclone command mostly, maybe stripping the SSH part if it makes it too long?
+            # But the user might want to see the full valid shell command.
+            # Let's return the simplified rclone command for clarity if SSH is active?
+            # RE-READ: "where (local machine name or remote ssh server name) and ... show the first rclone command"
+            # It implies the rclone command running on that machine.
+        )
+        
+        # If SSH is enabled, build_rclone_cmd includes the SSH wrapper. 
+        # But for clarity, if the context says "Remote SSH", maybe we just show the rclone part?
+        # modify build_rclone_cmd to support skipping wrapper? YES, I added skip_ssh_wrapper earlier.
+        
+        if self.config.get('ssh_enabled'):
+            # Generate the RAW rclone command that runs on the remote
+             cmd_list = self.build_rclone_cmd(
+                source, dest, user_json_path, user_to_preview, 
+                dry_run=False, 
+                remote_sa_json_path=user_cfg.get('remote_sa_json_path'),
+                skip_ssh_wrapper=True
+            )
+        
+        return {
+            "context": context,
+            "command": shlex.join(cmd_list)
+        }
+
+    def execute_job(self, pair, dry_run=False, user_list=None):
         """Orchestrates the full lifecycle of users for one job."""
         source = pair['source']
         dest = pair['dest']
@@ -487,29 +626,30 @@ class ISyncEngine:
         logging.info(f"[ISyncEngine] Job Started ({mode_label}): {job_label}")
         self.send_notification(f"🚀 Job Started: `{job_label}` ({mode_label})")
         
-        domain_cfg = self.get_domain_config(target_domain)
-        
-        json_path = domain_cfg.get('sa_json_path')
-        if not json_path:
-            json_path = DEFAULT_SA_JSON_PATH
+        default_domain_cfg = self.get_domain_config(target_domain)
+        default_json_path = default_domain_cfg.get('sa_json_path', DEFAULT_SA_JSON_PATH)
             
         strategy = self.config.get('rotation_strategy', 'standard')
         max_users = 1 if dry_run else int(self.config.get('max_users_per_cycle', 10))
         
         if strategy == 'existing':
             # --- EXISTING USERS MODE ---
-            try:
-                list_mgr = ISyncAuthManager(json_path, domain_cfg['admin_email'])
-                user_list = list_mgr.list_users(domain_cfg['domain_name'])
-                logging.info(f"[ISyncEngine] Fetched {len(user_list)} users from directory.")
-            except Exception as e:
-                logging.error(f"[ISyncEngine] Failed to fetch users: {e}")
-                self.send_notification(f"❌ Job Failed: API Error {str(e)}")
-                return
-
+            # Use user_list if provided (from Manual Batch), otherwise fetch
+            if user_list is not None and len(user_list) > 0:
+                 logging.info(f"[ISyncEngine] Using provided list of {len(user_list)} users.")
+            else:
+                try:
+                    list_mgr = ISyncAuthManager(default_json_path, default_domain_cfg['admin_email'])
+                    user_list = list_mgr.list_users(default_domain_cfg['domain_name'])
+                    logging.info(f"[ISyncEngine] Fetched {len(user_list)} users from directory.")
+                except Exception as e:
+                    logging.error(f"[ISyncEngine] Failed to fetch users: {e}")
+                    self.send_notification(f"❌ Job Failed: API Error {str(e)}")
+                    return
+            
             # Filter Protected Users if Excluded
             if not self.config.get('include_protected_users', False):
-                protected_set = set(u.lower() for u in self.config.get('protected_users', []))
+                protected_set = set(u.lower().strip() for u in self.config.get('protected_users', []) if u.strip())
                 original_count = len(user_list)
                 user_list = [u for u in user_list if u.lower() not in protected_set]
                 if len(user_list) < original_count:
@@ -531,8 +671,12 @@ class ISyncEngine:
                 logging.info(f"--- Cycle {count}/{max_users} (User: {current_user}) ---")
                 self.update_status(job_label, current_user, "0", "0%", "0", mode=mode_label, status_msg=f"Cycle {count}/{max_users}")
                 
+                # Resolve User Config
+                user_cfg = self._resolve_user_domain_config(current_user, default_domain_cfg)
+                user_json_path = user_cfg.get('sa_json_path', DEFAULT_SA_JSON_PATH)
+                
                 try:
-                    status = self.run_rclone(source, dest, json_path, current_user, job_label, dry_run=dry_run, remote_sa_json_path=domain_cfg.get('remote_sa_json_path'))
+                    status = self.run_rclone(source, dest, user_json_path, current_user, job_label, dry_run=dry_run, remote_sa_json_path=user_cfg.get('remote_sa_json_path'))
                 except Exception as e:
                     self.complete_step("Execute Rclone Command", success=False, error=str(e))
                     self.send_notification(f"❌ Job Aborted: {str(e)}")
@@ -550,8 +694,10 @@ class ISyncEngine:
 
         else:
             # --- STANDARD MODE (Create/Delete) ---
+            # NOTE: Standard mode usually creates users in the DEFAULT target domain.
+            # We don't need dynamic resolution here because we are creating the user in `domain_cfg`.
             protected = self.config.get('protected_users', [])
-            auth_mgr = ISyncAuthManager(json_path, domain_cfg['admin_email'], protected_users=protected, company_name=self.config.get('company_name', 'Internal Ops'))
+            auth_mgr = ISyncAuthManager(default_json_path, default_domain_cfg['admin_email'], protected_users=protected, company_name=self.config.get('company_name', 'Internal Ops'))
             status = "START"
             for i in range(1, max_users + 1):
                 if self.stop_event.is_set(): break
@@ -560,10 +706,10 @@ class ISyncEngine:
                 self.update_status(job_label, "Creating User...", "0", "0%", "0", mode=mode_label, status_msg=f"Cycle {i}/{max_users}: Provisioning")
 
                 # 1. Create User
-                self.announce_step("Provision User", f"Creating temp user in {domain_cfg['domain_name']} and adding to {domain_cfg['group_email']}")
+                self.announce_step("Provision User", f"Creating temp user in {default_domain_cfg['domain_name']} and adding to {default_domain_cfg['group_email']}")
                 current_user = None
                 try:
-                    current_user = auth_mgr.provision_uploader(domain_cfg['domain_name'], domain_cfg['group_email'])
+                    current_user = auth_mgr.provision_uploader(default_domain_cfg['domain_name'], default_domain_cfg['group_email'])
                     self.complete_step("Provision User", success=True)
                 except Exception as e:
                     self.complete_step("Provision User", success=False, error=str(e))
@@ -572,18 +718,20 @@ class ISyncEngine:
                 # 2. Run Rclone
                 self.update_status(job_label, current_user, "0", "0%", "0", mode=mode_label, status_msg=f"Cycle {i}/{max_users}: Running")
                 try:
-                    status = self.run_rclone(source, dest, json_path, current_user, job_label, dry_run=dry_run, remote_sa_json_path=domain_cfg.get('remote_sa_json_path'))
+                    # In Standard Mode, user is created IN default domain, so use default json.
+                    status = self.run_rclone(source, dest, default_json_path, current_user, job_label, dry_run=dry_run, remote_sa_json_path=default_domain_cfg.get('remote_sa_json_path'))
                 except Exception as e:
                     self.complete_step("Execute Rclone Command", success=False, error=str(e))
                     # Attempt cleanup
-                    try: auth_mgr.delete_user(current_user)
-                    except: pass
+                    try: auth_mgr.delete_user(current_user, default_domain_cfg.get('group_email'))
+                    except Exception as cleanup_err:
+                        logging.warning(f"[ISyncEngine] Failed to cleanup user after error: {cleanup_err}")
                     return
 
                 # 3. Delete User
                 self.announce_step("Delete User", f"Deleting user {current_user}")
                 try:
-                    auth_mgr.delete_user(current_user)
+                    auth_mgr.delete_user(current_user, default_domain_cfg.get('group_email'))
                     self.complete_step("Delete User", success=True)
                 except Exception as e:
                     self.complete_step("Delete User", success=False, error=str(e))

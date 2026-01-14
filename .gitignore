@@ -2,21 +2,14 @@
 __pycache__/
 *.py[cod]
 venv/
+.venv/
 
-<<<<<<< HEAD
 # --- Configuration & Secrets (CRITICAL) ---
 keys/
-=======
-# Logs & Runtime Status
-logs/*.log
-current_status.json
-
-# Configuration & Secrets (Do NOT commit these)
->>>>>>> c6ccc8e9e83db98e4974c988b99bb2b4378a6111
-*config.yaml
-synclist.yaml
 configs/
 config_library/
+*config.yaml
+synclist.yaml
 
 # --- Runtime State & Databases ---
 current_status.json
@@ -24,6 +17,10 @@ step_status.json
 step_action.json
 session_state.json
 user_db.csv
+isync.db
+isync_history.db
+isync_schedules.db
+scheduled_jobs.json
 
 # --- Logs & Output ---
 logs/
@@ -32,17 +29,16 @@ logs/
 # --- Backups & Archives ---
 backups/
 *.zip
-#*.bak
+*.bak
+.deprecated/
 
-# --- OS & Misc ---
-.DS_Store
-Thumbs.db
-<<<<<<< HEAD
-isync.sb
+# --- Backend ---
+backend/__pycache__/
+utils/__pycache__/
 
-# --- General Wildcards ---
-*.json
-=======
-user_db.csv
-isync.sb
->>>>>>> c6ccc8e9e83db98e4974c988b99bb2b4378a6111
+# --- Frontend ---
+frontend/node_modules/
+frontend/dist/
+frontend/.env
+frontend/.env.local
+
