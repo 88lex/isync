@@ -9,7 +9,15 @@ keys/
 configs/
 config_library/
 *config.yaml
+config_library/
+*config.yaml
 synclist.yaml
+*.sh
+!run_isync_example.sh
+!run_isync.sh
+!run_isync_remote.sh
+*.txt
+!requirements.txt
 
 # --- Runtime State & Databases ---
 current_status.json

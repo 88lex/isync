@@ -11,7 +11,7 @@
 #   ./run_isync_remote.sh --stop [ssh-host]            # Stop remote ISync
 #
 # Examples:
-#   ./run_isync_remote.sh myserver                    # Uses default path ~/isync
+#   ./run_isync_remote.sh myserver                    # Uses default path /opt/isync
 #   ./run_isync_remote.sh myserver /opt/isync         # Custom remote path
 #   ./run_isync_remote.sh user@server.com ~/isync     # Full SSH host
 #   ./run_isync_remote.sh --status myserver           # Check if running
@@ -55,11 +55,11 @@ print_usage() {
     echo ""
     echo "Arguments:"
     echo "  ssh-host     SSH host (e.g., myserver, user@server.com)"
-    echo "  remote-path  Path to ISync on remote server (default: ~/isync)"
+    echo "  remote-path  Path to ISync on remote server (default: /opt/isync)"
     echo ""
     echo "Examples:"
     echo "  $0 myserver"
-    echo "  $0 myserver /opt/isync_refactor"
+    echo "  $0 myserver /opt/isync"
     echo "  $0 --status myserver"
     echo "  $0 --restart user@192.168.1.100"
     echo ""
@@ -135,7 +135,7 @@ check_isync_installed() {
 # Check remote ISync status
 check_status() {
     local host="$1"
-    local path="${2:-~/isync}"
+    local path="${2:-/opt/isync}"
     
     print_header
     echo ""
@@ -236,7 +236,7 @@ stop_remote_isync() {
 
 restart_remote_isync() {
     local host="$1"
-    local path="${2:-~/isync}"
+    local path="${2:-/opt/isync}"
     
     print_header
     echo ""
@@ -366,7 +366,7 @@ case "${1:-}" in
             echo "Usage: $0 --status <ssh-host> [remote-path]"
             exit 1
         fi
-        check_status "$2" "${3:-~/isync}"
+        check_status "$2" "${3:-/opt/isync}"
         exit $?
         ;;
     --stop)
@@ -384,7 +384,7 @@ case "${1:-}" in
             echo "Usage: $0 --restart <ssh-host> [remote-path]"
             exit 1
         fi
-        restart_remote_isync "$2" "${3:-~/isync}"
+        restart_remote_isync "$2" "${3:-/opt/isync}"
         exit $?
         ;;
     "")
@@ -394,7 +394,7 @@ case "${1:-}" in
     *)
         # Default: start and connect
         SSH_HOST="$1"
-        REMOTE_PATH="${2:-~/isync}"
+        REMOTE_PATH="${2:-/opt/isync}"
         ;;
 esac
 

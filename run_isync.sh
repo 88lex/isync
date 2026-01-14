@@ -148,7 +148,7 @@ done
 # Start frontend
 echo -e "${BLUE}Starting frontend on port 5173...${NC}"
 cd frontend
-npm run dev -- --host 0.0.0.0 &
+npm run dev -- --host 0.0.0.0 --port 5173 &
 FRONTEND_PID=$!
 cd ..
 

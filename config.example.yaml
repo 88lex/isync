@@ -10,10 +10,10 @@ ssh_mode: explicit
 ssh_host: ""
 ssh_user: ""
 ssh_key_path: ""
-ssh_remote_path: "~/isync"
+ssh_remote_path: "/opt/isync"
 domains:
   - domain_name: "example.com"
     admin_email: "admin@example.com"
-    sa_json_path: "keys/master.json"
+    sa_json_path: "/opt/isync/keys/master.json"
     group_email: "uploaders@example.com"
-    remote_sa_json_path: "~/isync/keys/master.json"
+    remote_sa_json_path: "/opt/isync/keys/master.json"
