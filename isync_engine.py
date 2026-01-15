@@ -494,10 +494,23 @@ class ISyncEngine:
         """Generates a single batch command string for all users in the rotation."""
         source = pair['source']
         dest = pair['dest']
-        target_domain = pair['domain_reference']
+        target_domain = pair.get('domain_reference') or None
         
-        # Default config from SyncPair
-        default_domain_cfg = self.get_domain_config(target_domain)
+        # Fallback to first configured domain if domain_reference is not specified
+        default_domain_cfg = None
+        if target_domain:
+            try:
+                default_domain_cfg = self.get_domain_config(target_domain)
+            except ValueError:
+                pass  # Domain not found, will use fallback
+        
+        if not default_domain_cfg:
+            domains = self.config.get('domains', [])
+            if domains:
+                default_domain_cfg = domains[0]
+                logging.info(f"[generate_batch_command] No domain_reference specified, using first domain: {default_domain_cfg.get('domain_name')}")
+            else:
+                return "Error: No domains configured. Please configure at least one domain in Config."
         
         users_to_process = []
         if user_list:
@@ -543,7 +556,7 @@ class ISyncEngine:
         """Generates a preview of the execution context and the first command."""
         source = pair['source']
         dest = pair['dest']
-        target_domain = pair['domain_reference']
+        target_domain = pair.get('domain_reference') or None
         
         # 1. Determine Context
         if self.config.get('ssh_enabled'):
@@ -554,8 +567,16 @@ class ISyncEngine:
             hostname = os.environ.get('COMPUTERNAME', 'localhost') if os.name == 'nt' else os.uname()[1]
             context = f"Local Machine: {hostname}"
 
-        # 2. Generate First Command
-        default_domain_cfg = self.get_domain_config(target_domain)
+        # 2. Generate First Command - with fallback to first domain
+        default_domain_cfg = None
+        if target_domain:
+            try:
+                default_domain_cfg = self.get_domain_config(target_domain)
+            except ValueError:
+                pass
+        if not default_domain_cfg:
+            domains = self.config.get('domains', [])
+            default_domain_cfg = domains[0] if domains else {'sa_json_path': DEFAULT_SA_JSON_PATH, 'admin_email': '', 'domain_name': ''}
         default_json_path = default_domain_cfg.get('sa_json_path', DEFAULT_SA_JSON_PATH)
         
         user_to_preview = "[TEMP_USER]"
@@ -617,7 +638,7 @@ class ISyncEngine:
         """Orchestrates the full lifecycle of users for one job."""
         source = pair['source']
         dest = pair['dest']
-        target_domain = pair['domain_reference']
+        target_domain = pair.get('domain_reference') or None
         job_label = f"{source} -> {dest}"
         mode_label = "TEST" if dry_run else "Normal"
         
@@ -626,7 +647,20 @@ class ISyncEngine:
         logging.info(f"[ISyncEngine] Job Started ({mode_label}): {job_label}")
         self.send_notification(f"🚀 Job Started: `{job_label}` ({mode_label})")
         
-        default_domain_cfg = self.get_domain_config(target_domain)
+        # Fallback to first domain if domain_reference is not specified
+        default_domain_cfg = None
+        if target_domain:
+            try:
+                default_domain_cfg = self.get_domain_config(target_domain)
+            except ValueError:
+                pass
+        if not default_domain_cfg:
+            domains = self.config.get('domains', [])
+            if not domains:
+                logging.error("[ISyncEngine] No domains configured.")
+                return
+            default_domain_cfg = domains[0]
+            logging.info(f"[ISyncEngine] No domain_reference, using first domain: {default_domain_cfg.get('domain_name')}")
         default_json_path = default_domain_cfg.get('sa_json_path', DEFAULT_SA_JSON_PATH)
             
         strategy = self.config.get('rotation_strategy', 'standard')

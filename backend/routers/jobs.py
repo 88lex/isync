@@ -7,6 +7,7 @@ from pydantic import BaseModel
 from typing import List, Optional, Dict
 import os
 import re
+import random
 from datetime import datetime
 
 from backend.dependencies import get_store, get_job_manager, get_engine
@@ -48,10 +49,17 @@ class BatchCompareRequest(BaseModel):
     compare_users: Optional[List[str]] = None
 
 
+class RandomBatchRequest(BaseModel):
+    """Request to generate batch with random users from selected domains."""
+    pairs: List[SyncPair]
+    user_count: int
+    domains: List[str]
+    dry_run: bool = False
+
 # --- Helper Functions ---
 def get_batch_dir():
     """Get the batch directory path."""
-    return os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "isync_batch")
+    return os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))), "batch")
 
 
 def extract_users_from_batch(content: str) -> List[str]:
@@ -205,13 +213,20 @@ def generate_batch(request: JobRequest):
     
     for pair in request.pairs:
         pair_dict = pair.dict()
-        cmd = engine.generate_batch_command(
-            pair_dict, 
-            dry_run=request.dry_run, 
-            user_list=request.selected_users
-        )
-        label = f"{pair.source} -> {pair.dest}"
-        results[label] = cmd
+        try:
+            cmd = engine.generate_batch_command(
+                pair_dict, 
+                dry_run=request.dry_run, 
+                user_list=request.selected_users
+            )
+            label = f"{pair.source} -> {pair.dest}"
+            results[label] = cmd
+        except ValueError as e:
+            label = f"{pair.source} -> {pair.dest}"
+            results[label] = f"Error: {str(e)}"
+        except Exception as e:
+            label = f"{pair.source} -> {pair.dest}"
+            results[label] = f"Error: {str(e)}"
     
     return {"status": "ok", "commands": results}
 
@@ -267,6 +282,9 @@ def list_saved_batches():
     
     files = []
     for f in os.listdir(batch_dir):
+        # Skip hidden files and git-related files
+        if f.startswith('.'):
+            continue
         filepath = os.path.join(batch_dir, f)
         if os.path.isfile(filepath):
             stat = os.stat(filepath)
@@ -278,6 +296,45 @@ def list_saved_batches():
     
     files.sort(key=lambda x: x['modified'], reverse=True)
     return {"files": files}
+
+
+# --- User Summary ---
+@router.get("/manual/batch/user-summary")
+def get_user_batch_summary():
+    """Get a summary of which users appear in which batch files."""
+    batch_dir = get_batch_dir()
+    
+    if not os.path.exists(batch_dir):
+        return {"users": {}, "batches": [], "total_users": 0}
+    
+    # Map user -> list of batch files
+    user_batches: Dict[str, List[str]] = {}
+    batch_files = []
+    
+    for f in os.listdir(batch_dir):
+        filepath = os.path.join(batch_dir, f)
+        if os.path.isfile(filepath) and (f.endswith('.sh') or f.endswith('.txt')):
+            batch_files.append(f)
+            try:
+                with open(filepath, 'r') as file:
+                    content = file.read()
+                users = extract_users_from_batch(content)
+                for user in users:
+                    if user not in user_batches:
+                        user_batches[user] = []
+                    user_batches[user].append(f)
+            except Exception as e:
+                logger.warning(f"Failed to parse batch file {f}: {e}")
+    
+    # Sort users by email
+    sorted_users = dict(sorted(user_batches.items()))
+    
+    return {
+        "users": sorted_users,
+        "batches": sorted(batch_files),
+        "total_users": len(sorted_users),
+        "total_batches": len(batch_files)
+    }
 
 
 @router.get("/manual/batch/{filename}")
@@ -408,3 +465,247 @@ def rename_batch_file(filename: str, new_name: str):
         return {"status": "ok", "old_name": filename, "new_name": new_name}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to rename: {str(e)}")
+
+
+# --- Random Batch Generation ---
+@router.post("/manual/batch/generate-random")
+def generate_random_batch(request: RandomBatchRequest):
+    """Generate batch commands with N random users from selected domains."""
+    from backend.ops import list_domain_users
+    
+    engine = get_engine()
+    
+    # Collect users from all specified domains
+    all_users = []
+    for domain in request.domains:
+        try:
+            domain_data = list_domain_users(domain)
+            users = [u['email'] for u in domain_data.get('users', []) if not u.get('suspended', False)]
+            all_users.extend(users)
+        except Exception as e:
+            logger.warning(f"Failed to fetch users from {domain}: {e}")
+    
+    if not all_users:
+        raise HTTPException(status_code=400, detail="No users found in specified domains")
+    
+    # Select random users
+    count = min(request.user_count, len(all_users))
+    selected_users = random.sample(all_users, count)
+    
+    # Generate batch commands
+    results = {}
+    for pair in request.pairs:
+        pair_dict = pair.dict()
+        cmd = engine.generate_batch_command(
+            pair_dict, 
+            dry_run=request.dry_run, 
+            user_list=selected_users
+        )
+        label = f"{pair.source} -> {pair.dest}"
+        results[label] = cmd
+    
+    return {
+        "status": "ok",
+        "commands": results,
+        "selected_users": selected_users,
+        "user_count": len(selected_users),
+        "domains_queried": request.domains
+    }
+
+
+class PushBatchRequest(BaseModel):
+    server_id: str
+
+
+@router.post("/batch/{filename}/push")
+def push_batch(filename: str, req: PushBatchRequest):
+    """Push a single batch file to a remote server."""
+    # Imports
+    from backend.ops import exec_remote_command, copy_file_to_remote, SSHBaseRequest
+    from backend.store import store
+
+    # Check file exists
+    batch_dir = get_batch_dir()
+    filepath = os.path.join(batch_dir, filename)
+    if not os.path.exists(filepath):
+        raise HTTPException(status_code=404, detail="Batch file not found")
+        
+    # Get Server
+    app_config = store.get_config()
+    server = next((s for s in app_config.get('ssh_servers', []) if s['id'] == req.server_id), None)
+    if not server:
+         raise HTTPException(404, "SSH Server configuration not found")
+
+    ssh_req = SSHBaseRequest(
+        host=server.get('alias') or server.get('host'),
+        user=server.get('user') or None,
+        key_path=server.get('key_path') or None,
+        timeout=30
+    )
+    
+    # Ensure remote dir (try without sudo first, then with sudo)
+    remote_base = "/opt/isync/batch"
+    res = exec_remote_command(ssh_req, f"mkdir -p {remote_base}")
+    if res['status'] != 'success':
+        # Try with sudo
+        res = exec_remote_command(ssh_req, f"sudo mkdir -p {remote_base} && sudo chown $(whoami) {remote_base}")
+        if res['status'] != 'success':
+            raise HTTPException(500, f"Failed to ensure remote directory: {res.get('message')}")
+    
+    remote_dest = f"{remote_base}/{filename}"
+    
+    # Log push details
+    logger.info(f"[push_batch] Pushing {filepath} -> {server.get('alias')}:{remote_dest}")
+    
+    res = copy_file_to_remote(ssh_req, filepath, remote_dest)
+    if res['status'] != 'success':
+        # Try with sudo workaround - copy to tmp then sudo mv
+        logger.info(f"[push_batch] Direct copy failed, trying sudo workaround")
+        tmp_dest = f"/tmp/{filename}"
+        res = copy_file_to_remote(ssh_req, filepath, tmp_dest)
+        if res['status'] != 'success':
+            raise HTTPException(500, f"Failed to push batch: {res.get('message')}")
+        # Move from tmp to target with sudo
+        mv_res = exec_remote_command(ssh_req, f"sudo mv {tmp_dest} {remote_dest} && sudo chmod 755 {remote_dest}")
+        if mv_res['status'] != 'success':
+            raise HTTPException(500, f"Failed to move file to target: {mv_res.get('message')}")
+    
+    # Verify file exists on remote
+    verify_res = exec_remote_command(ssh_req, f"test -f {remote_dest} && stat --printf='%s' {remote_dest}")
+    if verify_res['status'] != 'success' or not verify_res.get('stdout'):
+        raise HTTPException(500, f"File push appeared to succeed but verification failed - file not found at {remote_dest}")
+    
+    remote_file_size = verify_res.get('stdout', '0').strip()
+    local_file_size = os.path.getsize(filepath)
+    
+    return {
+        "status": "success", 
+        "message": f"Pushed {filename} to {server.get('name') or server.get('alias')}",
+        "details": {
+            "source": filepath,
+            "destination_server": server.get('name') or server.get('alias'),
+            "destination_path": remote_dest,
+            "server_id": req.server_id,
+            "local_size": local_file_size,
+            "remote_size": int(remote_file_size) if remote_file_size.isdigit() else 0,
+            "verified": True
+        }
+    }
+
+
+class UpdateBatchContentRequest(BaseModel):
+    content: str
+
+
+@router.patch("/manual/batch/{filename}")
+def update_batch_content(filename: str, req: UpdateBatchContentRequest):
+    """Update the content of a batch file."""
+    batch_dir = get_batch_dir()
+    filepath = os.path.join(batch_dir, filename)
+    
+    if not os.path.exists(filepath):
+        raise HTTPException(status_code=404, detail="Batch file not found")
+    
+    try:
+        with open(filepath, 'w') as f:
+            f.write(req.content)
+        return {"status": "ok", "filename": filename, "size": len(req.content)}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Failed to update: {str(e)}")
+
+
+class RemoteBatchRequest(BaseModel):
+    server_id: str
+
+
+@router.post("/batch/{filename}/check")
+def check_batch_remote(filename: str, req: RemoteBatchRequest):
+    """Check if a batch file exists on the remote server."""
+    from backend.ops import exec_remote_command, SSHBaseRequest
+    from backend.store import store
+    
+    app_config = store.get_config()
+    server = next((s for s in app_config.get('ssh_servers', []) if s['id'] == req.server_id), None)
+    if not server:
+        raise HTTPException(404, "SSH Server not found")
+    
+    ssh_req = SSHBaseRequest(
+        host=server.get('alias') or server.get('host'),
+        user=server.get('user'),
+        key_path=server.get('key_path'),
+        timeout=10
+    )
+    
+    remote_path = f"{server.get('remote_path', '/opt/isync')}/batch/{filename}"
+    res = exec_remote_command(ssh_req, f"test -f {remote_path} && echo EXISTS || echo MISSING")
+    
+    if res['status'] == 'success':
+        exists = 'EXISTS' in res.get('stdout', '')
+        return {"exists": exists, "server": server['name'], "remote_path": remote_path}
+    else:
+        return {"exists": False, "error": res.get('message')}
+
+
+@router.post("/batch/{filename}/pull")
+def pull_batch_remote(filename: str, req: RemoteBatchRequest):
+    """Pull a batch file from a remote server."""
+    from backend.ops import exec_remote_command, SSHBaseRequest
+    from backend.store import store
+    import subprocess
+    
+    app_config = store.get_config()
+    server = next((s for s in app_config.get('ssh_servers', []) if s['id'] == req.server_id), None)
+    if not server:
+        raise HTTPException(404, "SSH Server not found")
+    
+    batch_dir = get_batch_dir()
+    local_path = os.path.join(batch_dir, filename)
+    
+    ssh_target = server.get('alias') or server.get('host')
+    if server.get('user'):
+        ssh_target = f"{server['user']}@{ssh_target}"
+    
+    remote_path = f"{server.get('remote_path', '/opt/isync')}/batch/{filename}"
+    
+    cmd = ["scp", "-o", "StrictHostKeyChecking=no"]
+    if server.get('key_path'):
+        cmd.extend(["-i", server['key_path']])
+    cmd.extend([f"{ssh_target}:{remote_path}", local_path])
+    
+    try:
+        res = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+        if res.returncode == 0:
+            return {"status": "success", "message": f"Pulled {filename} from {server['name']}"}
+        else:
+            raise HTTPException(500, f"Pull failed: {res.stderr}")
+    except Exception as e:
+        raise HTTPException(500, f"Pull failed: {str(e)}")
+
+
+@router.delete("/batch/{filename}/remote")
+def delete_batch_remote(filename: str, server_id: str):
+    """Delete a batch file from a remote server."""
+    from backend.ops import exec_remote_command, SSHBaseRequest
+    from backend.store import store
+    
+    app_config = store.get_config()
+    server = next((s for s in app_config.get('ssh_servers', []) if s['id'] == server_id), None)
+    if not server:
+        raise HTTPException(404, "SSH Server not found")
+    
+    ssh_req = SSHBaseRequest(
+        host=server.get('alias') or server.get('host'),
+        user=server.get('user'),
+        key_path=server.get('key_path'),
+        timeout=10
+    )
+    
+    remote_path = f"{server.get('remote_path', '/opt/isync')}/batch/{filename}"
+    res = exec_remote_command(ssh_req, f"rm -f {remote_path}")
+    
+    if res['status'] == 'success':
+        return {"status": "success", "message": f"Deleted {filename} from {server['name']}"}
+    else:
+        raise HTTPException(500, f"Delete failed: {res.get('message')}")
+
+

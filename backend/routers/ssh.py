@@ -128,6 +128,52 @@ def delete_ssh_server(server_id: str):
     return {"status": "ok", "removed": removed}
 
 
+@router.post("/servers/{server_id}/test")
+def api_test_ssh_server(server_id: str):
+    """Test SSH connection to a server."""
+    store = get_store()
+    config = store.get_config()
+    servers = config.get('ssh_servers', [])
+    
+    server = next((s for s in servers if s.get('id') == server_id), None)
+    if not server:
+        raise HTTPException(status_code=404, detail="Server not found")
+    
+    from backend.ops import test_ssh_connection, SSHBaseRequest
+    
+    req = SSHBaseRequest(
+        host=server.get('alias') or server.get('host'),
+        user=server.get('user'),
+        key_path=server.get('key_path'),
+        remote_path=server.get('remote_path', '~/isync')
+    )
+    
+    return test_ssh_connection(req)
+
+
+@router.get("/servers/{server_id}/status")
+def api_get_ssh_server_status(server_id: str):
+    """Get detailed status of SSH server."""
+    store = get_store()
+    config = store.get_config()
+    servers = config.get('ssh_servers', [])
+    
+    server = next((s for s in servers if s.get('id') == server_id), None)
+    if not server:
+        raise HTTPException(status_code=404, detail="Server not found")
+        
+    from backend.ops import check_remote_status, SSHBaseRequest
+    
+    req = SSHBaseRequest(
+        host=server.get('alias') or server.get('host'),
+        user=server.get('user'),
+        key_path=server.get('key_path'),
+        remote_path=server.get('remote_path', '~/isync')
+    )
+    
+    return check_remote_status(req)
+
+
 # --- Remote Browser Endpoints ---
 @router.get("/servers/{server_id}/folders")
 def api_list_server_folders(server_id: str, path: str = "/", depth: int = 2):
@@ -187,3 +233,372 @@ def api_list_remote_path(server_id: str, remote_name: str, path: str = ""):
     
     result = list_remote_path(server, remote_name, path)
     return result
+
+
+# --- Remote Sync Endpoints ---
+
+class RemoteSyncRequest(BaseModel):
+    server_id: str
+
+
+class RemoteSyncItemsRequest(BaseModel):
+    server_id: str
+    items: List[str]
+    item_type: str  # 'batch', 'group', 'key', 'remote', 'cron'
+
+
+def get_server_by_id(server_id: str):
+    """Helper to get server config by ID."""
+    store = get_store()
+    config = store.get_config()
+    servers = config.get('ssh_servers', [])
+    server = next((s for s in servers if s.get('id') == server_id), None)
+    if not server:
+        raise HTTPException(status_code=404, detail="Server not found")
+    return server
+
+
+def get_ssh_command(server):
+    """Build SSH command prefix for a server."""
+    target = server.get('alias') or server.get('host')
+    if server.get('user'):
+        target = f"{server['user']}@{target}"
+    
+    cmd = ["ssh", "-o", "StrictHostKeyChecking=no", "-o", "ConnectTimeout=10"]
+    if server.get('key_path'):
+        cmd.extend(["-i", server['key_path']])
+    cmd.append(target)
+    return cmd
+
+
+@router.post("/remote/list-batches")
+def list_remote_batches(req: RemoteSyncRequest):
+    """List batch files on remote server."""
+    import subprocess
+    server = get_server_by_id(req.server_id)
+    remote_path = f"{server.get('remote_path', '/opt/isync')}/batch"
+    
+    ssh_cmd = get_ssh_command(server)
+    ssh_cmd.append(f"ls -la {remote_path} 2>/dev/null | grep -v '^d' | grep -v '^\\.git' | awk '{{print $NF, $5}}'")
+    
+    try:
+        result = subprocess.run(ssh_cmd, capture_output=True, text=True, timeout=15)
+        if result.returncode != 0:
+            return {"items": [], "error": result.stderr.strip()}
+        
+        items = []
+        for line in result.stdout.strip().split('\n'):
+            if line and not line.startswith('.'):
+                parts = line.split()
+                if len(parts) >= 2:
+                    name = parts[0]
+                    size = int(parts[1]) if parts[1].isdigit() else 0
+                    if name and not name.startswith('.'):
+                        items.append({"name": name, "size": size})
+        return {"items": items, "path": remote_path}
+    except Exception as e:
+        return {"items": [], "error": str(e)}
+
+
+@router.post("/remote/list-groups")
+def list_remote_groups(req: RemoteSyncRequest):
+    """List batch group scripts on remote server."""
+    import subprocess
+    server = get_server_by_id(req.server_id)
+    remote_path = f"{server.get('remote_path', '/opt/isync')}/batch/groups"
+    
+    ssh_cmd = get_ssh_command(server)
+    ssh_cmd.append(f"ls -la {remote_path} 2>/dev/null | grep -v '^d' | grep '\\.sh$' | awk '{{print $NF, $5}}'")
+    
+    try:
+        result = subprocess.run(ssh_cmd, capture_output=True, text=True, timeout=15)
+        items = []
+        for line in result.stdout.strip().split('\n'):
+            if line:
+                parts = line.split()
+                if len(parts) >= 2:
+                    name = parts[0]
+                    size = int(parts[1]) if parts[1].isdigit() else 0
+                    if name.endswith('.sh'):
+                        items.append({"name": name, "size": size})
+        return {"items": items, "path": remote_path}
+    except Exception as e:
+        return {"items": [], "error": str(e)}
+
+
+@router.post("/remote/list-keys")
+def list_remote_keys(req: RemoteSyncRequest):
+    """List JSON key files on remote server."""
+    import subprocess
+    server = get_server_by_id(req.server_id)
+    remote_path = f"{server.get('remote_path', '/opt/isync')}/keys"
+    
+    ssh_cmd = get_ssh_command(server)
+    ssh_cmd.append(f"ls -la {remote_path} 2>/dev/null | grep '\\.json$' | awk '{{print $NF, $5}}'")
+    
+    try:
+        result = subprocess.run(ssh_cmd, capture_output=True, text=True, timeout=15)
+        items = []
+        for line in result.stdout.strip().split('\n'):
+            if line:
+                parts = line.split()
+                if len(parts) >= 2:
+                    name = parts[0]
+                    size = int(parts[1]) if parts[1].isdigit() else 0
+                    if name.endswith('.json'):
+                        items.append({"name": name, "size": size})
+        return {"items": items, "path": remote_path}
+    except Exception as e:
+        return {"items": [], "error": str(e)}
+
+
+@router.post("/remote/list-crons")
+def list_remote_crons(req: RemoteSyncRequest):
+    """List crontab entries on remote server."""
+    import subprocess
+    server = get_server_by_id(req.server_id)
+    
+    ssh_cmd = get_ssh_command(server)
+    ssh_cmd.append("crontab -l 2>/dev/null || echo ''")
+    
+    try:
+        result = subprocess.run(ssh_cmd, capture_output=True, text=True, timeout=15)
+        lines = [l for l in result.stdout.strip().split('\n') if l and not l.startswith('#')]
+        return {"items": [{"entry": l, "index": i} for i, l in enumerate(lines)], "raw": result.stdout}
+    except Exception as e:
+        return {"items": [], "error": str(e)}
+
+
+@router.post("/remote/pull-items")
+def pull_remote_items(req: RemoteSyncItemsRequest):
+    """Pull selected items from remote server to local."""
+    import subprocess
+    import os
+    
+    server = get_server_by_id(req.server_id)
+    base_path = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    
+    ssh_target = server.get('alias') or server.get('host')
+    if server.get('user'):
+        ssh_target = f"{server['user']}@{ssh_target}"
+    
+    results = []
+    
+    for item in req.items:
+        if req.item_type == 'batch':
+            remote = f"{server.get('remote_path', '/opt/isync')}/batch/{item}"
+            local = os.path.join(base_path, "batch", item)
+        elif req.item_type == 'group':
+            remote = f"{server.get('remote_path', '/opt/isync')}/batch/groups/{item}"
+            local = os.path.join(base_path, "batch", "groups", item)
+            os.makedirs(os.path.dirname(local), exist_ok=True)
+        elif req.item_type == 'key':
+            remote = f"{server.get('remote_path', '/opt/isync')}/keys/{item}"
+            local = os.path.join(base_path, "keys", item)
+            os.makedirs(os.path.dirname(local), exist_ok=True)
+        else:
+            results.append({"item": item, "status": "error", "message": "Unknown type"})
+            continue
+        
+        cmd = ["scp", "-o", "StrictHostKeyChecking=no"]
+        if server.get('key_path'):
+            cmd.extend(["-i", server['key_path']])
+        cmd.extend([f"{ssh_target}:{remote}", local])
+        
+        try:
+            res = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+            if res.returncode == 0:
+                results.append({"item": item, "status": "success"})
+            else:
+                results.append({"item": item, "status": "error", "message": res.stderr.strip()})
+        except Exception as e:
+            results.append({"item": item, "status": "error", "message": str(e)})
+    
+    return {"results": results, "pulled": len([r for r in results if r['status'] == 'success'])}
+
+
+@router.post("/remote/push-items")
+def push_remote_items(req: RemoteSyncItemsRequest):
+    """Push selected local items to remote server."""
+    import subprocess
+    import os
+    from backend.ops import exec_remote_command, SSHBaseRequest
+    
+    server = get_server_by_id(req.server_id)
+    base_path = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    
+    ssh_target = server.get('alias') or server.get('host')
+    if server.get('user'):
+        ssh_target = f"{server['user']}@{ssh_target}"
+    
+    ssh_req = SSHBaseRequest(
+        host=server.get('alias') or server.get('host'),
+        user=server.get('user'),
+        key_path=server.get('key_path'),
+        timeout=30
+    )
+    
+    # Get remote path from server config - default to /opt/isync
+    remote_base = server.get('remote_path', '/opt/isync')
+    
+    # Ensure remote directories exist with sudo fallback
+    mkdir_cmd = f"mkdir -p {remote_base}/batch/groups {remote_base}/keys"
+    mkdir_res = exec_remote_command(ssh_req, mkdir_cmd)
+    if mkdir_res['status'] != 'success':
+        # Try with sudo
+        mkdir_res = exec_remote_command(ssh_req, f"sudo {mkdir_cmd} && sudo chown -R $(whoami) {remote_base}/batch {remote_base}/keys")
+    
+    logger.info(f"[push_remote_items] Pushing {len(req.items)} {req.item_type} items to {ssh_target}:{remote_base}")
+    
+    results = []
+    
+    for item in req.items:
+        if req.item_type == 'batch':
+            local = os.path.join(base_path, "batch", item)
+            remote = f"{remote_base}/batch/{item}"
+        elif req.item_type == 'group':
+            local = os.path.join(base_path, "batch", "groups", item)
+            remote = f"{remote_base}/batch/groups/{item}"
+        elif req.item_type == 'key':
+            local = os.path.join(base_path, "keys", item)
+            remote = f"{remote_base}/keys/{item}"
+        else:
+            results.append({"item": item, "status": "error", "message": "Unknown type"})
+            continue
+        
+        if not os.path.exists(local):
+            logger.warning(f"[push_remote_items] Local file not found: {local}")
+            results.append({"item": item, "status": "error", "message": f"Local file not found: {local}"})
+            continue
+        
+        logger.info(f"[push_remote_items] Pushing {local} -> {ssh_target}:{remote}")
+        
+        # Try direct SCP first
+        cmd = ["scp", "-o", "StrictHostKeyChecking=no"]
+        if server.get('key_path'):
+            cmd.extend(["-i", server['key_path']])
+        cmd.extend([local, f"{ssh_target}:{remote}"])
+        
+        try:
+            res = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+            if res.returncode == 0:
+                # Verify file exists on remote
+                verify_res = exec_remote_command(ssh_req, f"test -f {remote} && stat --printf='%s' {remote}")
+                if verify_res['status'] == 'success' and verify_res.get('stdout'):
+                    remote_size = verify_res.get('stdout', '').strip()
+                    local_size = os.path.getsize(local)
+                    results.append({
+                        "item": item, 
+                        "status": "success",
+                        "source": local,
+                        "destination": f"{ssh_target}:{remote}",
+                        "local_size": local_size,
+                        "remote_size": int(remote_size) if remote_size.isdigit() else 0
+                    })
+                    logger.info(f"[push_remote_items] Successfully pushed {item} ({local_size} bytes)")
+                else:
+                    # SCP reported success but file not found - try sudo fallback
+                    logger.warning(f"[push_remote_items] SCP succeeded but file not found, trying sudo fallback")
+                    tmp_remote = f"/tmp/{item}"
+                    cmd2 = ["scp", "-o", "StrictHostKeyChecking=no"]
+                    if server.get('key_path'):
+                        cmd2.extend(["-i", server['key_path']])
+                    cmd2.extend([local, f"{ssh_target}:{tmp_remote}"])
+                    res2 = subprocess.run(cmd2, capture_output=True, text=True, timeout=60)
+                    if res2.returncode == 0:
+                        mv_res = exec_remote_command(ssh_req, f"sudo mv {tmp_remote} {remote} && sudo chmod 644 {remote}")
+                        if mv_res['status'] == 'success':
+                            results.append({"item": item, "status": "success", "source": local, "destination": f"{ssh_target}:{remote}", "via_sudo": True})
+                        else:
+                            results.append({"item": item, "status": "error", "message": f"sudo mv failed: {mv_res.get('message')}"})
+                    else:
+                        results.append({"item": item, "status": "error", "message": f"Fallback SCP failed: {res2.stderr}"})
+            else:
+                logger.error(f"[push_remote_items] SCP failed for {item}: {res.stderr}")
+                results.append({"item": item, "status": "error", "message": res.stderr.strip()})
+        except subprocess.TimeoutExpired:
+            results.append({"item": item, "status": "error", "message": "Timeout"})
+        except Exception as e:
+            results.append({"item": item, "status": "error", "message": str(e)})
+    
+    success_count = len([r for r in results if r['status'] == 'success'])
+    logger.info(f"[push_remote_items] Complete: {success_count}/{len(req.items)} items pushed successfully")
+    
+    return {
+        "results": results, 
+        "pushed": success_count,
+        "total": len(req.items),
+        "remote_base": remote_base,
+        "server": server.get('name') or server.get('alias')
+    }
+
+
+class SyncAllRequest(BaseModel):
+    server_id: str
+    include_batches: bool = True
+    include_groups: bool = True
+    include_keys: bool = True
+    direction: str = "push"  # "push" or "pull"
+
+
+@router.post("/remote/sync-all")
+def sync_all_items(req: SyncAllRequest):
+    """Sync all items of selected types between local and remote."""
+    import os
+    
+    base_path = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    results = {"batches": [], "groups": [], "keys": []}
+    
+    if req.direction == "push":
+        # Get local items and push
+        if req.include_batches:
+            batch_dir = os.path.join(base_path, "batch")
+            if os.path.exists(batch_dir):
+                items = [f for f in os.listdir(batch_dir) if os.path.isfile(os.path.join(batch_dir, f)) and not f.startswith('.')]
+                if items:
+                    res = push_remote_items(RemoteSyncItemsRequest(server_id=req.server_id, items=items, item_type='batch'))
+                    results['batches'] = res.get('results', [])
+        
+        if req.include_groups:
+            groups_dir = os.path.join(base_path, "batch", "groups")
+            if os.path.exists(groups_dir):
+                items = [f for f in os.listdir(groups_dir) if f.endswith('.sh')]
+                if items:
+                    res = push_remote_items(RemoteSyncItemsRequest(server_id=req.server_id, items=items, item_type='group'))
+                    results['groups'] = res.get('results', [])
+        
+        if req.include_keys:
+            keys_dir = os.path.join(base_path, "keys")
+            if os.path.exists(keys_dir):
+                items = [f for f in os.listdir(keys_dir) if f.endswith('.json')]
+                if items:
+                    res = push_remote_items(RemoteSyncItemsRequest(server_id=req.server_id, items=items, item_type='key'))
+                    results['keys'] = res.get('results', [])
+    else:
+        # Get remote items and pull
+        if req.include_batches:
+            remote_batches = list_remote_batches(RemoteSyncRequest(server_id=req.server_id))
+            items = [i['name'] for i in remote_batches.get('items', [])]
+            if items:
+                res = pull_remote_items(RemoteSyncItemsRequest(server_id=req.server_id, items=items, item_type='batch'))
+                results['batches'] = res.get('results', [])
+        
+        if req.include_groups:
+            remote_groups = list_remote_groups(RemoteSyncRequest(server_id=req.server_id))
+            items = [i['name'] for i in remote_groups.get('items', [])]
+            if items:
+                res = pull_remote_items(RemoteSyncItemsRequest(server_id=req.server_id, items=items, item_type='group'))
+                results['groups'] = res.get('results', [])
+        
+        if req.include_keys:
+            remote_keys = list_remote_keys(RemoteSyncRequest(server_id=req.server_id))
+            items = [i['name'] for i in remote_keys.get('items', [])]
+            if items:
+                res = pull_remote_items(RemoteSyncItemsRequest(server_id=req.server_id, items=items, item_type='key'))
+                results['keys'] = res.get('results', [])
+    
+    total = sum(len(v) for v in results.values())
+    success = sum(len([r for r in v if r.get('status') == 'success']) for v in results.values())
+    
+    return {"results": results, "total": total, "success": success, "direction": req.direction}
+

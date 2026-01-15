@@ -50,11 +50,50 @@ def _build_scp_cmd(req: SSHBaseRequest, src: str, dest: str, recursive: bool = F
     if req.key_path:
         cmd.extend(["-i", req.key_path])
         
-    # Build target string for remote paths logic? 
-    # Actually scp syntax is [user@]host:[path]
-    # The caller passes formatted src/dest strings
-    cmd.extend([src, dest])
+    ssh_target = req.host
+    if req.user:
+        ssh_target = f"{req.user}@{req.host}"
+        
+    # Check if dest is remote (contains :) or we assume dest is remote path on target
+    # Ideally checking if src/dest strings already have user@host: prefix is complex.
+    # We will assume this function builds common scp args, but the caller specifies full src/dest args.
+    # update: refactoring to separate helpers for push/pull
     return cmd
+
+def exec_remote_command(req: SSHBaseRequest, command: str) -> dict:
+    """Executes a command on the remote server."""
+    cmd = _build_ssh_cmd(req, [command])
+    try:
+        res = subprocess.run(cmd, capture_output=True, text=True, timeout=req.timeout)
+        if res.returncode == 0:
+            return {"status": "success", "stdout": res.stdout, "stderr": res.stderr}
+        else:
+            return {"status": "error", "message": res.stderr or res.stdout, "code": res.returncode}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+def copy_file_to_remote(req: SSHBaseRequest, local_path: str, remote_dest: str) -> dict:
+    """Copies a local file to the remote server using SCP."""
+    ssh_target = req.host
+    if req.user:
+        ssh_target = f"{req.user}@{req.host}"
+    
+    dest_str = f"{ssh_target}:{remote_dest}"
+    
+    cmd = ["scp", "-o", "StrictHostKeyChecking=no"]
+    if req.key_path:
+        cmd.extend(["-i", req.key_path])
+    
+    cmd.extend([local_path, dest_str])
+    
+    try:
+        res = subprocess.run(cmd, capture_output=True, text=True, timeout=req.timeout)
+        if res.returncode == 0:
+            return {"status": "success"}
+        else:
+            return {"status": "error", "message": res.stderr or res.stdout}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
 
 def test_ssh_connection(req: SSHBaseRequest):
     """
@@ -65,22 +104,13 @@ def test_ssh_connection(req: SSHBaseRequest):
         target = f"{ssh_user}@{ssh_host}" if ssh_user else ssh_host
         cmd.extend([target, "echo", "SSH_SUCCESS"])
     """
-    cmd = ["ssh"]
-    if req.key_path:
-        cmd.extend(["-i", req.key_path])
-    
-    target = req.host
-    if req.user:
-        target = f"{req.user}@{req.host}"
-    
-    cmd.append(target)
-    cmd.extend(["echo", "SSH_SUCCESS"])
+    cmd = _build_ssh_cmd(req, ["echo", "SSH_SUCCESS"])
 
     try:
         # Legacy UI used timeout=ssh_timeout (default 10)
         res = subprocess.run(cmd, capture_output=True, text=True, timeout=req.timeout)
         if "SSH_SUCCESS" in res.stdout:
-            return {"status": "success", "message": f"Connected to {req.host}"}
+            return {"status": "ok", "message": f"Connected to {req.host}"}
         else:
             return {"status": "error", "message": res.stderr or res.stdout or "Unknown failure"}
     except subprocess.TimeoutExpired:
@@ -112,6 +142,57 @@ def approve_ssh_host_key(req: SSHBaseRequest):
     except Exception as e:
         logger.error(f"Approve key failed: {e}")
         raise HTTPException(500, str(e))
+
+
+def check_remote_status(req: SSHBaseRequest):
+    """Checks detailed status of ISync on remote server."""
+    # We check:
+    # 1. SSH Connectivity
+    # 2. Uvicorn backend process
+    # 3. Vite/Frontend process
+    # 4. Tmux session (isync_remote)
+    
+    cmd_str = (
+        "echo 'SSH_OK'; "
+        "pgrep -f 'uvicorn.*backend.main' >/dev/null && echo 'BACKEND_OK' || echo 'BACKEND_NO'; "
+        "pgrep -f 'vite' >/dev/null && echo 'FRONTEND_OK' || echo 'FRONTEND_NO'; "
+        "tmux has-session -t isync_remote 2>/dev/null && echo 'TMUX_OK' || echo 'TMUX_NO'"
+    )
+    
+    cmd = _build_ssh_cmd(req, [cmd_str])
+    
+    try:
+        res = subprocess.run(cmd, capture_output=True, text=True, timeout=req.timeout)
+        output = res.stdout.strip()
+        
+        connected = "SSH_OK" in output
+        backend_running = "BACKEND_OK" in output
+        frontend_running = "FRONTEND_OK" in output
+        tmux_session = "TMUX_OK" in output
+        
+        # Overall status
+        status = "error"
+        if not connected:
+            status = "error"
+        elif backend_running:
+            status = "ok" # "Running"
+        else:
+            status = "stopped"
+            
+        return {
+            "status": status,
+            "connected": connected,
+            "isync_running": backend_running, # simplified
+            "backend_running": backend_running,
+            "frontend_running": frontend_running,
+            "tmux_session": tmux_session,
+            "message": "Connected" if connected else "Failed to connect"
+        }
+        
+    except subprocess.TimeoutExpired:
+        return {"status": "error", "connected": False, "message": "Timeout"}
+    except Exception as e:
+        return {"status": "error", "connected": False, "message": str(e)}
 
 def create_local_backup():
     try:
@@ -379,7 +460,7 @@ def list_domain_users(domain_name: str):
         # Annotate users
         annotated = []
         for u in users:
-            email = u['primaryEmail']
+            email = u['email']
             u['in_group'] = email.lower() in member_set
             annotated.append(u)
             
