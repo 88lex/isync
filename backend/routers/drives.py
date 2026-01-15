@@ -89,7 +89,13 @@ def api_generate_suffixes(request: GenerateSuffixesRequest):
 @router.get("/keys")
 def api_list_keys():
     """List available service account key files."""
-    keys_dir = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "keys")
+    # Correct path: /opt/isync/keys
+    # __file__ is /opt/isync/backend/routers/drives.py
+    # dirname(__file__) -> /opt/isync/backend/routers
+    # dirname(dirname(__file__)) -> /opt/isync/backend
+    # dirname(dirname(dirname(__file__))) -> /opt/isync
+    base_dir = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    keys_dir = os.path.join(base_dir, "keys")
     if not os.path.exists(keys_dir):
         return {"keys": [], "path": keys_dir}
     

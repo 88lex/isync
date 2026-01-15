@@ -174,6 +174,7 @@ export const listServerFolders = async (serverId: string, path: string = '/', de
 export interface RcloneRemote {
     name: string;
     type: string;
+    config?: Record<string, string>;
 }
 
 export interface RemotesListResponse {
@@ -184,6 +185,11 @@ export interface RemotesListResponse {
 
 export const listServerRemotes = async (serverId: string): Promise<RemotesListResponse> => {
     const res = await axios.get(`${API_BASE}/ssh/servers/${serverId}/remotes`);
+    return res.data;
+};
+
+export const listLocalRemotes = async (): Promise<{ remotes: RcloneRemote[]; config_path: string; exists: boolean }> => {
+    const res = await axios.get(`${API_BASE}/rclone/remotes`);
     return res.data;
 };
 
@@ -294,6 +300,36 @@ export const getBatchUsers = async (filename: string): Promise<BatchUsersRespons
     return res.data;
 };
 
+export const pushBatch = async (filename: string, serverId: string) => {
+    const res = await axios.post(`${API_BASE}/batch/${filename}/push`, { server_id: serverId });
+    return res.data;
+};
+
+export const updateBatchContent = async (filename: string, content: string) => {
+    const res = await axios.patch(`${API_BASE}/manual/batch/${filename}`, { content });
+    return res.data;
+};
+
+export const checkBatchRemote = async (filename: string, serverId: string) => {
+    const res = await axios.post(`${API_BASE}/batch/${filename}/check`, { server_id: serverId });
+    return res.data;
+};
+
+export const pullBatch = async (filename: string, serverId: string) => {
+    const res = await axios.post(`${API_BASE}/batch/${filename}/pull`, { server_id: serverId });
+    return res.data;
+};
+
+export const deleteBatchRemote = async (filename: string, serverId: string) => {
+    const res = await axios.delete(`${API_BASE}/batch/${filename}/remote?server_id=${serverId}`);
+    return res.data;
+};
+
+export const deleteBatchLocal = async (filename: string) => {
+    const res = await axios.delete(`${API_BASE}/manual/batch/${filename}`);
+    return res.data;
+};
+
 export interface BatchCompareRequest {
     filename: string;
     domain?: string;
@@ -312,6 +348,222 @@ export interface BatchCompareResponse {
 
 export const compareBatchUsers = async (req: BatchCompareRequest): Promise<BatchCompareResponse> => {
     const res = await axios.post(`${API_BASE}/manual/batch/compare`, req);
+    return res.data;
+};
+
+// --- Random Batch Generation ---
+export interface RandomBatchRequest {
+    pairs: SyncPair[];
+    user_count: number;
+    domains: string[];
+    dry_run: boolean;
+}
+
+export interface RandomBatchResponse {
+    status: string;
+    commands: Record<string, string>;
+    selected_users: string[];
+    user_count: number;
+    domains_queried: string[];
+}
+
+export const generateRandomBatch = async (req: RandomBatchRequest): Promise<RandomBatchResponse> => {
+    const res = await axios.post(`${API_BASE}/manual/batch/generate-random`, req);
+    return res.data;
+};
+
+// --- User Summary ---
+export interface UserSummaryResponse {
+    users: Record<string, string[]>;
+    batches: string[];
+    total_users: number;
+    total_batches: number;
+}
+
+export const getUserBatchSummary = async (): Promise<UserSummaryResponse> => {
+    const res = await axios.get(`${API_BASE}/manual/batch/user-summary`);
+    return res.data;
+};
+
+// --- BATCH GROUPS ---
+export interface BatchGroup {
+    id: string;
+    name: string;
+    description: string;
+    batch_files: string[];
+    created_at: string;
+    updated_at: string;
+    batch_details?: {
+        name: string;
+        exists: boolean;
+        size: number;
+        modified: number | null;
+    }[];
+}
+
+export interface BatchGroupCreate {
+    name: string;
+    description?: string;
+    batch_files?: string[];
+}
+
+export interface BatchGroupUpdate {
+    name?: string;
+    description?: string;
+    batch_files?: string[];
+}
+
+export const listBatchGroups = async (): Promise<BatchGroup[]> => {
+    const res = await axios.get(`${API_BASE}/batch-groups`);
+    return res.data;
+};
+
+export const createBatchGroup = async (req: BatchGroupCreate): Promise<BatchGroup> => {
+    const res = await axios.post(`${API_BASE}/batch-groups`, req);
+    return res.data.group;
+};
+
+export const getBatchGroup = async (groupId: string): Promise<BatchGroup> => {
+    const res = await axios.get(`${API_BASE}/batch-groups/${groupId}`);
+    return res.data;
+};
+
+export const updateBatchGroup = async (groupId: string, req: BatchGroupUpdate): Promise<BatchGroup> => {
+    const res = await axios.put(`${API_BASE}/batch-groups/${groupId}`, req);
+    return res.data.group;
+};
+
+export const deleteBatchGroup = async (groupId: string): Promise<void> => {
+    await axios.delete(`${API_BASE}/batch-groups/${groupId}`);
+};
+
+export const reorderBatchGroup = async (groupId: string, batchFiles: string[]): Promise<BatchGroup> => {
+    const res = await axios.post(`${API_BASE}/batch-groups/${groupId}/reorder`, { batch_files: batchFiles });
+    return res.data.group;
+};
+
+export interface GeneratedGroupScript {
+    status: string;
+    filename: string;
+    path: string;
+    content: string;
+    batch_count: number;
+}
+
+export const generateGroupScript = async (groupId: string): Promise<GeneratedGroupScript> => {
+    const res = await axios.post(`${API_BASE}/batch-groups/${groupId}/generate`);
+    return res.data;
+};
+
+export const getGroupScript = async (groupId: string) => {
+    const res = await axios.get(`${API_BASE}/batch-groups/${groupId}/script`);
+    return res.data;
+};
+
+export const pushBatchGroup = async (groupId: string, serverId: string) => {
+    const res = await axios.post(`${API_BASE}/batch-groups/${groupId}/push`, { server_id: serverId });
+    return res.data;
+};
+
+export const checkGroupRemote = async (groupId: string, serverId: string) => {
+    const res = await axios.post(`${API_BASE}/batch-groups/${groupId}/check`, { server_id: serverId });
+    return res.data;
+};
+
+export const pullGroupRemote = async (groupId: string, serverId: string) => {
+    const res = await axios.post(`${API_BASE}/batch-groups/${groupId}/pull`, { server_id: serverId });
+    return res.data;
+};
+
+export const deleteGroupRemote = async (groupId: string, serverId: string) => {
+    const res = await axios.delete(`${API_BASE}/batch-groups/${groupId}/remote?server_id=${serverId}`);
+    return res.data;
+};
+
+// --- CRONTAB ---
+export interface CronPreset {
+    name: string;
+    expression: string;
+}
+
+export interface CrontabEntry {
+    id: string;
+    command_type: string;
+    command_name: string;
+    cron_expression: string;
+    annotation: string;
+    enabled: boolean;
+}
+
+export interface CrontabEntryCreate {
+    command_type: string;
+    command_name: string;
+    cron_expression: string;
+    annotation?: string;
+    enabled?: boolean;
+}
+
+export interface CrontabConfig {
+    server_id: string;
+    server_name: string;
+    entries: CrontabEntry[];
+    last_pushed_at?: string;
+    last_pulled_at?: string;
+}
+
+export const getCronPresets = async (): Promise<{ presets: CronPreset[] }> => {
+    const res = await axios.get(`${API_BASE}/crontab/presets`);
+    return res.data;
+};
+
+export const listCrontabServers = async () => {
+    const res = await axios.get(`${API_BASE}/crontab/servers`);
+    return res.data;
+};
+
+export const getServerCrontab = async (serverId: string): Promise<CrontabConfig> => {
+    const res = await axios.get(`${API_BASE}/crontab/servers/${serverId}`);
+    return res.data;
+};
+
+export const initServerCrontab = async (serverId: string, serverName: string) => {
+    const res = await axios.post(`${API_BASE}/crontab/servers/${serverId}/init?server_name=${encodeURIComponent(serverName)}`);
+    return res.data;
+};
+
+export const addCrontabEntry = async (serverId: string, entry: CrontabEntryCreate) => {
+    const res = await axios.post(`${API_BASE}/crontab/servers/${serverId}/entries`, entry);
+    return res.data;
+};
+
+export const updateCrontabEntry = async (serverId: string, entryId: string, entry: Partial<CrontabEntryCreate>) => {
+    const res = await axios.put(`${API_BASE}/crontab/servers/${serverId}/entries/${entryId}`, entry);
+    return res.data;
+};
+
+export const deleteCrontabEntry = async (serverId: string, entryId: string) => {
+    await axios.delete(`${API_BASE}/crontab/servers/${serverId}/entries/${entryId}`);
+};
+
+export interface GeneratedCrontab {
+    status: string;
+    server_id: string;
+    server_name: string;
+    content: string;
+    entry_count: number;
+}
+
+export const generateCrontabFile = async (serverId: string): Promise<GeneratedCrontab> => {
+    const res = await axios.post(`${API_BASE}/crontab/servers/${serverId}/generate`);
+    return res.data;
+};
+
+export const deleteServerCrontab = async (serverId: string) => {
+    await axios.delete(`${API_BASE}/crontab/servers/${serverId}`);
+};
+
+export const installCrontab = async (serverId: string) => {
+    const res = await axios.post(`${API_BASE}/crontab/servers/${serverId}/install`);
     return res.data;
 };
 
@@ -948,6 +1200,21 @@ export interface MethodsResponse {
 
 export const createDrivesUnified = async (req: CreateDrivesUnifiedRequest): Promise<CreateDrivesResponse> => {
     const res = await axios.post(`${API_BASE}/drives/create`, req);
+    return res.data;
+};
+
+export interface ListDrivesUnifiedRequest {
+    method: DriveMethod;
+    prefix?: string;
+    // fclone-specific
+    gdrive_remote?: string;
+    // google_api-specific
+    service_account_file?: string;
+    impersonate_email?: string;
+}
+
+export const listDrivesUnified = async (req: ListDrivesUnifiedRequest): Promise<ListDrivesResponse> => {
+    const res = await axios.post(`${API_BASE}/drives/list-unified`, req);
     return res.data;
 };
 

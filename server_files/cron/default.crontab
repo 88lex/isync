@@ -5,7 +5,7 @@
 # Format: minute hour day month weekday command
 
 # Example: Run batch sync every day at 2 AM
-# 0 2 * * * cd ~/isync && ./run_batch.sh batch/daily_sync.sh >> logs/cron.log 2>&1
+# 0 2 * * * cd /opt/isync && ./run_batch.sh batch/daily_sync.sh >> logs/cron.log 2>&1
 
 # Example: Run every 6 hours
-# 0 */6 * * * cd ~/isync && ./run_batch.sh batch/sync_all.sh >> logs/cron.log 2>&1
+# 0 */6 * * * cd /opt/isync && ./run_batch.sh batch/sync_all.sh >> logs/cron.log 2>&1

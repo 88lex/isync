@@ -186,8 +186,7 @@ async def create_rclone_remotes(
         sa_file = f"{sa_dir}/{count}.json"
         
         cmd = [
-            "rclone", "config", "update", name,
-            "type", "drive",
+            "rclone", "config", "create", name, "drive",
             "scope", "drive",
             "team_drive", team_drive_id,
             "service_account_file", sa_file
@@ -239,8 +238,7 @@ async def create_union_remote(
     upstreams_str = " ".join(f"{u.rstrip(':')}:" for u in upstreams) + " "
     
     cmd = [
-        "fclone", "config", "update", name,
-        "type", "union",
+        "fclone", "config", "create", name, "union",
         "upstreams", upstreams_str,
         "action_policy", action_policy,
         "create_policy", create_policy

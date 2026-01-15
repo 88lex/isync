@@ -141,7 +141,7 @@ This section explains every page of the application, describing each element and
 2.  **Go to Generator**: Navigate to "Batch Generator".
 3.  **Configure**: Choose the sync pair and enter a filename.
 4.  **Generate**: Click **"Save Batch"**.
-5.  **Retrieve**: The script is saved to `isync_batch/`. You can download it or run it later.
+5.  **Retrieve**: The script is saved to `batch/`. You can download it or run it later.
 
 ---
 

@@ -28,6 +28,9 @@ from backend.routers import (
     schedules_router,
     orchestrator_router,
     admin_router,
+    batch_groups_router,
+    crontab_router,
+    rclone_router,
 )
 
 logger = get_logger("isync.api")
@@ -67,6 +70,9 @@ app.include_router(ops_router)
 app.include_router(schedules_router)
 app.include_router(orchestrator_router)
 app.include_router(admin_router)
+app.include_router(batch_groups_router)
+app.include_router(crontab_router)
+app.include_router(rclone_router)
 
 
 # --- Lifecycle Events ---
@@ -87,7 +93,7 @@ async def shutdown_event():
     # Stop scheduler if running
     try:
         from backend.scheduler import scheduler
-        scheduler.shutdown()
+        scheduler.stop()
         logger.info("[Shutdown] Scheduler stopped")
     except ImportError:
         pass

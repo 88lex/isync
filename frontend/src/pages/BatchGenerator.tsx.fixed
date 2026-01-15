@@ -7,9 +7,7 @@ import {
     fetchSSHServers, SSHServer, listServerFolders, listServerRemotes, listRemotePath,
     RemoteFolder, RcloneRemote, createSyncPair, generateRandomBatch, getUserBatchSummary,
     RandomBatchResponse, UserSummaryResponse, listBatchGroups, createBatchGroup,
-    deleteBatchGroup, updateBatchGroup, generateGroupScript, BatchGroup, pushBatch, pushBatchGroup,
-    updateBatchContent, checkBatchRemote, pullBatch, deleteBatchRemote, deleteBatchLocal,
-    checkGroupRemote, pullGroupRemote, deleteGroupRemote, getGroupScript
+    deleteBatchGroup, updateBatchGroup, generateGroupScript, BatchGroup, pushBatch, pushBatchGroup
 } from '../api';
 import { SESSION_KEYS } from '../constants/storageKeys';
 import { PageHeader } from '../components/PageHeader';
@@ -60,11 +58,6 @@ const BatchGenerator: React.FC<BatchGeneratorProps> = ({ activeSection }) => {
     const [compareResult, setCompareResult] = useState<BatchCompareResponse | null>(null);
     const [comparingUsers, setComparingUsers] = useState(false);
     const [expandedBatchFile, setExpandedBatchFile] = useState<string | null>(null);
-    const [batchContentCache, setBatchContentCache] = useState<Record<string, string>>({});
-    const [editingBatch, setEditingBatch] = useState<string | null>(null);
-    const [editBatchContent, setEditBatchContent] = useState('');
-    const [remoteStatusCache, setRemoteStatusCache] = useState<Record<string, Record<string, boolean>>>({});
-    const [batchOperationLoading, setBatchOperationLoading] = useState<string | null>(null);
 
     // Sync Pair Wizard State
     const [showWizard, setShowWizard] = useState(false);
@@ -121,10 +114,6 @@ const BatchGenerator: React.FC<BatchGeneratorProps> = ({ activeSection }) => {
     const [newGroupDescription, setNewGroupDescription] = useState('');
     const [selectedBatchesForGroup, setSelectedBatchesForGroup] = useState<Set<string>>(new Set());
     const [groupsLoading, setGroupsLoading] = useState(false);
-    const [expandedGroup, setExpandedGroup] = useState<string | null>(null);
-    const [groupScriptCache, setGroupScriptCache] = useState<Record<string, string>>({});
-    const [groupRemoteStatus, setGroupRemoteStatus] = useState<Record<string, Record<string, boolean>>>({});
-    const [groupOperationLoading, setGroupOperationLoading] = useState<string | null>(null);
 
     // Remote Push State
     const [sshServers, setSshServers] = useState<SSHServer[]>([]);
@@ -209,71 +198,6 @@ const BatchGenerator: React.FC<BatchGeneratorProps> = ({ activeSection }) => {
             alert(`Failed: ${e.response?.data?.detail || e.message}`);
         } finally {
             setGroupsLoading(false);
-        }
-    };
-
-    const handleExpandGroup = async (groupId: string) => {
-        if (expandedGroup === groupId) {
-            setExpandedGroup(null);
-            return;
-        }
-        setExpandedGroup(groupId);
-        if (!groupScriptCache[groupId]) {
-            try {
-                const result = await getGroupScript(groupId);
-                if (result.exists) {
-                    setGroupScriptCache(prev => ({ ...prev, [groupId]: result.content }));
-                }
-            } catch (e) {
-                console.error('Failed to load group script', e);
-            }
-        }
-    };
-
-    const handleCheckGroupRemote = async (groupId: string, serverId: string) => {
-        try {
-            setGroupOperationLoading(`check-${groupId}`);
-            const res = await checkGroupRemote(groupId, serverId);
-            setGroupRemoteStatus(prev => ({
-                ...prev,
-                [groupId]: { ...prev[groupId], [serverId]: res.exists }
-            }));
-        } catch (e: any) {
-            console.error('Check failed', e);
-        } finally {
-            setGroupOperationLoading(null);
-        }
-    };
-
-    const handlePullGroupRemote = async (groupId: string, serverId: string) => {
-        try {
-            setGroupOperationLoading(`pull-${groupId}`);
-            await pullGroupRemote(groupId, serverId);
-            // Refresh script cache
-            const result = await getGroupScript(groupId);
-            if (result.exists) {
-                setGroupScriptCache(prev => ({ ...prev, [groupId]: result.content }));
-            }
-        } catch (e: any) {
-            alert(`Pull failed: ${e.message}`);
-        } finally {
-            setGroupOperationLoading(null);
-        }
-    };
-
-    const handleDeleteGroupRemote = async (groupId: string, serverId: string) => {
-        if (!confirm('Delete group script from remote server?')) return;
-        try {
-            setGroupOperationLoading(`delete-${groupId}`);
-            await deleteGroupRemote(groupId, serverId);
-            setGroupRemoteStatus(prev => ({
-                ...prev,
-                [groupId]: { ...prev[groupId], [serverId]: false }
-            }));
-        } catch (e: any) {
-            alert(`Delete failed: ${e.message}`);
-        } finally {
-            setGroupOperationLoading(null);
         }
     };
 
@@ -429,102 +353,6 @@ const BatchGenerator: React.FC<BatchGeneratorProps> = ({ activeSection }) => {
             setSavedBatches(files);
         } catch (e) {
             console.error('Failed to load saved batches', e);
-        }
-    };
-
-    const handleExpandBatch = async (filename: string) => {
-        if (expandedBatchFile === filename) {
-            setExpandedBatchFile(null);
-            setEditingBatch(null);
-            return;
-        }
-        setExpandedBatchFile(filename);
-        if (!batchContentCache[filename]) {
-            try {
-                const data = await getBatchFile(filename);
-                setBatchContentCache(prev => ({ ...prev, [filename]: data.content }));
-            } catch (e: any) {
-                console.error('Failed to load batch content', e);
-            }
-        }
-    };
-
-    const handleStartEdit = (filename: string) => {
-        setEditingBatch(filename);
-        setEditBatchContent(batchContentCache[filename] || '');
-    };
-
-    const handleSaveEdit = async (filename: string) => {
-        try {
-            setBatchOperationLoading(`edit-${filename}`);
-            await updateBatchContent(filename, editBatchContent);
-            setBatchContentCache(prev => ({ ...prev, [filename]: editBatchContent }));
-            setEditingBatch(null);
-            await loadSavedBatches();
-        } catch (e: any) {
-            alert(`Failed to save: ${e.message}`);
-        } finally {
-            setBatchOperationLoading(null);
-        }
-    };
-
-    const handleCheckRemote = async (filename: string, serverId: string) => {
-        try {
-            setBatchOperationLoading(`check-${filename}`);
-            const res = await checkBatchRemote(filename, serverId);
-            setRemoteStatusCache(prev => ({
-                ...prev,
-                [filename]: { ...prev[filename], [serverId]: res.exists }
-            }));
-        } catch (e: any) {
-            console.error('Check failed', e);
-        } finally {
-            setBatchOperationLoading(null);
-        }
-    };
-
-    const handlePullBatch = async (filename: string, serverId: string) => {
-        try {
-            setBatchOperationLoading(`pull-${filename}`);
-            await pullBatch(filename, serverId);
-            await loadSavedBatches();
-            // Refresh content cache
-            const data = await getBatchFile(filename);
-            setBatchContentCache(prev => ({ ...prev, [filename]: data.content }));
-        } catch (e: any) {
-            alert(`Pull failed: ${e.message}`);
-        } finally {
-            setBatchOperationLoading(null);
-        }
-    };
-
-    const handleDeleteRemote = async (filename: string, serverId: string) => {
-        if (!confirm(`Delete ${filename} from remote server?`)) return;
-        try {
-            setBatchOperationLoading(`delete-remote-${filename}`);
-            await deleteBatchRemote(filename, serverId);
-            setRemoteStatusCache(prev => ({
-                ...prev,
-                [filename]: { ...prev[filename], [serverId]: false }
-            }));
-        } catch (e: any) {
-            alert(`Delete failed: ${e.message}`);
-        } finally {
-            setBatchOperationLoading(null);
-        }
-    };
-
-    const handleDeleteLocal = async (filename: string) => {
-        if (!confirm(`Delete ${filename} locally?`)) return;
-        try {
-            setBatchOperationLoading(`delete-local-${filename}`);
-            await deleteBatchLocal(filename);
-            await loadSavedBatches();
-            if (expandedBatchFile === filename) setExpandedBatchFile(null);
-        } catch (e: any) {
-            alert(`Delete failed: ${e.message}`);
-        } finally {
-            setBatchOperationLoading(null);
         }
     };
 
@@ -692,10 +520,9 @@ const BatchGenerator: React.FC<BatchGeneratorProps> = ({ activeSection }) => {
         }
     };
 
-    useEffect(() => {
-        loadSavedBatches();
-        loadBatchGroups();
-    }, []);
+    // useEffect(() => {
+    //     loadSavedBatches();
+    // }, []);
 
 
     return (
@@ -1050,144 +877,63 @@ const BatchGenerator: React.FC<BatchGeneratorProps> = ({ activeSection }) => {
                             Refresh
                         </button>
                     </div>
-                    <div className="space-y-2">
-                        {savedBatches.map((f) => {
-                            const isExpanded = expandedBatchFile === f.name;
-                            const isEditing = editingBatch === f.name;
-                            const content = batchContentCache[f.name] || '';
-                            const isLoading = batchOperationLoading?.includes(f.name);
-
-                            return (
-                                <div
-                                    key={f.name}
-                                    className={`bg-zinc-800/50 border rounded-lg transition ${isExpanded ? 'border-cyan-500/50' : 'border-zinc-700'}`}
-                                >
-                                    {/* Header Row */}
-                                    <div
-                                        className="flex items-center justify-between p-3 cursor-pointer hover:bg-zinc-800/80"
-                                        onClick={() => handleExpandBatch(f.name)}
-                                    >
-                                        <div className="flex items-center gap-3">
-                                            {isExpanded ? <ChevronDown size={16} className="text-cyan-400" /> : <ChevronRight size={16} className="text-zinc-500" />}
-                                            <FileCode size={16} className="text-amber-400" />
-                                            <span className="text-sm font-medium text-zinc-200">{f.name}</span>
-                                            <span className="text-xs text-zinc-600">{(f.size / 1024).toFixed(1)} KB</span>
-                                        </div>
-                                        <div className="flex gap-2" onClick={e => e.stopPropagation()}>
-                                            <button
-                                                onClick={() => openBatchUsersModal(f.name)}
-                                                className="flex items-center gap-1 px-2 py-1 bg-purple-600/20 hover:bg-purple-600 text-purple-400 hover:text-white rounded text-xs transition"
-                                                title="View/Compare Users"
-                                            >
-                                                <Users size={12} /> Users
-                                            </button>
-                                            <button
-                                                onClick={() => handleDeleteLocal(f.name)}
-                                                disabled={isLoading}
-                                                className="flex items-center gap-1 px-2 py-1 bg-red-600/20 hover:bg-red-600 text-red-400 hover:text-white rounded text-xs transition disabled:opacity-50"
-                                                title="Delete Local"
-                                            >
-                                                <Trash2 size={12} />
-                                            </button>
-                                        </div>
+                    <div className="space-y-2 max-h-64 overflow-y-auto">
+                        {savedBatches.map((f) => (
+                            <div
+                                key={f.name}
+                                className="bg-zinc-800/50 border border-zinc-700 rounded-lg p-3"
+                            >
+                                <div className="flex items-center justify-between">
+                                    <div className="flex items-center gap-3">
+                                        <FileCode size={16} className="text-amber-400" />
+                                        <span className="text-sm font-medium text-zinc-200">{f.name}</span>
+                                        <span className="text-xs text-zinc-600">
+                                            {(f.size / 1024).toFixed(1)} KB
+                                        </span>
                                     </div>
-
-                                    {/* Expanded Content */}
-                                    {isExpanded && (
-                                        <div className="border-t border-zinc-700 p-3 space-y-3">
-                                            {/* Server Operations Row */}
-                                            <div className="flex items-center gap-2 flex-wrap">
-                                                <select
-                                                    value={selectedServerId}
-                                                    onChange={(e) => setSelectedServerId(e.target.value)}
-                                                    className="bg-zinc-900 border border-zinc-700 rounded px-2 py-1 text-xs text-zinc-300"
-                                                >
-                                                    {sshServers.length === 0 && <option value="">No servers</option>}
-                                                    {sshServers.map(s => (
-                                                        <option key={s.id} value={s.id}>{s.name}</option>
-                                                    ))}
-                                                </select>
-                                                <button
-                                                    onClick={() => handleCheckRemote(f.name, selectedServerId)}
-                                                    disabled={!selectedServerId || isLoading}
-                                                    className="px-2 py-1 bg-zinc-700 hover:bg-zinc-600 text-zinc-300 rounded text-xs transition disabled:opacity-50"
-                                                >
-                                                    Check
-                                                </button>
-                                                <button
-                                                    onClick={() => handleOpenPushModal('batch', f.name)}
-                                                    disabled={!selectedServerId || isLoading}
-                                                    className="px-2 py-1 bg-cyan-600/20 hover:bg-cyan-600 text-cyan-400 hover:text-white rounded text-xs transition disabled:opacity-50"
-                                                >
-                                                    Push
-                                                </button>
-                                                <button
-                                                    onClick={() => handlePullBatch(f.name, selectedServerId)}
-                                                    disabled={!selectedServerId || isLoading}
-                                                    className="px-2 py-1 bg-emerald-600/20 hover:bg-emerald-600 text-emerald-400 hover:text-white rounded text-xs transition disabled:opacity-50"
-                                                >
-                                                    Pull
-                                                </button>
-                                                <button
-                                                    onClick={() => handleDeleteRemote(f.name, selectedServerId)}
-                                                    disabled={!selectedServerId || isLoading}
-                                                    className="px-2 py-1 bg-red-600/20 hover:bg-red-600 text-red-400 hover:text-white rounded text-xs transition disabled:opacity-50"
-                                                >
-                                                    Del Remote
-                                                </button>
-                                                {remoteStatusCache[f.name]?.[selectedServerId] !== undefined && (
-                                                    <span className={`text-xs px-2 py-0.5 rounded ${remoteStatusCache[f.name][selectedServerId] ? 'bg-emerald-600/20 text-emerald-400' : 'bg-zinc-700 text-zinc-400'}`}>
-                                                        {remoteStatusCache[f.name][selectedServerId] ? '✓ Exists' : '✗ Missing'}
-                                                    </span>
-                                                )}
-                                            </div>
-
-                                            {/* Content Area */}
-                                            <div className="space-y-2">
-                                                <div className="flex items-center justify-between">
-                                                    <span className="text-xs text-zinc-500">Content</span>
-                                                    {!isEditing ? (
-                                                        <button
-                                                            onClick={() => handleStartEdit(f.name)}
-                                                            className="flex items-center gap-1 px-2 py-0.5 bg-zinc-700 hover:bg-zinc-600 text-zinc-300 rounded text-xs transition"
-                                                        >
-                                                            <Edit2 size={10} /> Edit
-                                                        </button>
-                                                    ) : (
-                                                        <div className="flex gap-1">
-                                                            <button
-                                                                onClick={() => handleSaveEdit(f.name)}
-                                                                disabled={isLoading}
-                                                                className="px-2 py-0.5 bg-emerald-600 hover:bg-emerald-500 text-white rounded text-xs transition disabled:opacity-50"
-                                                            >
-                                                                Save
-                                                            </button>
-                                                            <button
-                                                                onClick={() => setEditingBatch(null)}
-                                                                className="px-2 py-0.5 bg-zinc-700 hover:bg-zinc-600 text-zinc-300 rounded text-xs transition"
-                                                            >
-                                                                Cancel
-                                                            </button>
-                                                        </div>
-                                                    )}
-                                                </div>
-                                                {isEditing ? (
-                                                    <textarea
-                                                        value={editBatchContent}
-                                                        onChange={(e) => setEditBatchContent(e.target.value)}
-                                                        className="w-full h-48 bg-zinc-900 border border-zinc-700 rounded p-2 text-xs font-mono text-zinc-300 focus:border-cyan-500 outline-none"
-                                                    />
-                                                ) : (
-                                                    <pre className="bg-zinc-900 border border-zinc-800 rounded p-2 text-xs font-mono text-zinc-400 max-h-48 overflow-auto whitespace-pre-wrap">
-                                                        {content || 'Loading...'}
-                                                    </pre>
-                                                )}
-                                            </div>
-                                        </div>
-                                    )}
+                                    <div className="flex gap-2">
+                                        <button
+                                            onClick={() => openBatchUsersModal(f.name)}
+                                            className="flex items-center gap-1 px-2 py-1 bg-purple-600/20 hover:bg-purple-600 text-purple-400 hover:text-white rounded text-xs transition"
+                                            title="View/Compare Users"
+                                        >
+                                            <Users size={12} /> Users
+                                        </button>
+                                        <button
+                                            onClick={() => handleLoadBatch(f.name)}
+                                            className="flex items-center gap-1 px-2 py-1 bg-zinc-700 hover:bg-zinc-600 text-zinc-300 rounded text-xs transition"
+                                            title="View Content"
+                                        >
+                                            <Copy size={12} /> View
+                                        </button>
+                                        <button
+                                            onClick={() => handleOpenPushModal('batch', f.name)}
+                                            className="flex items-center gap-1 px-2 py-1 bg-cyan-600/20 hover:bg-cyan-600 text-cyan-400 hover:text-white rounded text-xs transition"
+                                            title="Push to Remote"
+                                        >
+                                            <Server size={12} />
+                                        </button>
+                                        <button
+                                            onClick={() => handleDeleteBatch(f.name)}
+                                            className="flex items-center gap-1 px-2 py-1 bg-red-600/20 hover:bg-red-600 text-red-400 hover:text-white rounded text-xs transition"
+                                            title="Delete Batch"
+                                        >
+                                            <Trash2 size={12} />
+                                        </button>
+                                    </div>
                                 </div>
-                            );
-                        })}
+
+                                {/* Loaded Content Preview */}
+                                {loadedContent && f.name === batchUsersFilename && (
+                                    <div className="mt-3 bg-zinc-900 rounded border border-zinc-800 p-2 max-h-40 overflow-y-auto">
+                                        <pre className="text-xs text-zinc-400 font-mono whitespace-pre-wrap">
+                                            {loadedContent.slice(0, 1000)}
+                                            {loadedContent.length > 1000 && '...'}
+                                        </pre>
+                                    </div>
+                                )}
+                            </div>
+                        ))}
                     </div>
                 </Card>
             )}
@@ -1226,129 +972,65 @@ const BatchGenerator: React.FC<BatchGeneratorProps> = ({ activeSection }) => {
                     </div>
                 ) : (
                     <div className="space-y-2">
-                        {batchGroups.map((group) => {
-                            const isExpanded = expandedGroup === group.id;
-                            const scriptContent = groupScriptCache[group.id] || '';
-                            const isLoading = groupOperationLoading?.includes(group.id);
-
-                            return (
-                                <div
-                                    key={group.id}
-                                    className={`bg-zinc-800/50 border rounded-lg transition ${isExpanded ? 'border-purple-500/50' : 'border-zinc-700'}`}
-                                >
-                                    {/* Header Row */}
-                                    <div
-                                        className="flex items-center justify-between p-3 cursor-pointer hover:bg-zinc-800/80"
-                                        onClick={() => handleExpandGroup(group.id)}
-                                    >
-                                        <div className="flex items-center gap-3">
-                                            {isExpanded ? <ChevronDown size={16} className="text-purple-400" /> : <ChevronRight size={16} className="text-zinc-500" />}
-                                            <Layers size={16} className="text-purple-400" />
-                                            <span className="text-sm font-medium text-zinc-200">{group.name}</span>
-                                            <span className="bg-purple-600/20 text-purple-400 px-2 py-0.5 rounded text-xs">
-                                                {group.batch_files.length} batches
-                                            </span>
-                                        </div>
-                                        <div className="flex gap-2" onClick={e => e.stopPropagation()}>
-                                            <button
-                                                onClick={() => handleGenerateGroupScript(group.id)}
-                                                disabled={groupsLoading || group.batch_files.length === 0}
-                                                className="px-2 py-1 bg-emerald-600/20 hover:bg-emerald-600 text-emerald-400 hover:text-white rounded text-xs transition disabled:opacity-50"
-                                            >
-                                                <FileCode size={12} />
-                                            </button>
-                                            <button
-                                                onClick={() => handleDeleteGroup(group.id)}
-                                                className="px-2 py-1 bg-red-600/20 hover:bg-red-600 text-red-400 hover:text-white rounded text-xs transition"
-                                            >
-                                                <Trash2 size={12} />
-                                            </button>
-                                        </div>
+                        {batchGroups.map((group) => (
+                            <div
+                                key={group.id}
+                                className="bg-zinc-800/50 border border-zinc-700 rounded-lg p-4"
+                            >
+                                <div className="flex items-center justify-between mb-2">
+                                    <div>
+                                        <h3 className="font-medium text-white">{group.name}</h3>
+                                        {group.description && (
+                                            <p className="text-xs text-zinc-500">{group.description}</p>
+                                        )}
                                     </div>
+                                    <div className="flex items-center gap-2 text-xs">
+                                        <span className="bg-purple-600/20 text-purple-400 px-2 py-1 rounded">
+                                            {group.batch_files.length} batches
+                                        </span>
+                                    </div>
+                                </div>
 
-                                    {/* Expanded Content */}
-                                    {isExpanded && (
-                                        <div className="border-t border-zinc-700 p-3 space-y-3">
-                                            {/* Batch files in group */}
-                                            <div>
-                                                <span className="text-xs text-zinc-500 block mb-2">Batches in Order</span>
-                                                <div className="flex flex-wrap gap-1">
-                                                    {group.batch_files.map((file, idx) => (
-                                                        <span
-                                                            key={file}
-                                                            className="inline-flex items-center gap-1 px-2 py-0.5 bg-zinc-700 text-zinc-300 rounded text-xs"
-                                                        >
-                                                            <span className="text-zinc-500">{idx + 1}.</span>
-                                                            {file}
-                                                        </span>
-                                                    ))}
-                                                    {group.batch_files.length === 0 && (
-                                                        <span className="text-xs text-zinc-500 italic">No batches in group</span>
-                                                    )}
-                                                </div>
-                                            </div>
-
-                                            {/* Server Operations Row */}
-                                            <div className="flex items-center gap-2 flex-wrap">
-                                                <select
-                                                    value={selectedServerId}
-                                                    onChange={(e) => setSelectedServerId(e.target.value)}
-                                                    className="bg-zinc-900 border border-zinc-700 rounded px-2 py-1 text-xs text-zinc-300"
-                                                >
-                                                    {sshServers.length === 0 && <option value="">No servers</option>}
-                                                    {sshServers.map(s => (
-                                                        <option key={s.id} value={s.id}>{s.name}</option>
-                                                    ))}
-                                                </select>
-                                                <button
-                                                    onClick={() => handleCheckGroupRemote(group.id, selectedServerId)}
-                                                    disabled={!selectedServerId || isLoading}
-                                                    className="px-2 py-1 bg-zinc-700 hover:bg-zinc-600 text-zinc-300 rounded text-xs transition disabled:opacity-50"
-                                                >
-                                                    Check
-                                                </button>
-                                                <button
-                                                    onClick={() => handleOpenPushModal('group', group.id)}
-                                                    disabled={!selectedServerId || isLoading}
-                                                    className="px-2 py-1 bg-cyan-600/20 hover:bg-cyan-600 text-cyan-400 hover:text-white rounded text-xs transition disabled:opacity-50"
-                                                >
-                                                    Push
-                                                </button>
-                                                <button
-                                                    onClick={() => handlePullGroupRemote(group.id, selectedServerId)}
-                                                    disabled={!selectedServerId || isLoading}
-                                                    className="px-2 py-1 bg-emerald-600/20 hover:bg-emerald-600 text-emerald-400 hover:text-white rounded text-xs transition disabled:opacity-50"
-                                                >
-                                                    Pull
-                                                </button>
-                                                <button
-                                                    onClick={() => handleDeleteGroupRemote(group.id, selectedServerId)}
-                                                    disabled={!selectedServerId || isLoading}
-                                                    className="px-2 py-1 bg-red-600/20 hover:bg-red-600 text-red-400 hover:text-white rounded text-xs transition disabled:opacity-50"
-                                                >
-                                                    Del Remote
-                                                </button>
-                                                {groupRemoteStatus[group.id]?.[selectedServerId] !== undefined && (
-                                                    <span className={`text-xs px-2 py-0.5 rounded ${groupRemoteStatus[group.id][selectedServerId] ? 'bg-emerald-600/20 text-emerald-400' : 'bg-zinc-700 text-zinc-400'}`}>
-                                                        {groupRemoteStatus[group.id][selectedServerId] ? '✓ Exists' : '✗ Missing'}
-                                                    </span>
-                                                )}
-                                            </div>
-
-                                            {/* Script Preview */}
-                                            {scriptContent && (
-                                                <div className="space-y-2">
-                                                    <span className="text-xs text-zinc-500">Generated Script</span>
-                                                    <pre className="bg-zinc-900 border border-zinc-800 rounded p-2 text-xs font-mono text-zinc-400 max-h-48 overflow-auto whitespace-pre-wrap">
-                                                        {scriptContent}
-                                                    </pre>
-                                                </div>
-                                            )}
-                                        </div>
+                                {/* Batch files in group */}
+                                <div className="flex flex-wrap gap-1 mb-3">
+                                    {group.batch_files.map((file, idx) => (
+                                        <span
+                                            key={file}
+                                            className="inline-flex items-center gap-1 px-2 py-0.5 bg-zinc-700 text-zinc-300 rounded text-xs"
+                                        >
+                                            <span className="text-zinc-500">{idx + 1}.</span>
+                                            {file}
+                                        </span>
+                                    ))}
+                                    {group.batch_files.length === 0 && (
+                                        <span className="text-xs text-zinc-500 italic">No batches in group</span>
                                     )}
                                 </div>
-                            );
-                        })}
+
+                                {/* Actions */}
+                                <div className="flex gap-2">
+                                    <button
+                                        onClick={() => handleGenerateGroupScript(group.id)}
+                                        disabled={groupsLoading || group.batch_files.length === 0}
+                                        className="flex items-center gap-1 px-2 py-1 bg-emerald-600/20 hover:bg-emerald-600 text-emerald-400 hover:text-white rounded text-xs transition disabled:opacity-50"
+                                    >
+                                        <FileCode size={12} /> Generate Script
+                                    </button>
+                                    <button
+                                        onClick={() => handleOpenPushModal('group', group.id)}
+                                        className="flex items-center gap-1 px-2 py-1 bg-cyan-600/20 hover:bg-cyan-600 text-cyan-400 hover:text-white rounded text-xs transition"
+                                    >
+                                        <Server size={12} /> Push
+                                    </button>
+                                    <button
+                                        onClick={() => handleDeleteGroup(group.id)}
+                                        className="flex items-center gap-1 px-2 py-1 bg-red-600/20 hover:bg-red-600 text-red-400 hover:text-white rounded text-xs transition"
+                                    >
+                                        <Trash2 size={12} />
+                                    </button>
+                                </div>
+                            </div>
+                        ))}
                     </div>
                 )}
             </Card>
@@ -1844,146 +1526,146 @@ const BatchGenerator: React.FC<BatchGeneratorProps> = ({ activeSection }) => {
                             </div>
                         </div>
                     </div>
-                </div>
-            )}
+                            </div>
+)}
 
-            {/* User Summary Modal */}
-            {showUserSummary && (
-                <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 overflow-y-auto p-4">
-                    <div className="bg-zinc-900 border border-zinc-700 rounded-xl p-6 w-full max-w-4xl shadow-2xl my-8">
-                        <div className="flex items-center justify-between mb-4">
-                            <h3 className="text-lg font-bold text-white flex items-center gap-2">
-                                <List size={20} className="text-cyan-400" />
-                                User Summary - Batch File Presence
-                            </h3>
-                            <button
-                                onClick={() => setShowUserSummary(false)}
-                                className="text-zinc-400 hover:text-white"
-                            >
-                                <X size={20} />
-                            </button>
-                        </div>
+                {/* User Summary Modal */}
+                {showUserSummary && (
+                    <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 overflow-y-auto p-4">
+                        <div className="bg-zinc-900 border border-zinc-700 rounded-xl p-6 w-full max-w-4xl shadow-2xl my-8">
+                            <div className="flex items-center justify-between mb-4">
+                                <h3 className="text-lg font-bold text-white flex items-center gap-2">
+                                    <List size={20} className="text-cyan-400" />
+                                    User Summary - Batch File Presence
+                                </h3>
+                                <button
+                                    onClick={() => setShowUserSummary(false)}
+                                    className="text-zinc-400 hover:text-white"
+                                >
+                                    <X size={20} />
+                                </button>
+                            </div>
 
-                        {!userSummaryData ? (
-                            <div className="text-center py-8 text-zinc-400">Loading user summary...</div>
-                        ) : (
-                            <>
-                                {/* Summary Stats */}
-                                <div className="flex items-center gap-4 mb-4 text-sm">
-                                    <div className="bg-cyan-600/20 px-3 py-2 rounded">
-                                        <span className="text-cyan-400 font-bold">{userSummaryData.total_users}</span>
-                                        <span className="text-zinc-400 ml-2">unique users</span>
-                                    </div>
-                                    <div className="bg-zinc-800 px-3 py-2 rounded">
-                                        <span className="text-zinc-400">Across</span>
-                                        <span className="text-amber-400 ml-2 font-bold">{userSummaryData.total_batches}</span>
-                                        <span className="text-zinc-400 ml-2">batch files</span>
-                                    </div>
-                                </div>
-
-                                {/* User Table */}
-                                <div className="max-h-96 overflow-y-auto bg-zinc-800/50 rounded border border-zinc-700">
-                                    <table className="w-full text-sm">
-                                        <thead className="bg-zinc-800 sticky top-0">
-                                            <tr>
-                                                <th className="text-left px-4 py-2 text-zinc-400 font-medium">User Email</th>
-                                                <th className="text-left px-4 py-2 text-zinc-400 font-medium">Present In Batches</th>
-                                            </tr>
-                                        </thead>
-                                        <tbody>
-                                            {Object.entries(userSummaryData.users).map(([email, batches]) => (
-                                                <tr key={email} className="border-t border-zinc-700 hover:bg-zinc-800/50">
-                                                    <td className="px-4 py-2 text-cyan-300 font-mono text-xs">{email}</td>
-                                                    <td className="px-4 py-2">
-                                                        <div className="flex flex-wrap gap-1">
-                                                            {batches.map((batch) => (
-                                                                <span key={batch} className="px-2 py-0.5 bg-amber-600/20 text-amber-400 rounded text-xs">
-                                                                    {batch}
-                                                                </span>
-                                                            ))}
-                                                        </div>
-                                                    </td>
-                                                </tr>
-                                            ))}
-                                        </tbody>
-                                    </table>
-                                    {Object.keys(userSummaryData.users).length === 0 && (
-                                        <div className="text-center py-8 text-zinc-500 italic">
-                                            No users found in batch files
+                            {!userSummaryData ? (
+                                <div className="text-center py-8 text-zinc-400">Loading user summary...</div>
+                            ) : (
+                                <>
+                                    {/* Summary Stats */}
+                                    <div className="flex items-center gap-4 mb-4 text-sm">
+                                        <div className="bg-cyan-600/20 px-3 py-2 rounded">
+                                            <span className="text-cyan-400 font-bold">{userSummaryData.total_users}</span>
+                                            <span className="text-zinc-400 ml-2">unique users</span>
                                         </div>
-                                    )}
-                                </div>
-
-                                {/* Batch List */}
-                                <div className="mt-4">
-                                    <h4 className="text-xs font-bold text-zinc-500 uppercase tracking-wider mb-2">Batch Files</h4>
-                                    <div className="flex flex-wrap gap-2">
-                                        {userSummaryData.batches.map((batch) => (
-                                            <span key={batch} className="px-3 py-1 bg-zinc-800 text-zinc-300 rounded text-xs">
-                                                {batch}
-                                            </span>
-                                        ))}
+                                        <div className="bg-zinc-800 px-3 py-2 rounded">
+                                            <span className="text-zinc-400">Across</span>
+                                            <span className="text-amber-400 ml-2 font-bold">{userSummaryData.total_batches}</span>
+                                            <span className="text-zinc-400 ml-2">batch files</span>
+                                        </div>
                                     </div>
-                                </div>
-                            </>
-                        )}
 
-                        <div className="flex justify-end mt-4">
-                            <button
-                                onClick={() => setShowUserSummary(false)}
-                                className="px-4 py-2 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 rounded-lg text-sm transition"
-                            >
-                                Close
-                            </button>
+                                    {/* User Table */}
+                                    <div className="max-h-96 overflow-y-auto bg-zinc-800/50 rounded border border-zinc-700">
+                                        <table className="w-full text-sm">
+                                            <thead className="bg-zinc-800 sticky top-0">
+                                                <tr>
+                                                    <th className="text-left px-4 py-2 text-zinc-400 font-medium">User Email</th>
+                                                    <th className="text-left px-4 py-2 text-zinc-400 font-medium">Present In Batches</th>
+                                                </tr>
+                                            </thead>
+                                            <tbody>
+                                                {Object.entries(userSummaryData.users).map(([email, batches]) => (
+                                                    <tr key={email} className="border-t border-zinc-700 hover:bg-zinc-800/50">
+                                                        <td className="px-4 py-2 text-cyan-300 font-mono text-xs">{email}</td>
+                                                        <td className="px-4 py-2">
+                                                            <div className="flex flex-wrap gap-1">
+                                                                {batches.map((batch) => (
+                                                                    <span key={batch} className="px-2 py-0.5 bg-amber-600/20 text-amber-400 rounded text-xs">
+                                                                        {batch}
+                                                                    </span>
+                                                                ))}
+                                                            </div>
+                                                        </td>
+                                                    </tr>
+                                                ))}
+                                            </tbody>
+                                        </table>
+                                        {Object.keys(userSummaryData.users).length === 0 && (
+                                            <div className="text-center py-8 text-zinc-500 italic">
+                                                No users found in batch files
+                                            </div>
+                                        )}
+                                    </div>
+
+                                    {/* Batch List */}
+                                    <div className="mt-4">
+                                        <h4 className="text-xs font-bold text-zinc-500 uppercase tracking-wider mb-2">Batch Files</h4>
+                                        <div className="flex flex-wrap gap-2">
+                                            {userSummaryData.batches.map((batch) => (
+                                                <span key={batch} className="px-3 py-1 bg-zinc-800 text-zinc-300 rounded text-xs">
+                                                    {batch}
+                                                </span>
+                                            ))}
+                                        </div>
+                                    </div>
+                                </>
+                            )}
+
+                            <div className="flex justify-end mt-4">
+                                <button
+                                    onClick={() => setShowUserSummary(false)}
+                                    className="px-4 py-2 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 rounded-lg text-sm transition"
+                                >
+                                    Close
+                                </button>
+                            </div>
                         </div>
                     </div>
-                </div>
-            )}
+                )}
 
-            {/* Push Modal */}
-            {showPushModal && (
-                <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
-                    <div className="bg-zinc-900 border border-zinc-700 rounded-xl p-6 w-full max-w-sm shadow-2xl">
-                        <h3 className="text-lg font-bold text-white mb-4 flex items-center gap-2">
-                            <Server size={20} className="text-cyan-400" />
-                            Push to Remote
-                        </h3>
-                        <p className="text-sm text-zinc-400 mb-4">
-                            Pushing <span className="font-mono text-white">{pushTargetId}</span> to remote server.
-                        </p>
+                {/* Push Modal */}
+                {showPushModal && (
+                    <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
+                        <div className="bg-zinc-900 border border-zinc-700 rounded-xl p-6 w-full max-w-sm shadow-2xl">
+                            <h3 className="text-lg font-bold text-white mb-4 flex items-center gap-2">
+                                <Server size={20} className="text-cyan-400" />
+                                Push to Remote
+                            </h3>
+                            <p className="text-sm text-zinc-400 mb-4">
+                                Pushing <span className="font-mono text-white">{pushTargetId}</span> to remote server.
+                            </p>
 
-                        <div className="mb-6">
-                            <label className="block text-xs text-zinc-500 mb-1">Select Server</label>
-                            <select
-                                value={selectedServerId}
-                                onChange={(e) => setSelectedServerId(e.target.value)}
-                                className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-white text-sm"
-                            >
-                                {sshServers.map(s => (
-                                    <option key={s.id} value={s.id}>{s.name} ({s.host})</option>
-                                ))}
-                            </select>
-                        </div>
+                            <div className="mb-6">
+                                <label className="block text-xs text-zinc-500 mb-1">Select Server</label>
+                                <select
+                                    value={selectedServerId}
+                                    onChange={(e) => setSelectedServerId(e.target.value)}
+                                    className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-white text-sm"
+                                >
+                                    {sshServers.map(s => (
+                                        <option key={s.id} value={s.id}>{s.name} ({s.host})</option>
+                                    ))}
+                                </select>
+                            </div>
 
-                        <div className="flex gap-2 justify-end">
-                            <button
-                                onClick={() => setShowPushModal(false)}
-                                className="px-4 py-2 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 rounded-lg text-sm transition"
-                            >
-                                Cancel
-                            </button>
-                            <button
-                                onClick={handlePush}
-                                disabled={pushing}
-                                className="px-4 py-2 bg-cyan-600 hover:bg-cyan-500 disabled:opacity-50 text-white rounded-lg text-sm font-medium transition flex items-center gap-2"
-                            >
-                                {pushing ? 'Pushing...' : 'Push'}
-                            </button>
+                            <div className="flex gap-2 justify-end">
+                                <button
+                                    onClick={() => setShowPushModal(false)}
+                                    className="px-4 py-2 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 rounded-lg text-sm transition"
+                                >
+                                    Cancel
+                                </button>
+                                <button
+                                    onClick={handlePush}
+                                    disabled={pushing}
+                                    className="px-4 py-2 bg-cyan-600 hover:bg-cyan-500 disabled:opacity-50 text-white rounded-lg text-sm font-medium transition flex items-center gap-2"
+                                >
+                                    {pushing ? 'Pushing...' : 'Push'}
+                                </button>
+                            </div>
                         </div>
                     </div>
-                </div>
-            )}
-        </div>
+                )}
+            </div>
     );
 };
 

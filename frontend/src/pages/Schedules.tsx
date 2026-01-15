@@ -1,18 +1,34 @@
 import React, { useState, useEffect } from 'react';
-import { Calendar, Plus, Trash2, Pause, Play, Clock, AlertCircle } from 'lucide-react';
+import { Calendar, Plus, Trash2, Pause, Play, Clock, AlertCircle, Server, ChevronDown, ChevronUp, FileCode } from 'lucide-react';
 import { LoadingSpinner } from '../components/LoadingSpinner';
 import { PageHeader } from '../components/PageHeader';
 import { EmptyState } from '../components/EmptyState';
 import { Card } from '../components/Card';
 import { formatDate } from '../utils/formatters';
-import { 
-    fetchSchedules, 
-    createSchedule, 
-    deleteSchedule, 
-    pauseSchedule, 
+import {
+    fetchSchedules,
+    createSchedule,
+    deleteSchedule,
+    pauseSchedule,
     resumeSchedule,
     Schedule,
-    CreateScheduleRequest 
+    CreateScheduleRequest,
+    fetchSSHServers,
+    SSHServer,
+    getCronPresets,
+    CronPreset,
+    getServerCrontab,
+    initServerCrontab,
+    addCrontabEntry,
+    deleteCrontabEntry,
+    generateCrontabFile,
+    CrontabConfig,
+    CrontabEntry,
+    listSavedBatches,
+    listBatchGroups,
+    BatchFile,
+    BatchGroup,
+    installCrontab
 } from '../api';
 
 // Common cron presets
@@ -26,12 +42,26 @@ const CRON_PRESETS = [
     { label: 'First of month at midnight', value: '0 0 1 * *' },
 ];
 
-const SchedulesPage: React.FC = () => {
+interface SchedulesPageProps {
+    activeSection?: string | null;
+}
+
+const SchedulesPage: React.FC<SchedulesPageProps> = ({ activeSection }) => {
+    // Scroll to section when activeSection changes
+    useEffect(() => {
+        if (activeSection) {
+            const element = document.getElementById(activeSection);
+            if (element) {
+                element.scrollIntoView({ behavior: 'smooth' });
+            }
+        }
+    }, [activeSection]);
+
     const [schedules, setSchedules] = useState<Schedule[]>([]);
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
     const [showForm, setShowForm] = useState(false);
-    
+
     // Form state
     const [formName, setFormName] = useState('');
     const [formSource, setFormSource] = useState('');
@@ -39,6 +69,120 @@ const SchedulesPage: React.FC = () => {
     const [formCron, setFormCron] = useState('0 2 * * *');
     const [formDryRun, setFormDryRun] = useState(false);
     const [formSubmitting, setFormSubmitting] = useState(false);
+
+    // Remote Crontab State
+    const [showRemoteSection, setShowRemoteSection] = useState(true);
+    const [servers, setServers] = useState<SSHServer[]>([]);
+    const [selectedServer, setSelectedServer] = useState<SSHServer | null>(null);
+    const [serverCrontab, setServerCrontab] = useState<CrontabConfig | null>(null);
+    const [cronPresets, setCronPresets] = useState<CronPreset[]>([]);
+    const [savedBatches, setSavedBatches] = useState<BatchFile[]>([]);
+    const [batchGroups, setBatchGroups] = useState<BatchGroup[]>([]);
+    const [remoteCronLoading, setRemoteCronLoading] = useState(false);
+
+    // New crontab entry form
+    const [showCronEntryForm, setShowCronEntryForm] = useState(false);
+    const [cronEntryType, setCronEntryType] = useState<'batch' | 'group'>('batch');
+    const [cronEntryCommand, setCronEntryCommand] = useState('');
+    const [cronEntryCron, setCronEntryCron] = useState('0 0 * * *');
+    const [cronEntryAnnotation, setCronEntryAnnotation] = useState('');
+
+    const loadRemoteData = async () => {
+        try {
+            const [srvs, presets, batches, groups] = await Promise.all([
+                fetchSSHServers(),
+                getCronPresets(),
+                listSavedBatches(),
+                listBatchGroups()
+            ]);
+            setServers(srvs);
+            setCronPresets(presets.presets);
+            setSavedBatches(batches);
+            setBatchGroups(groups);
+        } catch (e) {
+            console.error('Failed to load remote data', e);
+        }
+    };
+
+    const loadServerCrontab = async (server: SSHServer) => {
+        setSelectedServer(server);
+        setRemoteCronLoading(true);
+        try {
+            let config = await getServerCrontab(server.id);
+            if (!config.entries) {
+                // Initialize if not exists
+                await initServerCrontab(server.id, server.name);
+                config = await getServerCrontab(server.id);
+            }
+            setServerCrontab(config);
+        } catch (e: any) {
+            console.error('Failed to load crontab', e);
+        } finally {
+            setRemoteCronLoading(false);
+        }
+    };
+
+    const handleAddCronEntry = async () => {
+        if (!selectedServer || !cronEntryCommand || !cronEntryCron) return;
+        setRemoteCronLoading(true);
+        try {
+            await addCrontabEntry(selectedServer.id, {
+                command_type: cronEntryType,
+                command_name: cronEntryCommand,
+                cron_expression: cronEntryCron,
+                annotation: cronEntryAnnotation
+            });
+            setCronEntryCommand('');
+            setCronEntryCron('0 0 * * *');
+            setCronEntryAnnotation('');
+            setShowCronEntryForm(false);
+            await loadServerCrontab(selectedServer);
+        } catch (e: any) {
+            alert(`Failed: ${e.response?.data?.detail || e.message}`);
+        } finally {
+            setRemoteCronLoading(false);
+        }
+    };
+
+    const handleDeleteCronEntry = async (entryId: string) => {
+        if (!selectedServer || !confirm('Delete this crontab entry?')) return;
+        try {
+            await deleteCrontabEntry(selectedServer.id, entryId);
+            await loadServerCrontab(selectedServer);
+        } catch (e: any) {
+            alert(`Failed: ${e.message}`);
+        }
+    };
+
+    const handleGenerateCrontab = async () => {
+        if (!selectedServer) return;
+        setRemoteCronLoading(true);
+        try {
+            const result = await generateCrontabFile(selectedServer.id);
+            alert(`✅ Crontab generated!\n${result.entry_count} entries`);
+            // Show preview in console
+            console.log('Generated crontab:', result.content);
+        } catch (e: any) {
+            alert(`Failed: ${e.message}`);
+        } finally {
+            setRemoteCronLoading(false);
+        }
+    };
+
+    const handleInstallCrontab = async () => {
+        if (!selectedServer) return;
+        if (!confirm(`Are you sure you want to install this crontab to ${selectedServer.name}? This will overwrite the existing crontab.`)) return;
+
+        setRemoteCronLoading(true);
+        try {
+            await installCrontab(selectedServer.id);
+            alert('Crontab installed successfully!');
+        } catch (e: any) {
+            alert(`Failed to install: ${e.message}`);
+        } finally {
+            setRemoteCronLoading(false);
+        }
+    };
 
     const loadSchedules = async () => {
         setLoading(true);
@@ -62,7 +206,7 @@ const SchedulesPage: React.FC = () => {
             alert('Please fill in all required fields');
             return;
         }
-        
+
         setFormSubmitting(true);
         try {
             const req: CreateScheduleRequest = {
@@ -72,9 +216,9 @@ const SchedulesPage: React.FC = () => {
                 cron_expression: formCron,
                 dry_run: formDryRun,
             };
-            
+
             await createSchedule(req);
-            
+
             // Reset form and refresh
             setFormName('');
             setFormSource('');
@@ -93,7 +237,7 @@ const SchedulesPage: React.FC = () => {
 
     const handleDeleteSchedule = async (id: string) => {
         if (!confirm('Are you sure you want to delete this schedule?')) return;
-        
+
         try {
             await deleteSchedule(id);
             loadSchedules();
@@ -117,6 +261,7 @@ const SchedulesPage: React.FC = () => {
 
     useEffect(() => {
         loadSchedules();
+        loadRemoteData();
     }, []);
 
     if (loading) {
@@ -168,7 +313,7 @@ const SchedulesPage: React.FC = () => {
             {showForm && (
                 <Card className="mb-6">
                     <h3 className="text-lg font-medium text-white mb-4">Create New Schedule</h3>
-                    
+
                     <div className="grid grid-cols-2 gap-4 mb-4">
                         <div>
                             <label className="block text-sm text-zinc-400 mb-1">Schedule Name *</label>
@@ -202,7 +347,7 @@ const SchedulesPage: React.FC = () => {
                             </div>
                         </div>
                     </div>
-                    
+
                     <div className="grid grid-cols-2 gap-4 mb-4">
                         <div>
                             <label className="block text-sm text-zinc-400 mb-1">Source Path *</label>
@@ -225,7 +370,7 @@ const SchedulesPage: React.FC = () => {
                             />
                         </div>
                     </div>
-                    
+
                     <div className="flex items-center gap-4 mb-6">
                         <label className="flex items-center gap-2 cursor-pointer">
                             <input
@@ -237,7 +382,7 @@ const SchedulesPage: React.FC = () => {
                             <span className="text-sm text-zinc-300">Dry Run (test without making changes)</span>
                         </label>
                     </div>
-                    
+
                     <div className="flex gap-3">
                         <button
                             onClick={handleCreateSchedule}
@@ -270,7 +415,7 @@ const SchedulesPage: React.FC = () => {
             )}
 
             {/* Schedules List */}
-            <div className="space-y-3">
+            <div id="local-schedules" className="space-y-3">
                 {schedules.map((schedule) => (
                     <Card
                         key={schedule.id}
@@ -280,7 +425,7 @@ const SchedulesPage: React.FC = () => {
                         <div className="p-4 flex items-center gap-4">
                             {/* Status Indicator */}
                             <div className={`w-3 h-3 rounded-full ${schedule.enabled ? 'bg-green-500' : 'bg-zinc-600'}`} />
-                            
+
                             {/* Main Info */}
                             <div className="flex-1 min-w-0">
                                 <div className="flex items-center gap-2 mb-1">
@@ -304,7 +449,7 @@ const SchedulesPage: React.FC = () => {
                                     </span>
                                 </div>
                             </div>
-                            
+
                             {/* Timing Info */}
                             <div className="text-right text-sm w-48">
                                 <div className="flex items-center gap-1 text-zinc-400 justify-end">
@@ -315,16 +460,15 @@ const SchedulesPage: React.FC = () => {
                                     Last: {formatDate(schedule.last_run)}
                                 </div>
                             </div>
-                            
+
                             {/* Actions */}
                             <div className="flex gap-2">
                                 <button
                                     onClick={() => handleToggleSchedule(schedule.id, schedule.enabled)}
-                                    className={`p-2 rounded-lg transition ${
-                                        schedule.enabled 
-                                            ? 'bg-zinc-800 hover:bg-zinc-700 text-yellow-400' 
-                                            : 'bg-zinc-800 hover:bg-zinc-700 text-green-400'
-                                    }`}
+                                    className={`p-2 rounded-lg transition ${schedule.enabled
+                                        ? 'bg-zinc-800 hover:bg-zinc-700 text-yellow-400'
+                                        : 'bg-zinc-800 hover:bg-zinc-700 text-green-400'
+                                        }`}
                                     title={schedule.enabled ? 'Pause' : 'Resume'}
                                 >
                                     {schedule.enabled ? <Pause size={16} /> : <Play size={16} />}
@@ -340,6 +484,187 @@ const SchedulesPage: React.FC = () => {
                         </div>
                     </Card>
                 ))}
+            </div>
+
+            {/* Remote Schedules / Cronjobs Section */}
+            <div id="remote-schedules" className="mt-8">
+                <button
+                    onClick={() => setShowRemoteSection(!showRemoteSection)}
+                    className="flex items-center gap-2 text-lg font-bold text-cyan-400 mb-4 hover:text-cyan-300 transition"
+                >
+                    {showRemoteSection ? <ChevronUp size={20} /> : <ChevronDown size={20} />}
+                    <Server size={18} />
+                    Remote Schedules / Cronjobs
+                </button>
+
+                {showRemoteSection && (
+                    <div className="space-y-4">
+                        {/* Server Selection */}
+                        <div className="flex gap-2 flex-wrap">
+                            {servers.map((srv) => (
+                                <button
+                                    key={srv.id}
+                                    onClick={() => loadServerCrontab(srv)}
+                                    className={`px-4 py-2 rounded-lg text-sm font-medium transition ${selectedServer?.id === srv.id
+                                        ? 'bg-cyan-600 text-white'
+                                        : 'bg-zinc-800 text-zinc-300 hover:bg-zinc-700'
+                                        }`}
+                                >
+                                    {srv.name}
+                                </button>
+                            ))}
+                            {servers.length === 0 && (
+                                <div className="text-zinc-500 italic">No SSH servers configured. Add servers in Settings.</div>
+                            )}
+                        </div>
+
+                        {/* Selected Server Crontab */}
+                        {selectedServer && (
+                            <Card>
+                                <div className="flex items-center justify-between mb-4">
+                                    <h3 className="font-medium text-white">
+                                        Crontab for {selectedServer.name}
+                                    </h3>
+                                    <div className="flex gap-2">
+                                        <button
+                                            onClick={() => setShowCronEntryForm(true)}
+                                            className="flex items-center gap-1 px-3 py-1 bg-cyan-600 hover:bg-cyan-500 text-white rounded text-xs font-medium transition"
+                                        >
+                                            <Plus size={14} /> Add Entry
+                                        </button>
+                                        <button
+                                            onClick={handleGenerateCrontab}
+                                            disabled={remoteCronLoading}
+                                            className="flex items-center gap-1 px-3 py-1 bg-zinc-700 hover:bg-zinc-600 disabled:opacity-50 text-white rounded text-xs font-medium transition"
+                                        >
+                                            <FileCode size={14} /> Generate
+                                        </button>
+                                        <button
+                                            onClick={handleInstallCrontab}
+                                            disabled={remoteCronLoading}
+                                            className="flex items-center gap-1 px-3 py-1 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white rounded text-xs font-medium transition"
+                                        >
+                                            <Server size={14} /> Install
+                                        </button>
+                                    </div>
+                                </div>
+
+                                {remoteCronLoading ? (
+                                    <div className="text-center py-4 text-zinc-500">Loading...</div>
+                                ) : serverCrontab?.entries?.length === 0 ? (
+                                    <div className="text-center py-4 text-zinc-500 italic">No crontab entries yet.</div>
+                                ) : (
+                                    <div className="space-y-2">
+                                        {serverCrontab?.entries?.map((entry) => (
+                                            <div key={entry.id} className={`bg-zinc-800 rounded-lg p-3 ${!entry.enabled ? 'opacity-50' : ''}`}>
+                                                <div className="flex items-center justify-between">
+                                                    <div className="flex items-center gap-3">
+                                                        <span className={`px-2 py-0.5 rounded text-xs font-medium ${entry.command_type === 'batch' ? 'bg-amber-600/20 text-amber-400' : 'bg-purple-600/20 text-purple-400'
+                                                            }`}>
+                                                            {entry.command_type}
+                                                        </span>
+                                                        <span className="text-white font-mono text-sm">{entry.command_name}</span>
+                                                    </div>
+                                                    <div className="flex items-center gap-2">
+                                                        <span className="text-cyan-400 font-mono text-sm">{entry.cron_expression}</span>
+                                                        <button
+                                                            onClick={() => handleDeleteCronEntry(entry.id)}
+                                                            className="p-1 text-zinc-500 hover:text-red-400 transition"
+                                                        >
+                                                            <Trash2 size={14} />
+                                                        </button>
+                                                    </div>
+                                                </div>
+                                                {entry.annotation && (
+                                                    <div className="text-xs text-zinc-500 mt-1">{entry.annotation}</div>
+                                                )}
+                                            </div>
+                                        ))}
+                                    </div>
+                                )}
+
+                                {/* Add Entry Form */}
+                                {showCronEntryForm && (
+                                    <div className="mt-4 p-4 bg-zinc-800/50 rounded-lg border border-zinc-700">
+                                        <h4 className="text-sm font-medium text-white mb-3">Add Crontab Entry</h4>
+                                        <div className="grid grid-cols-2 gap-4 mb-3">
+                                            <div>
+                                                <label className="block text-xs text-zinc-500 mb-1">Type</label>
+                                                <select
+                                                    value={cronEntryType}
+                                                    onChange={(e) => setCronEntryType(e.target.value as 'batch' | 'group')}
+                                                    className="w-full bg-zinc-800 border border-zinc-700 rounded px-3 py-2 text-white text-sm"
+                                                >
+                                                    <option value="batch">Batch</option>
+                                                    <option value="group">Group</option>
+                                                </select>
+                                            </div>
+                                            <div>
+                                                <label className="block text-xs text-zinc-500 mb-1">Command</label>
+                                                <select
+                                                    value={cronEntryCommand}
+                                                    onChange={(e) => setCronEntryCommand(e.target.value)}
+                                                    className="w-full bg-zinc-800 border border-zinc-700 rounded px-3 py-2 text-white text-sm"
+                                                >
+                                                    <option value="">Select...</option>
+                                                    {cronEntryType === 'batch'
+                                                        ? savedBatches.map((b) => <option key={b.name} value={b.name}>{b.name}</option>)
+                                                        : batchGroups.map((g) => <option key={g.id} value={`group_${g.name.replace(/\s+/g, '_').toLowerCase()}.sh`}>{g.name}</option>)
+                                                    }
+                                                </select>
+                                            </div>
+                                        </div>
+                                        <div className="grid grid-cols-2 gap-4 mb-3">
+                                            <div>
+                                                <label className="block text-xs text-zinc-500 mb-1">Cron Expression</label>
+                                                <div className="flex gap-2">
+                                                    <input
+                                                        type="text"
+                                                        value={cronEntryCron}
+                                                        onChange={(e) => setCronEntryCron(e.target.value)}
+                                                        className="flex-1 bg-zinc-800 border border-zinc-700 rounded px-3 py-2 text-white font-mono text-sm"
+                                                    />
+                                                    <select
+                                                        onChange={(e) => e.target.value && setCronEntryCron(e.target.value)}
+                                                        className="bg-zinc-800 border border-zinc-700 rounded px-2 py-2 text-sm text-white"
+                                                    >
+                                                        <option value="">Preset...</option>
+                                                        {cronPresets.map((p) => <option key={p.expression} value={p.expression}>{p.name}</option>)}
+                                                    </select>
+                                                </div>
+                                            </div>
+                                            <div>
+                                                <label className="block text-xs text-zinc-500 mb-1">Annotation (optional)</label>
+                                                <input
+                                                    type="text"
+                                                    value={cronEntryAnnotation}
+                                                    onChange={(e) => setCronEntryAnnotation(e.target.value)}
+                                                    placeholder="e.g., Daily backup"
+                                                    className="w-full bg-zinc-800 border border-zinc-700 rounded px-3 py-2 text-white text-sm"
+                                                />
+                                            </div>
+                                        </div>
+                                        <div className="flex gap-2">
+                                            <button
+                                                onClick={handleAddCronEntry}
+                                                disabled={!cronEntryCommand || !cronEntryCron}
+                                                className="px-4 py-2 bg-cyan-600 hover:bg-cyan-500 disabled:opacity-50 text-white rounded text-sm font-medium transition"
+                                            >
+                                                Add Entry
+                                            </button>
+                                            <button
+                                                onClick={() => setShowCronEntryForm(false)}
+                                                className="px-4 py-2 bg-zinc-700 hover:bg-zinc-600 text-white rounded text-sm transition"
+                                            >
+                                                Cancel
+                                            </button>
+                                        </div>
+                                    </div>
+                                )}
+                            </Card>
+                        )}
+                    </div>
+                )}
             </div>
         </div>
     );

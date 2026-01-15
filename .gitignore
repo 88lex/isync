@@ -18,6 +18,8 @@ synclist.yaml
 !run_isync_remote.sh
 *.txt
 !requirements.txt
+batch/*
+!batch/.gitkeep
 
 # --- Runtime State & Databases ---
 current_status.json

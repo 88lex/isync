@@ -36,7 +36,7 @@ def get_hardcoded_defaults():
         'ssh_user': '',
         'ssh_key_path': '',
         'ssh_alias': '',
-        'ssh_remote_path': '~/isync',
+        'ssh_remote_path': '/opt/isync',
         'ssh_connect_timeout': 10,
         'protected_users': [],
         'include_protected_users': False,

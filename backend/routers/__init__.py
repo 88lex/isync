@@ -11,6 +11,9 @@ from backend.routers.ops import router as ops_router
 from backend.routers.schedules import router as schedules_router
 from backend.routers.orchestrator import router as orchestrator_router
 from backend.routers.admin import router as admin_router
+from backend.routers.batch_groups import router as batch_groups_router
+from backend.routers.crontab import router as crontab_router
+from backend.routers.rclone import router as rclone_router
 
 # Export all routers for easy import in main.py
 __all__ = [
@@ -23,4 +26,7 @@ __all__ = [
     "schedules_router",
     "orchestrator_router",
     "admin_router",
+    "batch_groups_router",
+    "crontab_router",
+    "rclone_router",
 ]

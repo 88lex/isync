@@ -4,6 +4,7 @@ interface CardProps {
     children: React.ReactNode;
     className?: string;
     padding?: 'none' | 'sm' | 'md' | 'lg';
+    id?: string;
 }
 
 const paddingMap = {
@@ -19,10 +20,11 @@ const paddingMap = {
 export const Card: React.FC<CardProps> = ({
     children,
     className = '',
-    padding = 'md'
+    padding = 'md',
+    id
 }) => {
     return (
-        <div className={`bg-zinc-900 border border-zinc-800 rounded-xl ${paddingMap[padding]} ${className}`}>
+        <div id={id} className={`bg-zinc-900 border border-zinc-800 rounded-xl ${paddingMap[padding]} ${className}`}>
             {children}
         </div>
     );

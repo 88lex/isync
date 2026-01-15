@@ -15,16 +15,24 @@ import SchedulesPage from './pages/Schedules';
 import RemoteServers from './pages/RemoteServers';
 import DriveManager from './pages/DriveManager';
 import PrepCheck from './pages/PrepCheck';
+import RemoteSync from './pages/RemoteSync';
+import RcloneManagement from './pages/RcloneManagement';
 import ErrorBoundary from './components/ErrorBoundary';
 import { ConfigStatusIndicator } from './components/ConfigStatusIndicator';
 
-type ViewType = 'dashboard' | 'users' | 'batch' | 'config' | 'sync' | 'history' | 'schedules' | 'servers' | 'drives' | 'prep';
+type ViewType = 'dashboard' | 'users' | 'batch' | 'config' | 'sync' | 'history' | 'schedules' | 'servers' | 'drives' | 'prep' | 'remotesync' | 'rclone';
 
 // Define navigation groups
+interface SubItem {
+  id: string;
+  label: string;
+}
+
 interface NavItem {
   id: ViewType;
   label: string;
   icon: React.ElementType;
+  subItems?: SubItem[];
 }
 
 interface NavGroup {
@@ -40,14 +48,31 @@ const navGroups: NavGroup[] = [
     items: [
       { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
       { id: 'users', label: 'User Management', icon: Users },
-      { id: 'batch', label: 'Batch Generator', icon: FileCode },
+      {
+        id: 'batch',
+        label: 'Batch Generator',
+        icon: FileCode,
+        subItems: [
+          { id: 'generator', label: 'Generator' },
+          { id: 'saved-batches', label: 'Saved Batches' },
+          { id: 'batch-groups', label: 'Batch Groups' }
+        ]
+      },
     ]
   },
   {
     label: 'Automation',
     defaultOpen: true,
     items: [
-      { id: 'schedules', label: 'Schedules', icon: Calendar },
+      {
+        id: 'schedules',
+        label: 'Schedules',
+        icon: Calendar,
+        subItems: [
+          { id: 'local-schedules', label: 'Local Schedules' },
+          { id: 'remote-schedules', label: 'Remote / Crontab' }
+        ]
+      },
       { id: 'history', label: 'Job History', icon: History },
     ]
   },
@@ -57,6 +82,8 @@ const navGroups: NavGroup[] = [
     items: [
       { id: 'servers', label: 'Remote Servers', icon: Server },
       { id: 'drives', label: 'Drive Manager', icon: HardDrive },
+      { id: 'rclone', label: 'Rclone Management', icon: HardDrive },
+      { id: 'remotesync', label: 'Remote Sync', icon: Database },
     ]
   },
   {
@@ -74,9 +101,11 @@ function App() {
   const [view, setView] = useState<ViewType>(() => {
     const saved = localStorage.getItem(STORAGE_KEYS.VIEW);
     if (saved === 'manual') return 'users';
-    const validViews: ViewType[] = ['dashboard', 'users', 'batch', 'config', 'sync', 'history', 'schedules', 'servers', 'drives', 'prep'];
+    const validViews: ViewType[] = ['dashboard', 'users', 'batch', 'config', 'sync', 'history', 'schedules', 'servers', 'drives', 'prep', 'remotesync', 'rclone'];
     return validViews.includes(saved as ViewType) ? (saved as ViewType) : 'dashboard';
   });
+
+  const [activeSubSection, setActiveSubSection] = useState<string | null>(null);
 
   const [collapsedGroups, setCollapsedGroups] = useState<Set<string>>(() => {
     const saved = localStorage.getItem(STORAGE_KEYS.COLLAPSED_GROUPS);
@@ -107,6 +136,12 @@ function App() {
       : 'text-zinc-400 hover:text-white hover:bg-zinc-900'
     }`;
 
+  const subNavClass = (isActive: boolean) =>
+    `w-full flex items-center gap-2 px-2 py-1.5 pl-9 text-xs rounded-lg transition-colors ${isActive
+      ? 'text-cyan-400 font-medium'
+      : 'text-zinc-500 hover:text-zinc-300'
+    }`;
+
   return (
     <ErrorBoundary>
       <div className="min-h-screen bg-zinc-950 text-zinc-100 flex font-sans antialiased selection:bg-indigo-500/30">
@@ -134,14 +169,34 @@ function App() {
                   {!isCollapsed && (
                     <div className="mt-1 space-y-0.5">
                       {group.items.map((item) => (
-                        <button
-                          key={item.id}
-                          onClick={() => setView(item.id)}
-                          className={navClass(view === item.id)}
-                        >
-                          <item.icon size={18} />
-                          {item.label}
-                        </button>
+                        <div key={item.id}>
+                          <button
+                            onClick={() => {
+                              setView(item.id);
+                              if (!item.subItems) setActiveSubSection(null);
+                            }}
+                            className={navClass(view === item.id)}
+                          >
+                            <item.icon size={18} />
+                            {item.label}
+                          </button>
+
+                          {/* Sub-items */}
+                          {item.subItems && view === item.id && (
+                            <div className="mt-1 space-y-0.5 relative">
+                              <div className="absolute left-6 top-1 bottom-1 w-px bg-zinc-800" />
+                              {item.subItems.map(sub => (
+                                <button
+                                  key={sub.id}
+                                  onClick={() => setActiveSubSection(sub.id)}
+                                  className={subNavClass(activeSubSection === sub.id)}
+                                >
+                                  {sub.label}
+                                </button>
+                              ))}
+                            </div>
+                          )}
+                        </div>
                       ))}
                     </div>
                   )}
@@ -165,14 +220,16 @@ function App() {
           <ErrorBoundary>
             {view === 'dashboard' && <Dashboard />}
             {view === 'users' && <UserManagement />}
-            {view === 'batch' && <BatchGenerator />}
-            {view === 'schedules' && <SchedulesPage />}
+            {view === 'batch' && <BatchGenerator activeSection={activeSubSection} />}
+            {view === 'schedules' && <SchedulesPage activeSection={activeSubSection} />}
             {view === 'history' && <HistoryPage />}
             {view === 'config' && <ConfigPage />}
             {view === 'sync' && <SyncBackup />}
             {view === 'servers' && <RemoteServers />}
             {view === 'drives' && <DriveManager />}
             {view === 'prep' && <PrepCheck />}
+            {view === 'remotesync' && <RemoteSync />}
+            {view === 'rclone' && <RcloneManagement />}
           </ErrorBoundary>
         </main>
       </div>

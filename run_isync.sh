@@ -60,6 +60,16 @@ if [ "$BACKEND_RUNNING" = true ] || [ "$FRONTEND_RUNNING" = true ]; then
         pkill -f 'uvicorn.*backend.main' 2>/dev/null
         pkill -f 'vite.*5173' 2>/dev/null
         pkill -f 'npm.*dev' 2>/dev/null
+        
+        # Additional check for port 8000
+        if command -v lsof &> /dev/null; then
+            PORT_PID=$(lsof -t -i:8000)
+            if [ -n "$PORT_PID" ]; then
+                echo -e "${YELLOW}Port 8000 still occupied by PID $PORT_PID. Killing...${NC}"
+                kill -9 $PORT_PID 2>/dev/null
+            fi
+        fi
+        
         sleep 2
         echo -e "${GREEN}Stopped. Starting fresh...${NC}"
     else
@@ -79,6 +89,16 @@ if [ "$BACKEND_RUNNING" = true ] || [ "$FRONTEND_RUNNING" = true ]; then
                 pkill -f 'uvicorn.*backend.main' 2>/dev/null
                 pkill -f 'vite.*5173' 2>/dev/null
                 pkill -f 'npm.*dev' 2>/dev/null
+                
+                # Additional check for port 8000
+                if command -v lsof &> /dev/null; then
+                    PORT_PID=$(lsof -t -i:8000)
+                    if [ -n "$PORT_PID" ]; then
+                        echo -e "${YELLOW}Port 8000 still occupied by PID $PORT_PID. Killing...${NC}"
+                        kill -9 $PORT_PID 2>/dev/null
+                    fi
+                fi
+                
                 sleep 2
                 echo -e "${GREEN}Stopped. Starting fresh...${NC}"
                 ;;
