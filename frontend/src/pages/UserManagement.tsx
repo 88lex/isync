@@ -443,6 +443,13 @@ const UserManagement = () => {
                     <button onClick={() => runBulkOp('unsuspend')} className="flex items-center gap-2 px-3 py-1.5 bg-zinc-800 hover:bg-emerald-900/30 hover:text-emerald-400 rounded text-xs text-zinc-300 font-medium transition"><UserCheck size={14} /> Unsuspend</button>
                     <button onClick={() => runBulkOp('add_to_group')} className="flex items-center gap-2 px-3 py-1.5 bg-zinc-800 hover:bg-indigo-900/30 hover:text-indigo-400 rounded text-xs text-zinc-300 font-medium transition"><UserCheck size={14} /> Add to Group</button>
                     <button onClick={() => runBulkOp('protect')} className="flex items-center gap-2 px-3 py-1.5 bg-zinc-800 hover:bg-blue-900/30 hover:text-blue-400 rounded text-xs text-zinc-300 font-medium transition"><ShieldAlert size={14} /> Protect Selected</button>
+                    <div className="h-4 w-px bg-zinc-700 mx-1"></div>
+                    <button
+                        onClick={() => toggleColumnFilter('group', 'Not Member')}
+                        className={`flex items-center gap-2 px-3 py-1.5 rounded text-xs font-medium transition ${columnFilters['group']?.has('Not Member') ? 'bg-amber-600/30 text-amber-400 border border-amber-500/50' : 'bg-zinc-800 hover:bg-amber-900/30 hover:text-amber-400 text-zinc-300'}`}
+                    >
+                        <UserMinus size={14} /> No Group
+                    </button>
                     <div className="h-4 w-px bg-zinc-700 mx-2"></div>
 
                     {/* Smart Delete Button */}
@@ -454,8 +461,8 @@ const UserManagement = () => {
                                 disabled={hasProtected || selectedUsers.size === 0}
                                 title={hasProtected ? "Cannot delete protected users" : "Delete selected users"}
                                 className={`flex items-center gap-2 px-3 py-1.5 rounded text-xs font-medium transition ${hasProtected
-                                        ? "bg-zinc-800 text-zinc-600 cursor-not-allowed opacity-50"
-                                        : "bg-red-900/20 hover:bg-red-900/40 text-red-400"
+                                    ? "bg-zinc-800 text-zinc-600 cursor-not-allowed opacity-50"
+                                    : "bg-red-900/20 hover:bg-red-900/40 text-red-400"
                                     }`}
                             >
                                 <UserMinus size={14} /> {hasProtected ? "Delete Disabled (Protected)" : "Delete User(s)"}

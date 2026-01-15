@@ -60,6 +60,7 @@ export interface JobRequest {
     pairs: SyncPair[];
     dry_run: boolean;
     selected_users?: string[];
+    random_order?: boolean;
 }
 
 // Ops Types
@@ -137,6 +138,59 @@ export const deleteSyncPair = async (index: number): Promise<{ status: string; r
     const res = await axios.delete(`${API_BASE}/sync-pairs/${index}`);
     return res.data;
 };
+
+// --- Unified Sync Pair + Batch ---
+export interface BatchInfo {
+    filename: string;
+    exists: boolean;
+    size?: number;
+    modified?: number;
+    user_count?: number;
+}
+
+export interface SyncPairWithBatch {
+    index: number;
+    source: string;
+    dest: string;
+    domain_reference: string;
+    batch: BatchInfo;
+}
+
+export const getSyncPairsWithBatches = async (): Promise<{ pairs: SyncPairWithBatch[] }> => {
+    const res = await axios.get(`${API_BASE}/sync-pairs/with-batches`);
+    return res.data;
+};
+
+export interface BulkGenerateResult {
+    index: number;
+    filename: string;
+    status: string;
+    user_count?: number;
+    message?: string;
+}
+
+export interface BulkGenerateResponse {
+    status: string;
+    results: BulkGenerateResult[];
+    generated: number;
+    failed: number;
+}
+
+export const bulkGenerateBatches = async (
+    indices: number[],
+    randomOrder: boolean,
+    dryRun: boolean = false,
+    selectedUsers?: string[]
+): Promise<BulkGenerateResponse> => {
+    const res = await axios.post(`${API_BASE}/sync-pairs/generate-batches`, {
+        indices,
+        random_order: randomOrder,
+        dry_run: dryRun,
+        selected_users: selectedUsers && selectedUsers.length > 0 ? selectedUsers : undefined
+    });
+    return res.data;
+};
+
 
 // --- Batch CRUD ---
 export const deleteBatchFile = async (filename: string): Promise<{ status: string; deleted: string }> => {
@@ -271,6 +325,8 @@ export interface BatchFile {
     name: string;
     size: number;
     modified: number;
+    user_count?: number;
+    sync_pair?: { source: string; dest: string };
 }
 
 export const saveBatch = async (req: SaveBatchRequest) => {
@@ -327,6 +383,11 @@ export const deleteBatchRemote = async (filename: string, serverId: string) => {
 
 export const deleteBatchLocal = async (filename: string) => {
     const res = await axios.delete(`${API_BASE}/manual/batch/${filename}`);
+    return res.data;
+};
+
+export const regenerateBatch = async (filename: string, randomOrder: boolean) => {
+    const res = await axios.post(`${API_BASE}/manual/batch/${filename}/regenerate`, { random_order: randomOrder });
     return res.data;
 };
 

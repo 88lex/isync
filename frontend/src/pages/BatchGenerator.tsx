@@ -9,7 +9,8 @@ import {
     RandomBatchResponse, UserSummaryResponse, listBatchGroups, createBatchGroup,
     deleteBatchGroup, updateBatchGroup, generateGroupScript, BatchGroup, pushBatch, pushBatchGroup,
     updateBatchContent, checkBatchRemote, pullBatch, deleteBatchRemote, deleteBatchLocal,
-    checkGroupRemote, pullGroupRemote, deleteGroupRemote, getGroupScript
+    checkGroupRemote, pullGroupRemote, deleteGroupRemote, getGroupScript, regenerateBatch,
+    getSyncPairsWithBatches, bulkGenerateBatches, SyncPairWithBatch, renameBatchFile
 } from '../api';
 import { SESSION_KEYS } from '../constants/storageKeys';
 import { PageHeader } from '../components/PageHeader';
@@ -33,6 +34,10 @@ const BatchGenerator: React.FC<BatchGeneratorProps> = ({ activeSection }) => {
 
     const [config, setConfig] = useState<Config>({});
     const [pairs, setPairs] = useState<SyncPair[]>([]);
+
+    // Unified sync pairs with batch status
+    const [unifiedPairs, setUnifiedPairs] = useState<SyncPairWithBatch[]>([]);
+    const [bulkGenerating, setBulkGenerating] = useState(false);
 
     // Get selected users from session storage (shared with User Management)
     const [selectedUsers] = useState<Set<string>>(() => {
@@ -63,6 +68,8 @@ const BatchGenerator: React.FC<BatchGeneratorProps> = ({ activeSection }) => {
     const [batchContentCache, setBatchContentCache] = useState<Record<string, string>>({});
     const [editingBatch, setEditingBatch] = useState<string | null>(null);
     const [editBatchContent, setEditBatchContent] = useState('');
+    const [renamingBatch, setRenamingBatch] = useState<string | null>(null);
+    const [renameValue, setRenameValue] = useState('');
     const [remoteStatusCache, setRemoteStatusCache] = useState<Record<string, Record<string, boolean>>>({});
     const [batchOperationLoading, setBatchOperationLoading] = useState<string | null>(null);
 
@@ -85,6 +92,21 @@ const BatchGenerator: React.FC<BatchGeneratorProps> = ({ activeSection }) => {
     const [selectedDomains, setSelectedDomains] = useState<Set<string>>(new Set());
     const [useRandomMode, setUseRandomMode] = useState(false);
     const [randomBatchResult, setRandomBatchResult] = useState<RandomBatchResponse | null>(null);
+
+    // Random Order (shuffle) - separate from random user selection
+    const [randomOrder, setRandomOrder] = useState(false);
+
+    // Get ALL users count from session storage (set by User Management page)
+    const allUsersCount = (() => {
+        const saved = sessionStorage.getItem(SESSION_KEYS.USERS);
+        if (saved) {
+            try {
+                const users = JSON.parse(saved);
+                return Array.isArray(users) ? users.length : 0;
+            } catch { return 0; }
+        }
+        return 0;
+    })();
 
     // User Summary State
     const [showUserSummary, setShowUserSummary] = useState(false);
@@ -297,17 +319,48 @@ const BatchGenerator: React.FC<BatchGeneratorProps> = ({ activeSection }) => {
         const p = await fetchSyncList();
         setPairs(p);
         await loadBatchGroups();
+        await loadUnifiedPairs();
         try {
             const s = await fetchSSHServers();
             setSshServers(s);
         } catch (e) { console.error(e) }
     };
 
+    const loadUnifiedPairs = async () => {
+        try {
+            const data = await getSyncPairsWithBatches();
+            setUnifiedPairs(data.pairs);
+        } catch (e) {
+            console.error('Failed to load unified pairs', e);
+        }
+    };
+
+    const handleBulkGenerate = async () => {
+        if (selectedPairs.size === 0) return alert("Select at least one sync pair.");
+        setBulkGenerating(true);
+        try {
+            // Pass selected users from User Management if any
+            const usersArray = selectedUsers.size > 0 ? Array.from(selectedUsers) : undefined;
+            const result = await bulkGenerateBatches(Array.from(selectedPairs), randomOrder, false, usersArray);
+            if (result.failed > 0) {
+                alert(`Generated ${result.generated} batches, ${result.failed} failed.`);
+            } else {
+                alert(`Successfully generated ${result.generated} batch file(s)!`);
+            }
+            await loadUnifiedPairs();
+            await loadSavedBatches();
+        } catch (e: any) {
+            alert(`Bulk generate failed: ${e.response?.data?.detail || e.message}`);
+        } finally {
+            setBulkGenerating(false);
+        }
+    };
+
     const selectAllPairs = () => {
-        if (selectedPairs.size === pairs.length) {
+        if (selectedPairs.size === unifiedPairs.length) {
             clearPairs();
         } else {
-            selectAllPairsSet(pairs.map((_, i) => i));
+            selectAllPairsSet(unifiedPairs.map((p) => p.index));
         }
     };
 
@@ -321,7 +374,8 @@ const BatchGenerator: React.FC<BatchGeneratorProps> = ({ activeSection }) => {
             const res = await generateBatch({
                 pairs: selectedP,
                 dry_run: dryRun,
-                selected_users: selectedUsers.size > 0 ? Array.from(selectedUsers) : undefined
+                selected_users: selectedUsers.size > 0 ? Array.from(selectedUsers) : undefined,
+                random_order: randomOrder
             });
             setBatchResults(res.commands);
         } catch (e: any) {
@@ -520,9 +574,29 @@ const BatchGenerator: React.FC<BatchGeneratorProps> = ({ activeSection }) => {
             setBatchOperationLoading(`delete-local-${filename}`);
             await deleteBatchLocal(filename);
             await loadSavedBatches();
+            await loadUnifiedPairs();
             if (expandedBatchFile === filename) setExpandedBatchFile(null);
         } catch (e: any) {
             alert(`Delete failed: ${e.message}`);
+        } finally {
+            setBatchOperationLoading(null);
+        }
+    };
+
+    const handleRename = async (oldName: string, newName: string) => {
+        if (!newName.trim() || newName === oldName) {
+            setRenamingBatch(null);
+            return;
+        }
+        try {
+            setBatchOperationLoading(`rename-${oldName}`);
+            await renameBatchFile(oldName, newName);
+            await loadSavedBatches();
+            await loadUnifiedPairs();
+            if (expandedBatchFile === oldName) setExpandedBatchFile(newName);
+            setRenamingBatch(null);
+        } catch (e: any) {
+            alert(`Rename failed: ${e.response?.data?.detail || e.message}`);
         } finally {
             setBatchOperationLoading(null);
         }
@@ -783,9 +857,19 @@ const BatchGenerator: React.FC<BatchGeneratorProps> = ({ activeSection }) => {
                                     {selectedUsers.size > 0 ? (
                                         <>Generating for <span className="text-indigo-400 font-bold">{selectedUsers.size} selected users</span> from User Management</>
                                     ) : (
-                                        <>Generating for <span className="text-zinc-400">ALL users</span> in source</>
+                                        <>Generating for <span className="text-zinc-400">ALL users{allUsersCount > 0 ? ` (${allUsersCount})` : ''}</span> in source</>
                                     )}
                                 </span>
+                                {/* Random Order Toggle */}
+                                <label className="flex items-center gap-2 ml-auto cursor-pointer">
+                                    <input
+                                        type="checkbox"
+                                        checked={randomOrder}
+                                        onChange={(e) => setRandomOrder(e.target.checked)}
+                                        className="w-4 h-4 rounded border-zinc-600 bg-zinc-800 text-amber-500 focus:ring-amber-500"
+                                    />
+                                    <span className="text-sm text-zinc-400"><Shuffle size={14} className="inline mr-1" />Random Order</span>
+                                </label>
                             </div>
                         )}
 
@@ -857,10 +941,10 @@ const BatchGenerator: React.FC<BatchGeneratorProps> = ({ activeSection }) => {
                         )}
                     </div>
 
-                    {/* Sync Pairs Selection */}
+                    {/* Unified Sync Pairs + Batch Status */}
                     <div className="mb-4 flex items-center justify-between">
                         <span className="text-sm text-zinc-400">
-                            Select sync pairs ({selectedPairs.size} of {pairs.length} selected)
+                            Sync Pairs & Batches ({selectedPairs.size} of {unifiedPairs.length} selected)
                         </span>
                         <div className="flex items-center gap-3">
                             <button
@@ -873,13 +957,13 @@ const BatchGenerator: React.FC<BatchGeneratorProps> = ({ activeSection }) => {
                                 onClick={selectAllPairs}
                                 className="text-xs text-indigo-400 hover:text-indigo-300 transition"
                             >
-                                {selectedPairs.size === pairs.length ? 'Deselect All' : 'Select All'}
+                                {selectedPairs.size === unifiedPairs.length ? 'Deselect All' : 'Select All'}
                             </button>
                         </div>
                     </div>
 
-                    <div className="space-y-2 max-h-60 overflow-y-auto pr-2">
-                        {pairs.length === 0 ? (
+                    <div className="space-y-2 max-h-80 overflow-y-auto pr-2">
+                        {unifiedPairs.length === 0 ? (
                             <div className="text-center py-8">
                                 <div className="text-zinc-500 italic mb-3">No sync pairs configured.</div>
                                 <button
@@ -890,41 +974,48 @@ const BatchGenerator: React.FC<BatchGeneratorProps> = ({ activeSection }) => {
                                 </button>
                             </div>
                         ) : (
-                            pairs.map((p, i) => (
+                            unifiedPairs.map((p) => (
                                 <div
-                                    key={i}
-                                    className={`flex items-center gap-3 p-4 rounded-lg border transition ${selectedPairs.has(i)
+                                    key={p.index}
+                                    className={`flex items-center gap-3 p-3 rounded-lg border transition ${selectedPairs.has(p.index)
                                         ? 'bg-indigo-900/20 border-indigo-500/50'
                                         : 'bg-zinc-950 border-zinc-800 hover:border-zinc-700'
                                         }`}
                                 >
                                     <div
-                                        onClick={() => togglePair(i)}
-                                        className={`w-5 h-5 rounded border-2 flex items-center justify-center transition cursor-pointer ${selectedPairs.has(i) ? 'bg-indigo-500 border-indigo-500' : 'border-zinc-600'
+                                        onClick={() => togglePair(p.index)}
+                                        className={`w-5 h-5 rounded border-2 flex items-center justify-center transition cursor-pointer flex-shrink-0 ${selectedPairs.has(p.index) ? 'bg-indigo-500 border-indigo-500' : 'border-zinc-600'
                                             }`}>
-                                        {selectedPairs.has(i) && <div className="w-2 h-2 bg-white rounded-sm" />}
+                                        {selectedPairs.has(p.index) && <div className="w-2 h-2 bg-white rounded-sm" />}
                                     </div>
                                     <div
-                                        onClick={() => togglePair(i)}
-                                        className="flex-1 grid grid-cols-2 gap-4 text-sm font-mono cursor-pointer"
+                                        onClick={() => togglePair(p.index)}
+                                        className="flex-1 grid grid-cols-3 gap-2 text-sm font-mono cursor-pointer min-w-0"
                                     >
                                         <div className="text-orange-300 truncate" title={p.source}>
-                                            <span className="text-zinc-500 text-xs mr-2">SRC:</span>
                                             {p.source}
                                         </div>
                                         <div className="text-blue-300 truncate" title={p.dest}>
-                                            <span className="text-zinc-500 text-xs mr-2">DST:</span>
                                             {p.dest}
                                         </div>
+                                        <div className="flex items-center gap-2">
+                                            {p.batch.exists ? (
+                                                <>
+                                                    <span className="text-xs bg-emerald-500/20 text-emerald-400 px-1.5 py-0.5 rounded">
+                                                        {p.batch.user_count || 0} users
+                                                    </span>
+                                                    <span className="text-xs text-zinc-500 truncate" title={p.batch.filename}>
+                                                        {p.batch.filename}
+                                                    </span>
+                                                </>
+                                            ) : (
+                                                <span className="text-xs text-amber-500/80 italic">No batch file</span>
+                                            )}
+                                        </div>
                                     </div>
-                                    {p.domain_reference && (
-                                        <span className="text-xs text-zinc-500 bg-zinc-800 px-2 py-1 rounded">
-                                            {p.domain_reference}
-                                        </span>
-                                    )}
                                     <button
-                                        onClick={(e) => { e.stopPropagation(); handleDeleteSyncPair(i); }}
-                                        className="text-zinc-600 hover:text-red-400 transition p-1"
+                                        onClick={(e) => { e.stopPropagation(); handleDeleteSyncPair(p.index); }}
+                                        className="text-zinc-600 hover:text-red-400 transition p-1 flex-shrink-0"
                                         title="Delete sync pair"
                                     >
                                         <Trash2 size={14} />
@@ -933,6 +1024,32 @@ const BatchGenerator: React.FC<BatchGeneratorProps> = ({ activeSection }) => {
                             ))
                         )}
                     </div>
+
+                    {/* Bulk Generate Button */}
+                    {unifiedPairs.length > 0 && (
+                        <div className="mt-4 pt-4 border-t border-zinc-800 flex items-center justify-between">
+                            <label className="flex items-center gap-2 cursor-pointer">
+                                <input
+                                    type="checkbox"
+                                    checked={randomOrder}
+                                    onChange={(e) => setRandomOrder(e.target.checked)}
+                                    className="w-4 h-4 rounded border-zinc-600 bg-zinc-800 text-amber-500 focus:ring-amber-500"
+                                />
+                                <span className="text-sm text-zinc-400"><Shuffle size={14} className="inline mr-1" />Random Order</span>
+                            </label>
+                            <button
+                                onClick={handleBulkGenerate}
+                                disabled={selectedPairs.size === 0 || bulkGenerating}
+                                className="flex items-center gap-2 px-4 py-2 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 disabled:cursor-not-allowed rounded-lg text-white text-sm font-medium transition"
+                            >
+                                {bulkGenerating ? (
+                                    <>Generating...</>
+                                ) : (
+                                    <><Zap size={16} /> Generate Selected ({selectedPairs.size})</>
+                                )}
+                            </button>
+                        </div>
+                    )}
                 </Card>
 
                 {/* Output Section */}
@@ -1070,7 +1187,40 @@ const BatchGenerator: React.FC<BatchGeneratorProps> = ({ activeSection }) => {
                                         <div className="flex items-center gap-3">
                                             {isExpanded ? <ChevronDown size={16} className="text-cyan-400" /> : <ChevronRight size={16} className="text-zinc-500" />}
                                             <FileCode size={16} className="text-amber-400" />
-                                            <span className="text-sm font-medium text-zinc-200">{f.name}</span>
+                                            {renamingBatch === f.name ? (
+                                                <input
+                                                    autoFocus
+                                                    value={renameValue}
+                                                    onChange={(e) => setRenameValue(e.target.value)}
+                                                    onKeyDown={(e) => {
+                                                        if (e.key === 'Enter') handleRename(f.name, renameValue);
+                                                        if (e.key === 'Escape') setRenamingBatch(null);
+                                                    }}
+                                                    onBlur={() => handleRename(f.name, renameValue)}
+                                                    onClick={(e) => e.stopPropagation()}
+                                                    className="text-sm font-medium bg-zinc-900 border border-indigo-500 rounded px-2 py-0.5 text-white focus:outline-none"
+                                                />
+                                            ) : (
+                                                <span
+                                                    className="text-sm font-medium text-zinc-200 hover:text-indigo-400 cursor-pointer"
+                                                    onClick={(e) => {
+                                                        e.stopPropagation();
+                                                        setRenamingBatch(f.name);
+                                                        setRenameValue(f.name);
+                                                    }}
+                                                    title="Click to rename"
+                                                >
+                                                    {f.name}
+                                                </span>
+                                            )}
+                                            {f.user_count !== undefined && f.user_count > 0 && (
+                                                <span className="text-xs bg-indigo-500/20 text-indigo-400 px-1.5 py-0.5 rounded">{f.user_count} users</span>
+                                            )}
+                                            {f.sync_pair && (
+                                                <span className="text-xs text-zinc-500 truncate max-w-[200px]" title={`${f.sync_pair.source} → ${f.sync_pair.dest}`}>
+                                                    {f.sync_pair.source.split('/').pop()} → {f.sync_pair.dest.split(':')[0]}
+                                                </span>
+                                            )}
                                             <span className="text-xs text-zinc-600">{(f.size / 1024).toFixed(1)} KB</span>
                                         </div>
                                         <div className="flex gap-2" onClick={e => e.stopPropagation()}>
@@ -1080,6 +1230,28 @@ const BatchGenerator: React.FC<BatchGeneratorProps> = ({ activeSection }) => {
                                                 title="View/Compare Users"
                                             >
                                                 <Users size={12} /> Users
+                                            </button>
+                                            <button
+                                                onClick={async () => {
+                                                    if (!confirm(`Regenerate ${f.name} with current users?\n\nThis will overwrite the file with fresh commands.`)) return;
+                                                    try {
+                                                        setBatchOperationLoading(`regen-${f.name}`);
+                                                        await regenerateBatch(f.name, randomOrder);
+                                                        await loadSavedBatches();
+                                                        // Refresh content cache
+                                                        const data = await getBatchFile(f.name);
+                                                        setBatchContentCache(prev => ({ ...prev, [f.name]: data.content }));
+                                                    } catch (e: any) {
+                                                        alert(`Regeneration failed: ${e.response?.data?.detail || e.message}`);
+                                                    } finally {
+                                                        setBatchOperationLoading(null);
+                                                    }
+                                                }}
+                                                disabled={isLoading || !f.sync_pair}
+                                                className="flex items-center gap-1 px-2 py-1 bg-amber-600/20 hover:bg-amber-600 text-amber-400 hover:text-white rounded text-xs transition disabled:opacity-50"
+                                                title={f.sync_pair ? `Regenerate with current users${randomOrder ? ' (Random Order)' : ''}` : 'No sync pair found'}
+                                            >
+                                                <Shuffle size={12} /> Regen
                                             </button>
                                             <button
                                                 onClick={() => handleDeleteLocal(f.name)}

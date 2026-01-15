@@ -32,6 +32,7 @@ class JobRequest(BaseModel):
     pairs: List[SyncPair]
     dry_run: bool = False
     selected_users: Optional[List[str]] = None
+    random_order: bool = False
     
     class Config:
         extra = "ignore"
@@ -73,6 +74,168 @@ def extract_users_from_batch(content: str) -> List[str]:
             seen.add(email)
             users.append(email)
     return users
+
+
+def extract_sync_pair_from_batch(content: str) -> Optional[Dict[str, str]]:
+    """Extract the first sync pair (source -> dest) from batch file comments."""
+    # Look for lines like: # /source/path -> remote:dest/path
+    pattern = r'^#\s*(.+?)\s*->\s*(.+?)\s*$'
+    for line in content.split('\n'):
+        match = re.match(pattern, line.strip())
+        if match:
+            source = match.group(1).strip()
+            dest = match.group(2).strip()
+            # Skip header comments
+            if source and dest and not source.startswith('ISync') and not source.startswith('Generated'):
+                return {"source": source, "dest": dest}
+    return None
+
+
+def generate_batch_filename(source: str, dest: str) -> str:
+    """Generate a consistent batch filename from source and dest."""
+    # Extract basename from source path
+    source_base = os.path.basename(source.rstrip('/')) or 'source'
+    # Extract remote name from dest (before the colon)
+    dest_remote = dest.split(':')[0] if ':' in dest else 'dest'
+    # Clean for filename safety
+    source_base = re.sub(r'[^\w\-]', '_', source_base)
+    dest_remote = re.sub(r'[^\w\-]', '_', dest_remote)
+    return f"batch_{source_base}_{dest_remote}.sh"
+
+
+def get_batch_info_for_pair(source: str, dest: str) -> Optional[Dict]:
+    """Get batch file info if it exists for this sync pair (matches by content, not filename)."""
+    batch_dir = get_batch_dir()
+    default_filename = generate_batch_filename(source, dest)
+    
+    if not os.path.exists(batch_dir):
+        return {"filename": default_filename, "exists": False}
+    
+    # Scan all batch files and match by content (source -> dest comment)
+    for filename in os.listdir(batch_dir):
+        if filename.startswith('.'):
+            continue
+        filepath = os.path.join(batch_dir, filename)
+        if not os.path.isfile(filepath):
+            continue
+        try:
+            with open(filepath, 'r') as f:
+                content = f.read()
+            pair_in_file = extract_sync_pair_from_batch(content)
+            if pair_in_file and pair_in_file.get('source') == source and pair_in_file.get('dest') == dest:
+                # Found a match by content
+                stat = os.stat(filepath)
+                user_count = len(extract_users_from_batch(content))
+                return {
+                    "filename": filename,
+                    "size": stat.st_size,
+                    "modified": stat.st_mtime,
+                    "user_count": user_count,
+                    "exists": True
+                }
+        except Exception:
+            continue
+    
+    # No match found - return default filename for new generation
+    return {"filename": default_filename, "exists": False}
+
+
+# --- Unified Sync Pair + Batch Endpoints ---
+@router.get("/sync-pairs/with-batches")
+def get_sync_pairs_with_batches():
+    """Get all sync pairs with their associated batch file status."""
+    store = get_store()
+    pairs = store.get_sync_pairs()
+    
+    result = []
+    for i, pair in enumerate(pairs):
+        source = pair.get('source', '')
+        dest = pair.get('dest', '')
+        batch_info = get_batch_info_for_pair(source, dest)
+        result.append({
+            "index": i,
+            "source": source,
+            "dest": dest,
+            "domain_reference": pair.get('domain_reference', ''),
+            "batch": batch_info
+        })
+    
+    return {"pairs": result}
+
+
+class BulkGenerateRequest(BaseModel):
+    indices: List[int]
+    random_order: bool = False
+    dry_run: bool = False
+    selected_users: Optional[List[str]] = None
+
+
+@router.post("/sync-pairs/generate-batches")
+def bulk_generate_batches(req: BulkGenerateRequest):
+    """Generate/regenerate batch files for selected sync pairs."""
+    store = get_store()
+    engine = get_engine()
+    pairs = store.get_sync_pairs()
+    
+    results = []
+    for idx in req.indices:
+        if idx < 0 or idx >= len(pairs):
+            results.append({"index": idx, "status": "error", "message": "Invalid index"})
+            continue
+        
+        pair = pairs[idx]
+        source = pair.get('source', '')
+        dest = pair.get('dest', '')
+        
+        # Check for existing batch file to preserve filename
+        batch_info = get_batch_info_for_pair(source, dest)
+        filename = batch_info.get('filename', generate_batch_filename(source, dest))
+        
+        try:
+            # Generate commands with fresh shuffle if random_order is True
+            commands = engine.generate_batch_command(
+                pair,
+                dry_run=req.dry_run,
+                user_list=req.selected_users,  # Use selected users if provided
+                random_order=req.random_order
+            )
+            
+            if commands.startswith("Error"):
+                results.append({"index": idx, "filename": filename, "status": "error", "message": commands})
+                continue
+            
+            # Save to file (preserves existing filename or uses generated one)
+            batch_dir = get_batch_dir()
+            os.makedirs(batch_dir, exist_ok=True)
+            filepath = os.path.join(batch_dir, filename)
+            
+            with open(filepath, 'w') as f:
+                f.write("#!/bin/bash\n")
+                f.write(f"# ISync Batch Commands\n")
+                f.write(f"# Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+                f.write(f"# Random Order: {req.random_order}\n")
+                f.write("#\n")
+                f.write(f"# {source} -> {dest}\n")
+                f.write("#" + "=" * 60 + "\n\n")
+                f.write(commands)
+                f.write("\n")
+            
+            user_count = len(extract_users_from_batch(commands))
+            results.append({
+                "index": idx,
+                "filename": filename,
+                "status": "ok",
+                "user_count": user_count
+            })
+        except Exception as e:
+            results.append({"index": idx, "filename": filename, "status": "error", "message": str(e)})
+    
+    return {
+        "status": "ok",
+        "results": results,
+        "generated": len([r for r in results if r.get('status') == 'ok']),
+        "failed": len([r for r in results if r.get('status') == 'error'])
+    }
 
 
 # --- Job Execution Endpoints ---
@@ -217,7 +380,8 @@ def generate_batch(request: JobRequest):
             cmd = engine.generate_batch_command(
                 pair_dict, 
                 dry_run=request.dry_run, 
-                user_list=request.selected_users
+                user_list=request.selected_users,
+                random_order=request.random_order
             )
             label = f"{pair.source} -> {pair.dest}"
             results[label] = cmd
@@ -288,10 +452,21 @@ def list_saved_batches():
         filepath = os.path.join(batch_dir, f)
         if os.path.isfile(filepath):
             stat = os.stat(filepath)
+            user_count = 0
+            sync_pair = None
+            try:
+                with open(filepath, 'r') as file:
+                    content = file.read()
+                user_count = len(extract_users_from_batch(content))
+                sync_pair = extract_sync_pair_from_batch(content)
+            except Exception:
+                pass  # If we can't read, just leave defaults
             files.append({
                 "name": f,
                 "size": stat.st_size,
-                "modified": stat.st_mtime
+                "modified": stat.st_mtime,
+                "user_count": user_count,
+                "sync_pair": sync_pair
             })
     
     files.sort(key=lambda x: x['modified'], reverse=True)
@@ -612,6 +787,70 @@ def update_batch_content(filename: str, req: UpdateBatchContentRequest):
         return {"status": "ok", "filename": filename, "size": len(req.content)}
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to update: {str(e)}")
+
+
+class RegenerateBatchRequest(BaseModel):
+    random_order: bool = False
+
+
+@router.post("/manual/batch/{filename}/regenerate")
+def regenerate_batch(filename: str, req: RegenerateBatchRequest):
+    """Regenerate a batch file with current users."""
+    batch_dir = get_batch_dir()
+    filepath = os.path.join(batch_dir, filename)
+    
+    if not os.path.exists(filepath):
+        raise HTTPException(status_code=404, detail="Batch file not found")
+    
+    try:
+        with open(filepath, 'r') as f:
+            content = f.read()
+        
+        # Extract sync pair from existing batch
+        sync_pair = extract_sync_pair_from_batch(content)
+        if not sync_pair:
+            raise HTTPException(status_code=400, detail="Could not determine sync pair from batch file")
+        
+        # Generate new commands with current users
+        engine = get_engine()
+        pair_dict = {"source": sync_pair["source"], "dest": sync_pair["dest"]}
+        
+        new_commands = engine.generate_batch_command(
+            pair_dict,
+            dry_run=False,
+            user_list=None,  # Use current users from domain
+            random_order=req.random_order
+        )
+        
+        if new_commands.startswith("Error"):
+            raise HTTPException(status_code=400, detail=new_commands)
+        
+        # Rewrite the file
+        with open(filepath, 'w') as f:
+            f.write("#!/bin/bash\n")
+            f.write(f"# ISync Batch Commands\n")
+            f.write(f"# Regenerated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+            f.write(f"# Random Order: {req.random_order}\n")
+            f.write("#\n")
+            f.write(f"# {sync_pair['source']} -> {sync_pair['dest']}\n")
+            f.write("#" + "=" * 60 + "\n\n")
+            f.write(new_commands)
+            f.write("\n")
+        
+        # Get updated user count
+        new_user_count = len(extract_users_from_batch(new_commands))
+        
+        return {
+            "status": "ok",
+            "filename": filename,
+            "sync_pair": sync_pair,
+            "user_count": new_user_count,
+            "random_order": req.random_order
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Regeneration failed: {str(e)}")
 
 
 class RemoteBatchRequest(BaseModel):

@@ -519,7 +519,7 @@ const RemoteSync: React.FC = () => {
                                 <div className="text-xs text-zinc-400 mb-2">
                                     {serverResult.pushed || 0}/{serverResult.total || 0} items pushed
                                 </div>
-                                {serverResult.results && (
+                                {Array.isArray(serverResult.results) && serverResult.results.length > 0 && (
                                     <div className="space-y-1">
                                         {serverResult.results.slice(0, 10).map((r: any, i: number) => (
                                             <div key={i} className={`text-xs flex items-center gap-2 ${r.status === 'success' ? 'text-emerald-400' : 'text-red-400'}`}>

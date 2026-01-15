@@ -253,6 +253,30 @@ class ISyncAuthManager:
                 return False
             raise
 
+    def list_group_members(self, group_email, max_results=500):
+        """Lists all members of a Google Group."""
+        try:
+            all_members = []
+            page_token = None
+            while True:
+                results = self.service.members().list(
+                    groupKey=group_email,
+                    maxResults=min(max_results, 200),
+                    pageToken=page_token
+                ).execute()
+                members = results.get('members', [])
+                for m in members:
+                    if m.get('email'):
+                        all_members.append(m['email'])
+                page_token = results.get('nextPageToken')
+                if not page_token or len(all_members) >= max_results:
+                    break
+            logging.info(f"[ISyncAuth] Found {len(all_members)} members in group {group_email}")
+            return all_members
+        except HttpError as e:
+            logging.error(f"[ISyncAuth] Failed to list group members for {group_email}: {e}")
+            raise
+
     def list_users(self, domain_name, max_results=500, return_detailed=False):
         """Lists users in the domain."""
         try:

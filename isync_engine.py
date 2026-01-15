@@ -490,7 +490,7 @@ class ISyncEngine:
         # If not found, return default (or could log warning)
         return default_domain_cfg
 
-    def generate_batch_command(self, pair, dry_run=False, user_list=None):
+    def generate_batch_command(self, pair, dry_run=False, user_list=None, random_order=False):
         """Generates a single batch command string for all users in the rotation."""
         source = pair['source']
         dest = pair['dest']
@@ -533,6 +533,12 @@ class ISyncEngine:
 
             max_users = int(self.config.get('max_users_per_cycle', 10))
             users_to_process = fetched_users[:max_users]
+
+        # Shuffle user order if requested
+        if random_order and users_to_process:
+            import random
+            users_to_process = list(users_to_process)  # Copy to avoid mutating original
+            random.shuffle(users_to_process)
 
         commands = []
         for i, user in enumerate(users_to_process):
