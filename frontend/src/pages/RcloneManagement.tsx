@@ -282,7 +282,7 @@ const RcloneManagement: React.FC = () => {
         <div className="space-y-6">
             <PageHeader
                 icon={HardDrive}
-                title="Rclone Management"
+                title="Rclone Manager"
                 subtitle="View and edit rclone remotes on local or remote servers"
             />
 
@@ -395,10 +395,28 @@ const RcloneManagement: React.FC = () => {
 
                     {/* Remotes List */}
                     <Card>
-                        <h3 className="text-lg font-medium text-white mb-4 flex items-center gap-2">
-                            <HardDrive size={18} className="text-purple-400" />
-                            Remotes ({remotes.length})
-                        </h3>
+                        <div className="flex items-center justify-between mb-4">
+                            <h3 className="text-lg font-medium text-white flex items-center gap-2">
+                                <HardDrive size={18} className="text-purple-400" />
+                                Remotes ({remotes.length})
+                            </h3>
+                            <button
+                                onClick={() => {
+                                    const filteredNames = remotes.filter(r => r.name.toLowerCase().includes(searchFilter.toLowerCase())).map(r => r.name);
+                                    if (selectedForCopy.size === filteredNames.length && filteredNames.length > 0) {
+                                        setSelectedForCopy(new Set());
+                                    } else {
+                                        setSelectedForCopy(new Set(filteredNames));
+                                    }
+                                }}
+                                className="text-xs text-zinc-500 hover:text-zinc-300 font-medium"
+                            >
+                                {(() => {
+                                    const filteredNames = remotes.filter(r => r.name.toLowerCase().includes(searchFilter.toLowerCase())).map(r => r.name);
+                                    return selectedForCopy.size === filteredNames.length && filteredNames.length > 0 ? 'Deselect All' : 'Select All';
+                                })()}
+                            </button>
+                        </div>
 
                         {/* Search Filter */}
                         <div className="mb-4 relative">
@@ -587,10 +605,10 @@ const RcloneManagement: React.FC = () => {
                                         key={filter}
                                         onClick={() => setStatusFilter(filter)}
                                         className={`px-3 py-1.5 rounded text-xs font-medium transition ${statusFilter === filter
-                                                ? filter === 'ignored' ? 'bg-zinc-600 text-white'
-                                                    : filter === 'protected' ? 'bg-amber-600 text-white'
-                                                        : 'bg-purple-600 text-white'
-                                                : 'bg-zinc-800 text-zinc-400 hover:text-white'
+                                            ? filter === 'ignored' ? 'bg-zinc-600 text-white'
+                                                : filter === 'protected' ? 'bg-amber-600 text-white'
+                                                    : 'bg-purple-600 text-white'
+                                            : 'bg-zinc-800 text-zinc-400 hover:text-white'
                                             }`}
                                     >
                                         {filter.charAt(0).toUpperCase() + filter.slice(1)}
@@ -693,10 +711,10 @@ const RcloneManagement: React.FC = () => {
                                     <div
                                         key={remote.name}
                                         className={`flex items-center gap-3 p-3 rounded-lg border transition cursor-pointer ${selectedForAction.has(remote.name)
-                                                ? 'border-purple-500 bg-purple-900/20'
-                                                : remote.status === 'ignored' ? 'border-zinc-700 bg-zinc-800/50 opacity-60'
-                                                    : remote.status === 'protected' ? 'border-amber-700 bg-amber-900/10'
-                                                        : 'border-zinc-700 bg-zinc-800/30 hover:border-zinc-600'
+                                            ? 'border-purple-500 bg-purple-900/20'
+                                            : remote.status === 'ignored' ? 'border-zinc-700 bg-zinc-800/50 opacity-60'
+                                                : remote.status === 'protected' ? 'border-amber-700 bg-amber-900/10'
+                                                    : 'border-zinc-700 bg-zinc-800/30 hover:border-zinc-600'
                                             }`}
                                         onClick={() => {
                                             setSelectedForAction(prev => {

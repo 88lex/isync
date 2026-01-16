@@ -34,7 +34,7 @@ ISync is versatile and supports multiple operational modes:
 
 1.  **Clone the Repository**
     ```bash
-    cd /opt/isync_refactor
+    cd /opt/isync
     ```
 
 2.  **Run the Unified Launcher**
@@ -145,24 +145,29 @@ This section explains every page of the application, describing each element and
 
 ---
 
-### 5. Drive Manager (New in v3.0)
-**Purpose**: Mass-create Google Shared Drives (Team Drives).
+### 5. Drive Manager (Updated v3.1)
+**Purpose**: Lifecycle management of Google Shared Drives and associated Rclone remotes.
 
 ![Drive Manager Screenshot](file:///C:/Users/88/.gemini/antigravity/brain/5c536e39-dfdf-4e39-89e7-ed9c9e57040c/drive_manager_1768368949386.png)
 
 #### Elements
 *   **Method Selector**: Choose between `fclone` (faster, requires config) or `Google API` (standard).
-*   **Base Name**: The prefix for your drives (e.g., `Backup_Drive`).
-*   **Suffix Config**:
-    *   **Start/End**: Numeric range (e.g., 1 to 100).
-    *   **Pattern**: Alphabetic pattern keys.
-*   **Member Email**: The email (usually a group) to add as "Manager" to every drive.
+*   **Creation Tools**:
+    *   **Base Name & Suffix**: Generate drives like `Backup_01` to `Backup_100`.
+    *   **Members**: Auto-add a group email as "Manager" to newly created drives.
+*   **Management Tools** (New):
+    *   **Rename**: Select a drive and click "Rename" to update its name in Google Drive.
+    *   **Delete**: Select one or more drives to permanently delete them.
+    *   **Create Union**: Select multiple drives to generate a `union` remote combining them.
+*   **Remote Integration**:
+    *   **View Remotes**: See which `rclone.conf` entries point to each drive.
+    *   **Manage Remotes**: Rename or Delete rclone remotes directly from the drive card using the Edit/Trash icons.
 
 #### How to Use
-1.  **Setup**: Enter Base Name "Archive_2026".
-2.  **Range**: Set Start=1, End=50.
-3.  **Members**: Enter `admins@yourdomain.com`.
-4.  **Create**: Click **"Create Drives"**. ISync will iterate and create "Archive_2026_01", "Archive_2026_02", etc., adding the group as Manager to each.
+1.  **Create**: Enter Base Name, Range, and Admin Email. Click **"Create Drives"**.
+2.  **Rename**: Select a drive (checkbox), click **"Rename"** in the toolbar.
+3.  **Delete**: Select drives, click **"Delete"**. A confirmation prompt will appear.
+4.  **Fix Configs**: If a drive's rclone remote has a typo, click the **Edit icon** next to the remote name on the drive card to rename the local config entry.
 
 ---
 
@@ -208,6 +213,32 @@ This section explains every page of the application, describing each element and
 2.  **Deploy**: Click **"Deploy"**. ISync copies itself to the remote server and installs dependencies.
 3.  **Start**: Click **"Start"**. The remote instance begins running in a `tmux` session.
 4.  **Manage**: You can now tunnel to that server's UI or control it via Orchestrator.
+
+---
+
+### 8. Rclone Manager (New in v3.1)
+**Purpose**: Direct control over the `rclone.conf` file on the local machine and remote servers.
+
+#### Elements
+*   **Remote List**: Displays all configured remotes in `~/.config/rclone/rclone.conf`.
+*   **Editor**: JSON/Text based editor to modify remote configurations directly.
+*   **Push to Remote**: Select specific remote configs and "Push" them to one of your connected SSH servers.
+*   **Test**: Verify connectivity for any specific remote.
+
+#### How to Use
+1.  **View**: See all your current remotes.
+2.  **Edit**: Click a remote to tweak parameters (e.g., `team_drive` ID).
+3.  **Push**: Check the box next to "my-team-drive", select "Backup Server" from the dropdown, and click **Push**. The config is securely transferred and appended to the remote server's rclone config.
+
+---
+
+### 9. Remote Sync (New in v3.1)
+**Purpose**: Orchestrate file transfers between servers or push local data to remotes.
+
+#### Elements
+*   **Source/Dest**: Select local folders or remote paths.
+*   **Push**: Initiate rclone operations remotely.
+*   **Status**: Monitor transfer progress across multiple nodes.
 
 ---
 

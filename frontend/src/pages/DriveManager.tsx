@@ -1,15 +1,16 @@
 import { useState, useEffect, useMemo } from 'react';
-import { HardDrive, Plus, Folder, Link, Settings, Check, ChevronDown, ChevronRight, AlertCircle, Play, RefreshCw, Cloud, Terminal, Users, Send, Zap, X, Server, Layers } from 'lucide-react';
+import { HardDrive, Plus, Folder, Link, Settings, Check, ChevronDown, ChevronRight, AlertCircle, Play, RefreshCw, Cloud, Terminal, Users, Send, Zap, X, Server, Layers, Globe, Edit2, Trash2, UserPlus, Search } from 'lucide-react';
 import {
     fetchConfig, DomainConfig,
     listDrives, listKeys, KeyInfo, DriveInfo,
     createDrivesUnified, checkDriveMethods, DriveMethod, MethodsResponse, listDrivesUnified,
     RcloneRemote, listLocalRemotes, fetchSSHServers, SSHServer,
     testRcloneConnection, createDriveRemote, createUnionRemoteDirect, addDriveManagers, listKnownGroups,
-    listUnionRemotes, getUnionDetails, expandUnion, UnionInfo, UnionDetails
+    listUnionRemotes, getUnionDetails, expandUnion, UnionInfo, UnionDetails, renameDrive, deleteDrive, updateLocalRemote, deleteRemoteWithConfirm, renameRemote
 } from '../api';
 import { PageHeader } from '../components/PageHeader';
 import { Card } from '../components/Card';
+import { Dropdown } from '../components/Dropdown';
 
 // Collapsible Panel Component
 const Panel = ({
@@ -36,10 +37,10 @@ const Panel = ({
     };
 
     return (
-        <div className="bg-zinc-900/50 border border-zinc-800 rounded-lg overflow-hidden">
+        <div className="bg-zinc-900/50 border border-zinc-800 rounded-lg">
             <button
                 onClick={() => setIsOpen(!isOpen)}
-                className="w-full flex items-center gap-2 px-4 py-3 hover:bg-zinc-800/50 transition text-left"
+                className="w-full flex items-center gap-2 px-4 py-3 hover:bg-zinc-800/50 transition text-left rounded-t-lg"
             >
                 {isOpen ? <ChevronDown size={16} className="text-zinc-500" /> : <ChevronRight size={16} className="text-zinc-500" />}
                 <Icon size={16} className="text-violet-400" />
@@ -137,11 +138,207 @@ const DriveManager = () => {
     const [createdDrives, setCreatedDrives] = useState<DriveInfo[]>([]);
     const [createdRemotes, setCreatedRemotes] = useState<string[]>([]);
     const [connectionTests, setConnectionTests] = useState<Record<string, 'pending' | 'ok' | 'error'>>({});
+
+    // Manual Tool state
+    const [manualDriveId, setManualDriveId] = useState('');
+    const [manualEmail, setManualEmail] = useState('');
+    const [manualRole, setManualRole] = useState('organizer');
+    const [manualLoading, setManualLoading] = useState(false);
+    const [manualLog, setManualLog] = useState<string | null>(null);
     const [selectedServers, setSelectedServers] = useState<Set<string>>(new Set());
     const [pushResults, setPushResults] = useState<{ server: string; status: string }[]>([]);
 
+    // Existing Drives State
+    const [existingDrives, setExistingDrives] = useState<{ id: string; name: string }[]>([]);
+    const [existingFilter, setExistingFilter] = useState('');
+    const [existingLoading, setExistingLoading] = useState(false);
+    const [editingDriveId, setEditingDriveId] = useState<string | null>(null);
+    const [editingName, setEditingName] = useState('');
+    const [addingMemberDriveId, setAddingMemberDriveId] = useState<string | null>(null);
+    const [addingMemberEmail, setAddingMemberEmail] = useState('');
+    const [addingMemberRole, setAddingMemberRole] = useState('organizer');
+
     // Tab state
-    const [activeTab, setActiveTab] = useState<'builder' | 'expand' | 'existing'>('builder');
+    const [activeTab, setActiveTab] = useState<'builder' | 'manager' | 'manual'>('builder');
+
+    // Manager Tab State
+    const [managerQuery, setManagerQuery] = useState('');
+    const [managerSelection, setManagerSelection] = useState<Set<string>>(new Set());
+    const [managerMode, setManagerMode] = useState<'view' | 'create_union'>('view');
+    const [unionNameInput, setUnionNameInput] = useState('');
+    const [managerLimit, setManagerLimit] = useState(50);
+
+    const handleCreateUnion = async () => {
+        if (!unionNameInput) { alert('Name required'); return; }
+        const upstreams: string[] = [];
+        drivesWithRemotes.forEach(d => {
+            if (managerSelection.has(d.id)) {
+                d.remotes.forEach(r => upstreams.push(r.name));
+            }
+        });
+
+        if (upstreams.length < 2) { alert('Selected drives must have associated rclone remotes to create a union.'); return; }
+
+        try {
+            setLogs(prev => [...prev, `Creating Union ${unionNameInput}...`]);
+            await createUnionRemoteDirect({
+                name: unionNameInput,
+                upstreams: upstreams,
+                service_account_file_path: serviceAccountFile || keys[0]?.path
+            });
+            setLogs(prev => [...prev, `✓ Union Created: ${unionNameInput}`]);
+            alert(`Union "${unionNameInput}" Created!`);
+            setManagerMode('view');
+            setManagerSelection(new Set());
+            setUnionNameInput('');
+            refreshManagerData();
+        } catch (e: any) {
+            alert('Failed: ' + e.message);
+            setLogs(prev => [...prev, `✗ Failed Union: ${e.message}`]);
+        }
+    };
+
+    const refreshManagerData = async () => {
+        if (!selectedDomain) return;
+        setExistingLoading(true);
+        try {
+            // Refresh Remotes
+            const remotesRes = await listLocalRemotes().catch(e => ({ remotes: [] }));
+            setLocalRemotes(remotesRes.remotes || []);
+
+            // Refresh Drives
+            const sa = serviceAccountFile || keys[0]?.path;
+            const imp = impersonateEmail || selectedDomain?.admin_email;
+
+            const res = await listDrivesUnified({
+                method: 'google_api',
+                service_account_file: sa,
+                impersonate_email: imp,
+                limit: managerLimit > 0 ? managerLimit : undefined
+            });
+            setExistingDrives(res.drives || []);
+        } catch (e: any) {
+            console.error(e);
+            setManualLog(`Refresh failed: ${e.message}`); // Optional log
+        } finally {
+            setExistingLoading(false);
+        }
+    };
+
+    const handleRenameDrive = async () => {
+        if (managerSelection.size !== 1) { alert("Select exactly one drive to rename"); return; }
+        const driveId = Array.from(managerSelection)[0];
+        const drive = existingDrives?.find(d => d.id === driveId);
+        if (!drive) return;
+
+        const newName = window.prompt("Enter new name:", drive.name);
+        if (!newName || newName === drive.name) return;
+
+        const sa = serviceAccountFile || keys[0]?.path;
+        const imp = impersonateEmail || selectedDomain?.admin_email;
+        if (!sa || !imp) { alert("Service account/Email config missing"); return; }
+
+        try {
+            await renameDrive({
+                drive_id: drive.id,
+                new_name: newName,
+                method: 'google_api',
+                service_account_file: sa,
+                impersonate_email: imp
+            });
+            refreshManagerData();
+        } catch (e: any) { alert("Rename failed: " + e.message); }
+    };
+
+    const handleDeleteDrive = async () => {
+        if (managerSelection.size === 0) return;
+        if (!confirm(`Delete ${managerSelection.size} selected drive(s)?`)) return;
+
+        const sa = serviceAccountFile || keys[0]?.path;
+        const imp = impersonateEmail || selectedDomain?.admin_email;
+        if (!sa || !imp) { alert("Service account/Email config missing"); return; }
+
+        try {
+            for (const id of Array.from(managerSelection)) {
+                await deleteDrive({
+                    drive_id: id,
+                    method: 'google_api',
+                    service_account_file: sa,
+                    impersonate_email: imp
+                });
+            }
+            setManagerSelection(new Set());
+            refreshManagerData();
+        } catch (e: any) { alert("Delete failed: " + e.message); }
+    };
+
+    const handleRenameRemote = async (oldName: string) => {
+        const newName = window.prompt("Enter new remote name:", oldName);
+        if (!newName || newName === oldName) return;
+        try {
+            await renameRemote(oldName, newName);
+            refreshManagerData();
+        } catch (e: any) { alert("Rename remote failed: " + e.message); }
+    };
+
+    const handleDeleteRemote = async (name: string) => {
+        if (!confirm(`Delete remote ${name}?`)) return;
+        try {
+            await deleteRemoteWithConfirm(name, true);
+            refreshManagerData();
+        } catch (e: any) { alert("Delete remote failed: " + e.message); }
+    };
+
+    // Auto-refresh when entering manager tab if domain is selected
+    useEffect(() => {
+        if (activeTab === 'manager' && selectedDomain) {
+            refreshManagerData();
+        }
+    }, [activeTab, selectedDomain]);
+
+    // Auto-select domain if not selected
+    useEffect(() => {
+        if (!selectedDomain && domains.length > 0) {
+            setSelectedDomain(domains[0]);
+        }
+    }, [domains, selectedDomain]);
+
+    const drivesWithRemotes = useMemo(() => {
+        if (!existingDrives) return [];
+        return existingDrives.map(drive => {
+            const associated = localRemotes.filter(r => r.config && r.config.team_drive === drive.id);
+            return { ...drive, remotes: associated };
+        });
+    }, [existingDrives, localRemotes]);
+
+    const filteredManagerItems = useMemo(() => {
+        if (!managerQuery) return drivesWithRemotes;
+        const q = managerQuery.toLowerCase();
+        return drivesWithRemotes.filter(d =>
+            d.name.toLowerCase().includes(q) ||
+            d.id.toLowerCase().includes(q) ||
+            d.remotes.some(r => r.name.toLowerCase().includes(q))
+        );
+    }, [drivesWithRemotes, managerQuery]);
+
+    const selectedManagerDrives = useMemo(() =>
+        drivesWithRemotes.filter(d => managerSelection.has(d.id)),
+        [drivesWithRemotes, managerSelection]
+    );
+
+    const toggleManagerSelection = (id: string, multi: boolean) => {
+        // If multi=true (check box), toggle. If multi=false (row click?), set single?
+        // User requested "fuzzy filter... selecting multiple drives".
+        // Standard: Checkbox toggles.
+        setManagerSelection(prev => {
+            const next = new Set(prev);
+            if (next.has(id)) next.delete(id);
+            else next.add(id);
+            return next;
+        });
+    };
+    // Edit Union Sub-tab state
+    const [editMode, setEditMode] = useState<'add' | 'config' | 'delete'>('add');
 
     // Expand Union state
     const [unionList, setUnionList] = useState<UnionInfo[]>([]);
@@ -150,39 +347,71 @@ const DriveManager = () => {
     const [expandLogs, setExpandLogs] = useState<string[]>([]);
     const [expandLoading, setExpandLoading] = useState(false);
 
+    // Edit Config State
+    const [editConfigUpstreams, setEditConfigUpstreams] = useState('');
+    const [editActionPolicy, setEditActionPolicy] = useState('');
+    const [editCreatePolicy, setEditCreatePolicy] = useState('');
+
+    useEffect(() => {
+        if (selectedUnion) {
+            setEditConfigUpstreams(selectedUnion.upstreams.join(' '));
+            setEditActionPolicy(selectedUnion.action_policy);
+            setEditCreatePolicy(selectedUnion.create_policy);
+        }
+    }, [selectedUnion]);
+
+
+
     // Existing remotes tab state
     const [queryPrefix, setQueryPrefix] = useState('');
     const [queriedDrives, setQueriedDrives] = useState<DriveInfo[]>([]);
     const [queryLoading, setQueryLoading] = useState(false);
 
     // Load initial data
+    // Load initial data
     useEffect(() => {
         const loadData = async () => {
+            // Priority 1: Configuration (Domains)
             try {
-                const [config, keysData, methods, servers, groupsRes, remotesRes, unionsRes] = await Promise.all([
-                    fetchConfig(),
-                    listKeys(),
-                    checkDriveMethods(),
-                    fetchSSHServers(),
-                    listKnownGroups(),
-                    listLocalRemotes(),
-                    listUnionRemotes()
-                ]);
-
+                const config = await fetchConfig();
                 setDomains(config.domains || []);
-                setKeys(keysData.keys);
-                setMethodsAvailable(methods);
-                setSshServers(servers);
-                setKnownGroups(groupsRes.groups || []);
-                setLocalRemotes(remotesRes.remotes || []);
-                setUnionList(unionsRes.unions || []);
+            } catch (e) {
+                console.error('Failed to load config', e);
+            }
 
-                if (keysData.keys.length > 0) {
+            // Priority 2: Other data (independent failures allowed)
+            try {
+                const keysData = await listKeys().catch(e => ({ keys: [] }));
+                setKeys(keysData.keys || []);
+                if (keysData.keys && keysData.keys.length > 0) {
                     setServiceAccountFile(keysData.keys[0].path);
                 }
-            } catch (e) {
-                console.error('Failed to load data', e);
-            }
+            } catch (e) { console.error('Failed keys', e); }
+
+            try {
+                const methods = await checkDriveMethods().catch(e => null);
+                setMethodsAvailable(methods);
+            } catch (e) { console.error('Failed methods', e); }
+
+            try {
+                const servers = await fetchSSHServers().catch(e => []);
+                setSshServers(servers || []);
+            } catch (e) { console.error('Failed servers', e); }
+
+            try {
+                const groupsRes = await listKnownGroups().catch(e => ({ groups: [] }));
+                setKnownGroups(groupsRes.groups || []);
+            } catch (e) { console.error('Failed groups', e); }
+
+            try {
+                const remotesRes = await listLocalRemotes().catch(e => ({ remotes: [] }));
+                setLocalRemotes(remotesRes.remotes || []);
+            } catch (e) { console.error('Failed remotes', e); }
+
+            try {
+                const unionsRes = await listUnionRemotes().catch(e => ({ unions: [] }));
+                setUnionList(unionsRes.unions || []);
+            } catch (e) { console.error('Failed unions', e); }
         };
         loadData();
     }, []);
@@ -311,7 +540,7 @@ const DriveManager = () => {
             try {
                 await createDriveRemote({
                     name: drive.name,
-                    team_drive_id: drive.id,
+                    drive_id: drive.id,
                     service_account_file: serviceAccountFile
                 });
                 setCreatedRemotes(prev => [...prev, drive.name]);
@@ -398,6 +627,11 @@ const DriveManager = () => {
                 subtitle="Create Shared Drives and rclone remotes"
                 gradient="from-violet-600 to-purple-600"
             />
+            <datalist id="known-emails-list">
+                {knownGroups.map(email => (
+                    <option key={email} value={email} />
+                ))}
+            </datalist>
 
             {/* Tab Navigation */}
             <div className="flex border-b border-zinc-800 mb-6">
@@ -411,22 +645,12 @@ const DriveManager = () => {
                     </div>
                 </button>
                 <button
-                    onClick={() => setActiveTab('expand')}
-                    className={`px-6 py-3 text-sm font-medium border-b-2 transition ${activeTab === 'expand' ? 'border-purple-500 text-purple-400' : 'border-transparent text-zinc-500 hover:text-zinc-300'}`}
+                    onClick={() => setActiveTab('manager')}
+                    className={`px-6 py-3 text-sm font-medium border-b-2 transition ${activeTab === 'manager' ? 'border-violet-500 text-violet-400' : 'border-transparent text-zinc-500 hover:text-zinc-300'}`}
                 >
                     <div className="flex items-center gap-2">
                         <Layers size={16} />
-                        Expand Union
-                        {unionList.length > 0 && <span className="text-xs bg-purple-600/30 px-1.5 rounded">{unionList.length}</span>}
-                    </div>
-                </button>
-                <button
-                    onClick={() => setActiveTab('existing')}
-                    className={`px-6 py-3 text-sm font-medium border-b-2 transition ${activeTab === 'existing' ? 'border-blue-500 text-blue-400' : 'border-transparent text-zinc-500 hover:text-zinc-300'}`}
-                >
-                    <div className="flex items-center gap-2">
-                        <Folder size={16} />
-                        Existing Drives
+                        Edit Drives & Remotes
                     </div>
                 </button>
             </div>
@@ -471,14 +695,38 @@ const DriveManager = () => {
                             >
                                 <div>
                                     <label className="block text-xs text-zinc-500 mb-1">Domain</label>
-                                    <select
-                                        value={selectedDomain?.domain_name || ''}
-                                        onChange={e => setSelectedDomain(domains.find(d => d.domain_name === e.target.value) || null)}
-                                        className="w-full bg-zinc-800 border border-zinc-700 rounded px-3 py-2 text-sm"
+                                    <Dropdown
+                                        fullWidth
+                                        trigger={
+                                            <div className="w-full bg-zinc-900 border border-zinc-800 p-3 rounded-lg flex items-center justify-between cursor-pointer hover:border-zinc-700 transition">
+                                                <div className="flex items-center gap-2 overflow-hidden">
+                                                    <Globe className="text-indigo-400 shrink-0" size={18} />
+                                                    <span className="text-sm truncate text-zinc-300">
+                                                        {selectedDomain?.domain_name || 'Select Domain...'}
+                                                    </span>
+                                                </div>
+                                                <ChevronDown size={14} className="text-zinc-500" />
+                                            </div>
+                                        }
+                                        menuClassName="p-2 max-h-60 overflow-y-auto"
                                     >
-                                        <option value="">Select Domain</option>
-                                        {domains.map(d => <option key={d.domain_name} value={d.domain_name}>{d.domain_name}</option>)}
-                                    </select>
+                                        {domains.length === 0 ? (
+                                            <div className="p-2 text-sm text-zinc-500 italic">No domains configured</div>
+                                        ) : (
+                                            domains.map(d => (
+                                                <div
+                                                    key={d.domain_name}
+                                                    className={`flex items-center gap-2 p-2 hover:bg-zinc-800 rounded cursor-pointer text-sm mb-0.5 ${selectedDomain?.domain_name === d.domain_name ? 'text-white bg-zinc-800' : 'text-zinc-400'}`}
+                                                    onClick={() => setSelectedDomain(d)}
+                                                >
+                                                    <div className={`w-4 h-4 rounded-full border flex items-center justify-center ${selectedDomain?.domain_name === d.domain_name ? 'bg-indigo-500 border-indigo-500' : 'border-zinc-600'}`}>
+                                                        {selectedDomain?.domain_name === d.domain_name && <div className="w-1.5 h-1.5 bg-white rounded-full" />}
+                                                    </div>
+                                                    {d.domain_name}
+                                                </div>
+                                            ))
+                                        )}
+                                    </Dropdown>
                                 </div>
 
                                 <div className="grid grid-cols-2 gap-3">
@@ -514,6 +762,7 @@ const DriveManager = () => {
                                             <label className="block text-xs text-zinc-500 mb-1">Impersonate Email</label>
                                             <input
                                                 type="email"
+                                                list="known-emails-list"
                                                 value={impersonateEmail}
                                                 onChange={e => setImpersonateEmail(e.target.value)}
                                                 placeholder="admin@domain.com"
@@ -600,8 +849,8 @@ const DriveManager = () => {
                                 </div>
                             </Panel>
 
-                            {/* Group Managers Panel */}
-                            <Panel title="Group Managers" icon={Users} defaultOpen={false} status="Optional">
+                            {/* Members & Managers Panel */}
+                            <Panel title="Members & Managers" icon={Users} defaultOpen={false} status="Optional">
                                 {knownGroups.length > 0 && (
                                     <div className="flex flex-wrap gap-2">
                                         {knownGroups.map(g => (
@@ -629,9 +878,10 @@ const DriveManager = () => {
                                 <div className="flex gap-2">
                                     <input
                                         type="email"
+                                        list="known-emails-list"
                                         value={newGroupEmail}
                                         onChange={e => setNewGroupEmail(e.target.value)}
-                                        placeholder="group@domain.com"
+                                        placeholder="user@domain.com or group@..."
                                         className="flex-1 bg-zinc-800 border border-zinc-700 rounded px-3 py-1.5 text-xs"
                                     />
                                     <button
@@ -649,7 +899,7 @@ const DriveManager = () => {
                                 </div>
                                 {selectedGroups.length > 0 && (
                                     <div className="text-xs text-zinc-500">
-                                        {selectedGroups.length} group(s) selected
+                                        {selectedGroups.length} member(s) selected
                                     </div>
                                 )}
                             </Panel>
@@ -747,7 +997,7 @@ const DriveManager = () => {
                             </Panel>
                         </div>
 
-                        {/* RIGHT: Builder Preview */}
+                        {/* RIGHT: Builder Preview & Manual Tools */}
                         <div className="lg:sticky lg:top-6 space-y-4">
                             <Card>
                                 <div className="flex items-center justify-between mb-4">
@@ -836,6 +1086,75 @@ const DriveManager = () => {
                                 </div>
                             </Card>
 
+
+
+                            {/* Manual Action Card */}
+                            <Card>
+                                <h3 className="text-sm font-medium text-white mb-3 flex items-center gap-2">
+                                    <Users size={16} className="text-amber-400" />
+                                    Manual Member Add (Retry)
+                                </h3>
+                                <div className="space-y-2">
+                                    <input
+                                        type="text"
+                                        value={manualDriveId}
+                                        onChange={e => setManualDriveId(e.target.value)}
+                                        placeholder="Drive ID (from logs)"
+                                        className="w-full bg-zinc-800 border border-zinc-700 rounded px-2 py-1.5 text-xs font-mono"
+                                    />
+                                    <input
+                                        type="email"
+                                        list="known-emails-list"
+                                        value={manualEmail}
+                                        onChange={e => setManualEmail(e.target.value)}
+                                        placeholder="Email to add"
+                                        className="w-full bg-zinc-800 border border-zinc-700 rounded px-2 py-1.5 text-xs"
+                                    />
+                                    <select
+                                        value={manualRole}
+                                        onChange={e => setManualRole(e.target.value)}
+                                        className="w-full bg-zinc-800 border border-zinc-700 rounded px-2 py-1.5 text-xs"
+                                    >
+                                        <option value="organizer">Manager</option>
+                                        <option value="fileOrganizer">Content Manager</option>
+                                        <option value="writer">Contributor</option>
+                                        <option value="commenter">Commenter</option>
+                                        <option value="reader">Viewer</option>
+                                    </select>
+                                    <button
+                                        onClick={async () => {
+                                            if (!manualDriveId || !manualEmail) return;
+                                            setManualLoading(true);
+                                            setManualLog(null);
+                                            try {
+                                                const res = await addDriveManagers({
+                                                    drive_id: manualDriveId,
+                                                    group_emails: [manualEmail],
+                                                    service_account_file: serviceAccountFile,
+                                                    impersonate_email: impersonateEmail,
+                                                    role: manualRole
+                                                });
+                                                if (res.status === 'ok') setManualLog(`✓ Added ${manualEmail}`);
+                                                else setManualLog(`✗ Failed: ${res.failed?.[0]?.error || 'Unknown error'}`);
+                                            } catch (e: any) {
+                                                setManualLog(`✗ Error: ${e.message}`);
+                                            } finally {
+                                                setManualLoading(false);
+                                            }
+                                        }}
+                                        disabled={manualLoading || !manualDriveId || !manualEmail}
+                                        className="w-full py-1.5 bg-zinc-700 hover:bg-zinc-600 disabled:opacity-50 text-white rounded text-xs"
+                                    >
+                                        {manualLoading ? 'Adding...' : 'Add Manager/Member'}
+                                    </button>
+                                    {manualLog && (
+                                        <div className={`text-[10px] ${manualLog.startsWith('✓') ? 'text-emerald-400' : 'text-red-400'}`}>
+                                            {manualLog}
+                                        </div>
+                                    )}
+                                </div>
+                            </Card>
+
                             {/* Logs */}
                             {logs.length > 0 && (
                                 <Card>
@@ -848,237 +1167,270 @@ const DriveManager = () => {
                                 </Card>
                             )}
                         </div>
-                    </div>
-                </div>
+                    </div >
+                </div >
             )}
 
             {/* EXPAND UNION TAB */}
-            {activeTab === 'expand' && (
-                <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                    {/* LEFT: Union Selection & Current State */}
-                    <div className="space-y-4">
-                        <Card>
-                            <h3 className="text-sm font-medium text-white mb-3 flex items-center gap-2">
-                                <Layers size={16} className="text-purple-400" />
-                                Select Union Remote
-                            </h3>
-                            <select
-                                value={selectedUnion?.name || ''}
-                                onChange={async (e) => {
-                                    if (!e.target.value) {
-                                        setSelectedUnion(null);
-                                        return;
-                                    }
-                                    try {
-                                        const details = await getUnionDetails(e.target.value);
-                                        setSelectedUnion(details);
-                                        // Auto-detect next suffix
-                                        if (details.drives.length > 0) {
-                                            const lastDrive = details.drives[details.drives.length - 1];
-                                            const match = lastDrive.remote_name.match(/-(\d+)$/);
-                                            if (match) {
-                                                setExpandCount(1);
-                                            }
-                                        }
-                                    } catch (err) {
-                                        console.error(err);
-                                    }
-                                }}
-                                className="w-full bg-zinc-800 border border-zinc-700 rounded px-3 py-2 text-sm"
-                            >
-                                <option value="">Select a union remote...</option>
-                                {unionList.map(u => (
-                                    <option key={u.name} value={u.name}>{u.name} ({u.upstream_count} drives)</option>
-                                ))}
-                            </select>
-                        </Card>
+            {activeTab === 'manager' && (
+                <div className="grid grid-cols-1 lg:grid-cols-4 gap-6 h-[calc(100vh-250px)]">
+                    {/* LEFT COLUMN: List & Filter */}
+                    <Card className="lg:col-span-1 flex flex-col h-full overflow-hidden">
+                        <div className="p-4 border-b border-zinc-800 space-y-3 bg-zinc-950/50">
+                            {/* Domain Selector */}
+                            <div className="mb-1">
+                                <label className="text-[10px] text-zinc-500 block mb-1 uppercase tracking-wider font-semibold">Domain</label>
+                                <select
+                                    value={selectedDomain?.domain_name || ''}
+                                    onChange={e => {
+                                        const dom = domains.find(d => d.domain_name === e.target.value);
+                                        if (dom) setSelectedDomain(dom);
+                                    }}
+                                    className="w-full bg-zinc-900 border border-zinc-700 rounded px-2 py-1.5 text-sm text-zinc-300 focus:border-violet-500 outline-none"
+                                >
+                                    <option value="" disabled>Select Domain</option>
+                                    {domains.map(d => <option key={d.domain_name} value={d.domain_name}>{d.domain_name}</option>)}
+                                </select>
+                            </div>
 
-                        {selectedUnion && (
-                            <Card>
-                                <h3 className="text-sm font-medium text-white mb-3">Union Configuration</h3>
-                                <div className="text-xs font-mono bg-zinc-900/50 rounded p-3 space-y-1">
-                                    <div><span className="text-zinc-500">type</span> = <span className="text-purple-400">union</span></div>
-                                    <div><span className="text-zinc-500">action_policy</span> = <span className="text-amber-400">{selectedUnion.action_policy}</span></div>
-                                    <div><span className="text-zinc-500">create_policy</span> = <span className="text-amber-400">{selectedUnion.create_policy}</span></div>
-                                    {selectedUnion.service_account_file && (
-                                        <div><span className="text-zinc-500">service_account_file</span> = <span className="text-cyan-400">{selectedUnion.service_account_file.split('/').pop()}</span></div>
+                            <div className="flex gap-2">
+                                <div className="relative flex-1">
+                                    <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-500" size={14} />
+                                    <input
+                                        type="text"
+                                        placeholder="Filter drives..."
+                                        value={managerQuery}
+                                        onChange={e => setManagerQuery(e.target.value)}
+                                        className="w-full bg-zinc-900 border border-zinc-700 rounded pl-9 pr-3 py-2 text-sm focus:border-violet-500 transition-colors"
+                                    />
+                                </div>
+                                <input
+                                    type="number"
+                                    title="Max items (0 = all)"
+                                    value={managerLimit}
+                                    onChange={e => setManagerLimit(parseInt(e.target.value) || 0)}
+                                    className="w-16 bg-zinc-900 border border-zinc-700 rounded px-2 py-2 text-sm text-center focus:border-violet-500 transition-colors text-zinc-300"
+                                />
+                                <button
+                                    onClick={refreshManagerData}
+                                    className="px-3 py-2 bg-zinc-800 hover:bg-zinc-700 rounded text-zinc-300 transition-colors"
+                                    title="Refresh Drives"
+                                >
+                                    <RefreshCw size={14} className={existingLoading ? 'animate-spin' : ''} />
+                                </button>
+                            </div>
+
+                            <div className="flex items-center justify-between text-xs text-zinc-500">
+                                <span>{filteredManagerItems.length} items</span>
+                                <button onClick={() => setManagerSelection(new Set())} disabled={managerSelection.size === 0} className="hover:text-zinc-300 disabled:opacity-50">Clear</button>
+                            </div>
+                        </div>
+
+                        <div className="flex-1 overflow-y-auto p-2 space-y-1">
+                            {filteredManagerItems.map(drive => (
+                                <div
+                                    key={drive.id}
+                                    onClick={(e) => {
+                                        // Allow selection
+                                        toggleManagerSelection(drive.id, true);
+                                    }}
+                                    className={`p-3 rounded cursor-pointer border transition-colors ${managerSelection.has(drive.id) ? 'bg-violet-500/10 border-violet-500/50' : 'bg-zinc-900/50 border-transparent hover:bg-zinc-800'}`}
+                                >
+                                    <div className="flex items-center justify-between mb-1">
+                                        <span className={`text-sm font-medium truncate ${managerSelection.has(drive.id) ? 'text-violet-300' : 'text-zinc-300'}`}>{drive.name}</span>
+                                        {drive.remotes.length > 0 ? (
+                                            <span className="text-[10px] bg-emerald-500/10 text-emerald-400 px-1.5 py-0.5 rounded flex items-center gap-1 shrink-0">
+                                                <Link size={10} /> {drive.remotes.length}
+                                            </span>
+                                        ) : (
+                                            <span className="text-[10px] bg-zinc-800 text-zinc-500 px-1.5 py-0.5 rounded shrink-0">No Remote</span>
+                                        )}
+                                    </div>
+                                    <div className="flex flex-wrap gap-1">
+                                        {drive.remotes.map(r => (
+                                            <span key={r.name} className="text-[10px] text-zinc-500 px-1 border border-zinc-800 rounded bg-zinc-900/50 truncate max-w-[100px]">{r.name}</span>
+                                        ))}
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+                    </Card>
+
+                    {/* RIGHT COLUMN: Actions */}
+                    <Card className="lg:col-span-3 flex flex-col h-full bg-zinc-900/30 overflow-hidden">
+                        {managerSelection.size === 0 ? (
+                            <div className="flex-1 flex flex-col items-center justify-center text-zinc-600 space-y-4">
+                                <Layers size={48} className="opacity-20" />
+                                <p>Select drives to manage</p>
+                            </div>
+                        ) : (
+                            <div className="flex flex-col h-full p-6">
+                                <div className="flex items-center justify-between pb-6 border-b border-zinc-800 shrink-0">
+                                    <h3 className="text-lg font-medium text-white flex items-center gap-2">
+                                        <Check className="text-violet-500" size={20} />
+                                        {managerSelection.size} Selected
+                                    </h3>
+                                    <div className="flex gap-2">
+                                        {managerSelection.size > 1 && (
+                                            <button
+                                                onClick={() => setManagerMode('create_union')}
+                                                className="px-3 py-1.5 bg-violet-600 hover:bg-violet-500 text-white text-xs rounded flex items-center gap-2"
+                                            >
+                                                <Layers size={14} /> Create Union
+                                            </button>
+                                        )}
+                                        <button onClick={handleRenameDrive} className="px-3 py-1.5 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 text-xs rounded disabled:opacity-50" disabled={managerSelection.size !== 1}>Rename</button>
+                                        <button onClick={handleDeleteDrive} className="px-3 py-1.5 bg-red-900/30 hover:bg-red-900/50 text-red-400 text-xs rounded">Delete</button>
+                                    </div>
+                                </div>
+
+                                <div className="flex-1 overflow-y-auto pt-6">
+                                    {managerSelection.size === 1 && (
+                                        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                                            {(() => {
+                                                const drive = selectedManagerDrives[0];
+                                                if (!drive) return null;
+                                                return (
+                                                    <>
+                                                        <div className="space-y-6">
+                                                            <div>
+                                                                <h4 className="text-xs font-medium text-zinc-500 uppercase tracking-wider mb-3">Drive Info</h4>
+                                                                <div className="bg-zinc-950 p-4 rounded border border-zinc-800 space-y-2 text-sm">
+                                                                    <div className="flex justify-between"><span className="text-zinc-500">Name</span> <span>{drive.name}</span></div>
+                                                                    <div className="flex justify-between"><span className="text-zinc-500">ID</span> <span className="font-mono text-xs text-zinc-400">{drive.id}</span></div>
+
+                                                                </div>
+                                                            </div>
+
+                                                            <div>
+                                                                <h4 className="text-xs font-medium text-zinc-500 uppercase tracking-wider mb-3 flex justify-between items-center">
+                                                                    <span>Associated Remotes</span>
+                                                                    {drive.remotes.length === 0 && (
+                                                                        <button
+                                                                            onClick={async () => {
+                                                                                const sa = serviceAccountFile || keys[0]?.path;
+                                                                                if (!sa) { alert('No service account selected'); return; }
+                                                                                try {
+                                                                                    setLogs(p => [...p, `Creating remote for ${drive.name}...`]);
+                                                                                    await createDriveRemote({
+                                                                                        name: drive.name,
+                                                                                        drive_id: drive.id,
+                                                                                        service_account_file: sa
+                                                                                    });
+                                                                                    setLogs(p => [...p, `✓ Created remote: ${drive.name}`]);
+                                                                                    alert('Remote created! Refreshing page...');
+                                                                                    window.location.reload();
+                                                                                } catch (e: any) { alert(e.message); }
+                                                                            }}
+                                                                            className="text-[10px] bg-violet-600 hover:bg-violet-500 text-white px-2 py-1 rounded flex items-center gap-1"
+                                                                        >
+                                                                            <Plus size={10} /> Create Remote
+                                                                        </button>
+                                                                    )}
+                                                                </h4>
+                                                                <div className="space-y-2">
+                                                                    {drive.remotes.map(r => (
+                                                                        <div key={r.name} className="flex items-center justify-between text-sm bg-zinc-950 px-3 py-2 rounded border border-zinc-800">
+                                                                            <span className="font-mono text-zinc-300">{r.name}</span>
+                                                                            <div className="flex gap-2">
+                                                                                <span className="text-xs text-zinc-600 bg-zinc-900 px-1 rounded">rclone</span>
+                                                                                <button onClick={() => handleRenameRemote(r.name)} className="text-zinc-500 hover:text-blue-400 p-1"><Edit2 size={10} /></button>
+                                                                                <button onClick={() => handleDeleteRemote(r.name)} className="text-zinc-500 hover:text-red-400 p-1"><Trash2 size={10} /></button>
+                                                                            </div>                                </div>
+
+                                                                    ))}
+                                                                    {drive.remotes.length === 0 && (
+                                                                        <div className="bg-zinc-950/50 border border-zinc-800 border-dashed rounded p-4 text-center text-xs text-zinc-600 italic">
+                                                                            No associated remotes found
+                                                                        </div>
+                                                                    )}
+                                                                </div>
+                                                            </div>
+                                                        </div>
+
+                                                        {/* Adding Managers / Members */}
+                                                        <div>
+                                                            <h4 className="text-xs font-medium text-zinc-500 uppercase tracking-wider mb-3">Membership</h4>
+                                                            <div className="bg-zinc-950 p-4 rounded border border-zinc-800">
+                                                                <div className="space-y-4">
+                                                                    <div>
+                                                                        <label className="text-xs text-zinc-500 block mb-1">Add Member Email</label>
+                                                                        <div className="flex gap-2">
+                                                                            <input className="flex-1 bg-zinc-900 border border-zinc-700 rounded px-2 py-1.5 text-xs"
+                                                                                placeholder="user@example.com"
+                                                                                list="known-emails-list"
+                                                                            />
+                                                                            <button className="bg-zinc-800 hover:bg-zinc-700 text-zinc-300 px-3 py-1.5 rounded text-xs">Add</button>
+                                                                        </div>
+                                                                    </div>
+                                                                </div>
+                                                            </div>
+                                                        </div>
+                                                    </>
+                                                );
+                                            })()}
+                                        </div>
+                                    )}
+                                    {managerSelection.size > 1 && managerMode === 'view' && (
+                                        <div className="flex flex-col items-center justify-center h-full text-zinc-600 space-y-4">
+                                            <Layers size={48} className="text-violet-500/20" />
+                                            <p>Bulk actions available in toolbar above</p>
+                                        </div>
+                                    )}
+                                    {managerMode === 'create_union' && (
+                                        <div className="bg-zinc-950 p-6 rounded border border-violet-500/30 max-w-lg mx-auto mt-10">
+                                            <div className="flex items-center gap-3 mb-6">
+                                                <div className="p-2 bg-violet-500/20 rounded-full text-violet-400">
+                                                    <Layers size={24} />
+                                                </div>
+                                                <div>
+                                                    <h3 className="text-lg font-medium text-white">Create Union Remote</h3>
+                                                    <p className="text-sm text-zinc-400">Combine selected drives into a unified remote</p>
+                                                </div>
+                                            </div>
+
+                                            <div className="space-y-4">
+                                                <div>
+                                                    <label className="text-sm text-zinc-400 block mb-1">Union Name</label>
+                                                    <input
+                                                        value={unionNameInput}
+                                                        onChange={e => setUnionNameInput(e.target.value)}
+                                                        className="w-full bg-zinc-900 border border-zinc-700 rounded px-3 py-2 text-sm text-white focus:border-violet-500 transition-colors"
+                                                        placeholder="e.g. movies-union"
+                                                        autoFocus
+                                                    />
+                                                </div>
+
+                                                <div className="bg-zinc-900/50 rounded p-3 text-xs text-zinc-500">
+                                                    Will include remotes from <strong>{managerSelection.size}</strong> selected drives.
+                                                </div>
+
+                                                <div className="flex justify-end gap-3 pt-4">
+                                                    <button
+                                                        onClick={() => setManagerMode('view')}
+                                                        className="px-4 py-2 text-zinc-400 hover:text-white text-sm"
+                                                    >
+                                                        Cancel
+                                                    </button>
+                                                    <button
+                                                        onClick={handleCreateUnion}
+                                                        disabled={!unionNameInput}
+                                                        className="px-4 py-2 bg-violet-600 hover:bg-violet-500 text-white rounded text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed"
+                                                    >
+                                                        Create Union
+                                                    </button>
+                                                </div>
+                                            </div>
+                                        </div>
                                     )}
                                 </div>
-
-                                <h4 className="text-xs font-medium text-zinc-400 mt-4 mb-2">Current Upstreams ({selectedUnion.drives.length})</h4>
-                                <div className="space-y-2 max-h-64 overflow-y-auto">
-                                    {selectedUnion.drives.map((d, i) => (
-                                        <div key={d.remote_name} className="bg-zinc-800/50 border border-zinc-700 rounded p-2">
-                                            <div className="flex items-center gap-2">
-                                                <span className="text-xs text-zinc-500">{i + 1}.</span>
-                                                <span className="font-mono text-sm text-white">{d.remote_name}</span>
-                                                <span className={`ml-auto text-[10px] ${d.type === 'drive' ? 'text-emerald-400' : 'text-red-400'}`}>
-                                                    {d.type}
-                                                </span>
-                                            </div>
-                                            <div className="text-[10px] text-zinc-500 font-mono mt-1">
-                                                team_drive = {d.team_drive || '(unknown)'}
-                                            </div>
-                                        </div>
-                                    ))}
-                                </div>
-                            </Card>
-                        )}
-                    </div>
-
-                    {/* RIGHT: Add New Drives */}
-                    <div className="space-y-4">
-                        {selectedUnion ? (
-                            <>
-                                <Card>
-                                    <h3 className="text-sm font-medium text-white mb-3 flex items-center gap-2">
-                                        <Plus size={16} className="text-emerald-400" />
-                                        Add Drives to Union
-                                    </h3>
-
-                                    {/* Auto-detected base name */}
-                                    <div className="bg-zinc-900/50 rounded p-3 mb-4">
-                                        <div className="text-xs text-zinc-500 mb-1">Detected pattern</div>
-                                        <div className="font-mono text-sm text-white">
-                                            {selectedUnion.drives.length > 0
-                                                ? selectedUnion.drives[0].remote_name.replace(/-\d+$/, '')
-                                                : selectedUnion.name
-                                            }-{String(selectedUnion.drives.length + 1).padStart(2, '0')}
-                                        </div>
-                                    </div>
-
-                                    <div className="flex gap-3 items-end mb-4">
-                                        <div className="flex-1">
-                                            <label className="block text-xs text-zinc-500 mb-1">New drives to add</label>
-                                            <input
-                                                type="number"
-                                                value={expandCount}
-                                                onChange={e => setExpandCount(Math.max(1, parseInt(e.target.value) || 1))}
-                                                min={1}
-                                                className="w-full bg-zinc-800 border border-zinc-700 rounded px-3 py-2 text-sm"
-                                            />
-                                        </div>
-                                    </div>
-
-                                    {/* Preview of new drives */}
-                                    <div className="text-xs text-zinc-500 mb-2">Will create:</div>
-                                    <div className="space-y-1 mb-4">
-                                        {Array.from({ length: expandCount }, (_, i) => {
-                                            const basePattern = selectedUnion.drives.length > 0
-                                                ? selectedUnion.drives[0].remote_name.replace(/-\d+$/, '')
-                                                : selectedUnion.name;
-                                            const nextNum = selectedUnion.drives.length + 1 + i;
-                                            return (
-                                                <div key={i} className="flex items-center gap-2 text-xs font-mono">
-                                                    <span className="text-emerald-400">+</span>
-                                                    <span className="text-white">{basePattern}-{String(nextNum).padStart(2, '0')}</span>
-                                                </div>
-                                            );
-                                        })}
-                                    </div>
-
-                                    <button
-                                        onClick={async () => {
-                                            if (!selectedUnion) return;
-                                            setExpandLoading(true);
-                                            setExpandLogs(['Starting expansion...']);
-
-                                            const basePattern = selectedUnion.drives.length > 0
-                                                ? selectedUnion.drives[0].remote_name.replace(/-\d+$/, '')
-                                                : selectedUnion.name;
-                                            const saFile = selectedUnion.drives[0]?.service_account_file || serviceAccountFile;
-
-                                            const newRemoteNames: string[] = [];
-
-                                            for (let i = 0; i < expandCount; i++) {
-                                                const nextNum = selectedUnion.drives.length + 1 + i;
-                                                const newName = `${basePattern}-${String(nextNum).padStart(2, '0')}`;
-                                                newRemoteNames.push(newName);
-
-                                                try {
-                                                    // Create Shared Drive
-                                                    setExpandLogs(prev => [...prev, `Creating drive: ${newName}...`]);
-                                                    const driveResult = await createDrivesUnified({
-                                                        method: 'google_api',
-                                                        base_name: newName,
-                                                        suffixes: [''],
-                                                        delay_seconds: 2,
-                                                        service_account_file: saFile,
-                                                        impersonate_email: impersonateEmail || selectedDomain?.admin_email
-                                                    });
-
-                                                    if (driveResult.created && driveResult.created.length > 0) {
-                                                        const created = driveResult.created[0] as any;
-                                                        setExpandLogs(prev => [...prev, `✓ Created drive: ${newName} (${created.id})`]);
-
-                                                        // Create rclone remote
-                                                        await createDriveRemote({
-                                                            name: newName,
-                                                            team_drive_id: created.id,
-                                                            service_account_file: saFile
-                                                        });
-                                                        setExpandLogs(prev => [...prev, `✓ Created remote: ${newName}`]);
-                                                    } else {
-                                                        setExpandLogs(prev => [...prev, `✗ Failed to create drive: ${newName}`]);
-                                                    }
-                                                } catch (e: any) {
-                                                    setExpandLogs(prev => [...prev, `✗ Error: ${e.message}`]);
-                                                }
-                                            }
-
-                                            // Update union
-                                            try {
-                                                setExpandLogs(prev => [...prev, `Updating union: ${selectedUnion.name}...`]);
-                                                await expandUnion(selectedUnion.name, newRemoteNames);
-                                                setExpandLogs(prev => [...prev, `✓ Union updated with ${newRemoteNames.length} new upstreams`]);
-
-                                                // Refresh union details
-                                                const updated = await getUnionDetails(selectedUnion.name);
-                                                setSelectedUnion(updated);
-                                            } catch (e: any) {
-                                                setExpandLogs(prev => [...prev, `✗ Failed to update union: ${e.message}`]);
-                                            }
-
-                                            setExpandLoading(false);
-                                        }}
-                                        disabled={expandLoading}
-                                        className="w-full py-2.5 bg-purple-600 hover:bg-purple-500 disabled:bg-zinc-700 disabled:text-zinc-500 text-white rounded-lg text-sm font-medium flex items-center justify-center gap-2"
-                                    >
-                                        {expandLoading ? <RefreshCw size={14} className="animate-spin" /> : <Layers size={14} />}
-                                        {expandLoading ? 'Expanding...' : `Expand Union (+${expandCount} drives)`}
-                                    </button>
-                                </Card>
-
-                                {expandLogs.length > 0 && (
-                                    <Card>
-                                        <h4 className="text-xs font-medium text-zinc-500 mb-2">Activity Log</h4>
-                                        <div className="bg-zinc-900 rounded p-3 text-[10px] font-mono text-zinc-400 max-h-48 overflow-y-auto">
-                                            {expandLogs.map((log, i) => (
-                                                <div key={i} className={log.startsWith('✓') ? 'text-emerald-400' : log.startsWith('✗') ? 'text-red-400' : ''}>{log}</div>
-                                            ))}
-                                        </div>
-                                    </Card>
-                                )}
-                            </>
-                        ) : (
-                            <Card>
-                                <div className="text-center py-12 text-zinc-600">
-                                    <Layers size={48} className="mx-auto mb-4 opacity-50" />
-                                    <p>Select a union remote to expand</p>
-                                </div>
-                            </Card>
-                        )}
-                    </div>
-                </div>
+                            </div>
+                        )
+                        }
+                    </Card >
+                </div >
             )}
-
-            {activeTab === 'existing' && (
-                <Card>
-                    <h3 className="text-lg font-medium text-white mb-4">Existing Shared Drives</h3>
-                    <p className="text-sm text-zinc-500">Query and manage existing drives (coming soon)</p>
-                </Card>
-            )}
-        </div>
+        </div >
     );
 };
 

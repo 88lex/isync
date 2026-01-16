@@ -88,20 +88,26 @@ const SchedulesPage: React.FC<SchedulesPageProps> = ({ activeSection }) => {
     const [cronEntryAnnotation, setCronEntryAnnotation] = useState('');
 
     const loadRemoteData = async () => {
+        // Atomic loading of independent resources
         try {
-            const [srvs, presets, batches, groups] = await Promise.all([
-                fetchSSHServers(),
-                getCronPresets(),
-                listSavedBatches(),
-                listBatchGroups()
-            ]);
-            setServers(srvs);
-            setCronPresets(presets.presets);
-            setSavedBatches(batches);
-            setBatchGroups(groups);
-        } catch (e) {
-            console.error('Failed to load remote data', e);
-        }
+            const srvs = await fetchSSHServers();
+            setServers(srvs || []);
+        } catch (e) { console.error('Failed to load servers', e); }
+
+        try {
+            const presets = await getCronPresets();
+            setCronPresets(presets.presets || []);
+        } catch (e) { console.error('Failed to load cron presets', e); }
+
+        try {
+            const batches = await listSavedBatches();
+            setSavedBatches(batches || []);
+        } catch (e) { console.error('Failed to load saved batches', e); }
+
+        try {
+            const groups = await listBatchGroups();
+            setBatchGroups(groups || []);
+        } catch (e) { console.error('Failed to load batch groups', e); }
     };
 
     const loadServerCrontab = async (server: SSHServer) => {

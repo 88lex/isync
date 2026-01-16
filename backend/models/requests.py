@@ -175,6 +175,36 @@ class ListDrivesUnifiedRequest(BaseModel):
     gdrive_remote: Optional[str] = None
     service_account_file: Optional[str] = None
     impersonate_email: Optional[str] = None
+    limit: Optional[int] = None
+
+
+class AddManagersRequest(BaseModel):
+    drive_id: str
+    service_account_file: str
+    impersonate_email: str
+    group_emails: List[str]
+    role: str = "organizer"
+
+
+class CreateDriveRemoteRequest(BaseModel):
+    name: str
+    drive_id: str
+    service_account_file: str
+
+
+class RenameDriveRequest(BaseModel):
+    drive_id: str
+    new_name: str
+    method: str = "google_api"
+    service_account_file: Optional[str] = None
+    impersonate_email: Optional[str] = None
+
+
+class DeleteDriveRequest(BaseModel):
+    drive_id: str
+    method: str = "google_api"
+    service_account_file: Optional[str] = None
+    impersonate_email: Optional[str] = None
 
 
 # --- Orchestrator Models ---

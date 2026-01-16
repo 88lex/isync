@@ -22,10 +22,64 @@ from backend.models.requests import (
     CreateUnionRequest,
     GenerateSuffixesRequest,
     CreateDrivesUnifiedRequest,
-    ListDrivesUnifiedRequest
+    ListDrivesUnifiedRequest,
+    AddManagersRequest,
+    CreateDriveRemoteRequest,
+    RenameDriveRequest,
+    DeleteDriveRequest
 )
 
 router = APIRouter(prefix="/api/drives", tags=["Drive Manager"])
+
+# ... existing code ...
+
+@router.post("/rename")
+async def api_rename_drive(request: RenameDriveRequest):
+    """Rename a Shared Drive."""
+    from backend.drive_manager import rename_drive_unified
+    result = await rename_drive_unified(
+        method=request.method,
+        drive_id=request.drive_id,
+        new_name=request.new_name,
+        service_account_file=request.service_account_file,
+        impersonate_email=request.impersonate_email
+    )
+    return result
+
+
+@router.delete("/{drive_id}")
+async def api_delete_drive(
+    drive_id: str, 
+    method: str = "google_api",
+    service_account_file: Optional[str] = None,
+    impersonate_email: Optional[str] = None
+):
+    """Delete a Shared Drive."""
+    from backend.drive_manager import delete_drive_unified
+    # Delete requests typically don't have body in some clients, but here we can use query params or body.
+    # We'll use query params for simplicity as DeleteDriveRequest is not strictly required if we explode args.
+    # But usually APIs perform actions via POST if complex body.
+    # Let's support DELETE method with query params.
+    result = await delete_drive_unified(
+        method=method,
+        drive_id=drive_id,
+        service_account_file=service_account_file,
+        impersonate_email=impersonate_email
+    )
+    return result
+
+# Alternative POST endpoint for delete if body is needed (for robust params)
+@router.post("/delete")
+async def api_delete_drive_post(request: DeleteDriveRequest):
+    """Delete a Shared Drive (POST)."""
+    from backend.drive_manager import delete_drive_unified
+    result = await delete_drive_unified(
+        method=request.method,
+        drive_id=request.drive_id,
+        service_account_file=request.service_account_file,
+        impersonate_email=request.impersonate_email
+    )
+    return result
 
 
 @router.post("/shared")
@@ -115,6 +169,14 @@ def api_list_keys():
 @router.post("/create")
 async def api_create_drives_unified(request: CreateDrivesUnifiedRequest):
     """Create Shared Drives using selected method (fclone or google_api)."""
+    # Save member template if it looks like an email
+    if request.member_template and '@' in request.member_template:
+        from backend.dependencies import get_store
+        try:
+            get_store().add_known_email(request.member_template)
+        except Exception:
+            pass
+
     result = await create_drives_unified(
         method=request.method,
         base_name=request.base_name,
@@ -136,7 +198,8 @@ async def api_list_drives_unified(request: ListDrivesUnifiedRequest):
         prefix=request.prefix,
         gdrive_remote=request.gdrive_remote,
         service_account_file=request.service_account_file,
-        impersonate_email=request.impersonate_email
+        impersonate_email=request.impersonate_email,
+        limit=request.limit
     )
     return result
 
@@ -145,3 +208,63 @@ async def api_list_drives_unified(request: ListDrivesUnifiedRequest):
 def api_check_methods():
     """Check which drive creation methods are available."""
     return check_methods_available()
+
+
+@router.post("/add-managers")
+async def api_add_drive_managers(request: AddManagersRequest):
+    """Add managers to a Shared Drive."""
+    from backend.drive_manager import add_drive_managers
+    
+    # Save group emails
+    if request.group_emails:
+        from backend.dependencies import get_store
+        try:
+            store = get_store()
+            for email in request.group_emails:
+                if '@' in email:
+                    store.add_known_email(email)
+        except Exception:
+            pass
+
+    result = await add_drive_managers(
+        drive_id=request.drive_id,
+        service_account_file=request.service_account_file,
+        impersonate_email=request.impersonate_email,
+        group_emails=request.group_emails,
+        role=request.role
+    )
+    return result
+
+
+@router.post("/remote/create")
+async def api_create_drive_remote(request: CreateDriveRemoteRequest):
+    """Create a single rclone remote for a drive."""
+    from backend.drive_manager import create_single_drive_remote
+    result = await create_single_drive_remote(
+        name=request.name,
+        team_drive_id=request.drive_id,
+        sa_file=request.service_account_file
+    )
+    return result
+
+
+@router.get("/groups")
+def api_list_known_groups():
+    """List known groups from configuration."""
+    from backend.dependencies import get_store
+    
+    try:
+        store = get_store()
+        config = store.get_config()
+        domains = config.get('domains', [])
+        
+        # Merge saved known emails with domain groups
+        groups = set(config.get('known_emails', []))
+        
+        for d in domains:
+            if d.get('group_email'):
+                groups.add(d['group_email'])
+                
+        return {"groups": sorted(list(groups))}
+    except Exception:
+        return {"groups": []}

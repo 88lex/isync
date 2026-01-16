@@ -1142,9 +1142,10 @@ export interface CreateDrivesRequest {
 
 export interface CreateDrivesResponse {
     status: string;
-    created: string[];
+    created: (string | any)[];
     failed: { name: string; error: string }[];
     logs: string[];
+    message?: string;
 }
 
 export interface DriveInfo {
@@ -1236,6 +1237,8 @@ export const listKeys = async (): Promise<{ keys: KeyInfo[]; path: string }> => 
 // --- Unified Drive Creation (method selection) ---
 export type DriveMethod = 'fclone' | 'google_api';
 
+
+
 export interface CreateDrivesUnifiedRequest {
     method: DriveMethod;
     base_name: string;
@@ -1272,6 +1275,7 @@ export interface ListDrivesUnifiedRequest {
     // google_api-specific
     service_account_file?: string;
     impersonate_email?: string;
+    limit?: number;
 }
 
 export const listDrivesUnified = async (req: ListDrivesUnifiedRequest): Promise<ListDrivesResponse> => {
@@ -1302,13 +1306,13 @@ export const testRcloneConnection = async (remoteName: string, advanced: boolean
 // --- Create Drive Remote ---
 export interface CreateDriveRemoteRequest {
     name: string;
-    team_drive_id: string;
+    drive_id: string;
     service_account_file: string;
     scope?: string;
 }
 
 export const createDriveRemote = async (req: CreateDriveRemoteRequest): Promise<{ status: string; remote: string }> => {
-    const res = await axios.post(`${API_BASE}/rclone/create-drive-remote`, req);
+    const res = await axios.post(`${API_BASE}/drives/remote/create`, req);
     return res.data;
 };
 
@@ -1323,7 +1327,15 @@ export interface CreateUnionRemoteRequest {
 }
 
 export const createUnionRemoteDirect = async (req: CreateUnionRemoteRequest): Promise<{ status: string; remote: string; upstreams: string[] }> => {
-    const res = await axios.post(`${API_BASE}/rclone/create-union-remote`, req);
+    // Map Frontend definition to Backend definition
+    const payload = {
+        name: req.name,
+        upstreams: req.upstreams,
+        action_policy: req.action_policy,
+        create_policy: req.create_policy,
+        sa_file_path: req.service_account_file_path
+    };
+    const res = await axios.post(`${API_BASE}/drives/union`, payload);
     return res.data;
 };
 
@@ -1334,6 +1346,7 @@ export interface AddManagersRequest {
     service_account_file: string;
     impersonate_email: string;
     group_emails: string[];
+    role?: string;
 }
 
 export interface AddManagersResponse {
@@ -1405,6 +1418,32 @@ export const expandUnion = async (name: string, newUpstreams: string[]): Promise
     const res = await axios.put(`${API_BASE}/rclone/union/${encodeURIComponent(name)}/expand`, {
         new_upstreams: newUpstreams
     });
+    return res.data;
+};
+
+
+export interface RenameDriveRequest {
+    drive_id: string;
+    new_name: string;
+    method?: string;
+    service_account_file?: string;
+    impersonate_email?: string;
+}
+
+export const renameDrive = async (req: RenameDriveRequest) => {
+    const res = await axios.post(`${API_BASE}/drives/rename`, req);
+    return res.data;
+};
+
+export interface DeleteDriveRequest {
+    drive_id: string;
+    method?: string;
+    service_account_file?: string;
+    impersonate_email?: string;
+}
+
+export const deleteDrive = async (req: DeleteDriveRequest) => {
+    const res = await axios.post(`${API_BASE}/drives/delete`, req);
     return res.data;
 };
 
@@ -1494,6 +1533,18 @@ export const listRemotesWithFlags = async (serverId?: string): Promise<RemotesWi
 export const deleteRemoteWithConfirm = async (name: string, confirm: boolean = false, serverId?: string): Promise<{ status: string; deleted: string }> => {
     const res = await axios.delete(`${API_BASE}/rclone/remotes/${encodeURIComponent(name)}`, {
         params: { confirm, server_id: serverId }
+    });
+    return res.data;
+};
+
+export const updateLocalRemote = async (name: string, config: any): Promise<any> => {
+    const res = await axios.put(`${API_BASE}/rclone/remotes/${encodeURIComponent(name)}`, { config });
+    return res.data;
+};
+
+export const renameRemote = async (oldName: string, newName: string): Promise<any> => {
+    const res = await axios.post(`${API_BASE}/rclone/remotes/${encodeURIComponent(oldName)}/rename`, {
+        new_name: newName
     });
     return res.data;
 };

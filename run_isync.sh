@@ -25,7 +25,7 @@ fi
 echo -e "${BLUE}=== ISync Launcher ===${NC}"
 echo "Working directory: $SCRIPT_DIR"
 
-# Check if already running
+# Check if already running (by process name)
 BACKEND_RUNNING=false
 FRONTEND_RUNNING=false
 
@@ -33,13 +33,27 @@ if pgrep -f 'uvicorn.*backend.main' > /dev/null 2>&1; then
     BACKEND_RUNNING=true
 fi
 
-if pgrep -f 'vite.*5173' > /dev/null 2>&1; then
+if pgrep -f 'vite.*5173' > /dev/null 2>&1 || pgrep -f 'node.*vite' > /dev/null 2>&1; then
     FRONTEND_RUNNING=true
 fi
 
-if [ "$BACKEND_RUNNING" = true ] || [ "$FRONTEND_RUNNING" = true ]; then
+# Also check for ghost processes by port (may exist even if pgrep misses them)
+GHOST_PORTS=""
+if command -v lsof &> /dev/null; then
+    for port in 5173 5174 8000; do
+        if lsof -ti:$port > /dev/null 2>&1; then
+            if [ -z "$GHOST_PORTS" ]; then
+                GHOST_PORTS="$port"
+            else
+                GHOST_PORTS="$GHOST_PORTS, $port"
+            fi
+        fi
+    done
+fi
+
+if [ "$BACKEND_RUNNING" = true ] || [ "$FRONTEND_RUNNING" = true ] || [ -n "$GHOST_PORTS" ]; then
     echo ""
-    echo -e "${YELLOW}⚠ ISync is already running:${NC}"
+    echo -e "${YELLOW}⚠ ISync is already running or ports are occupied:${NC}"
     if [ "$BACKEND_RUNNING" = true ]; then
         BACKEND_PID=$(pgrep -f 'uvicorn.*backend.main' | head -1)
         echo -e "  Backend:  ${GREEN}Running${NC} (PID: $BACKEND_PID)"
@@ -47,10 +61,13 @@ if [ "$BACKEND_RUNNING" = true ] || [ "$FRONTEND_RUNNING" = true ]; then
         echo -e "  Backend:  ${RED}Stopped${NC}"
     fi
     if [ "$FRONTEND_RUNNING" = true ]; then
-        FRONTEND_PID=$(pgrep -f 'vite.*5173' | head -1)
+        FRONTEND_PID=$(pgrep -f 'vite\|node.*dev' | head -1)
         echo -e "  Frontend: ${GREEN}Running${NC} (PID: $FRONTEND_PID)"
     else
         echo -e "  Frontend: ${RED}Stopped${NC}"
+    fi
+    if [ -n "$GHOST_PORTS" ]; then
+        echo -e "  ${YELLOW}Ghost processes on ports: $GHOST_PORTS${NC}"
     fi
     
     if [ "$FORCE_MODE" = true ]; then
@@ -58,16 +75,19 @@ if [ "$BACKEND_RUNNING" = true ] || [ "$FRONTEND_RUNNING" = true ]; then
         echo ""
         echo -e "${YELLOW}Force mode: Stopping existing ISync...${NC}"
         pkill -f 'uvicorn.*backend.main' 2>/dev/null
-        pkill -f 'vite.*5173' 2>/dev/null
+        pkill -f 'vite' 2>/dev/null
         pkill -f 'npm.*dev' 2>/dev/null
+        pkill -f 'node.*vite' 2>/dev/null
         
-        # Additional check for port 8000
+        # Kill any processes on ISync ports
         if command -v lsof &> /dev/null; then
-            PORT_PID=$(lsof -t -i:8000)
-            if [ -n "$PORT_PID" ]; then
-                echo -e "${YELLOW}Port 8000 still occupied by PID $PORT_PID. Killing...${NC}"
-                kill -9 $PORT_PID 2>/dev/null
-            fi
+            for port in 5173 5174 8000; do
+                PORT_PID=$(lsof -t -i:$port 2>/dev/null)
+                if [ -n "$PORT_PID" ]; then
+                    echo -e "${YELLOW}Killing ghost process on port $port (PID: $PORT_PID)${NC}"
+                    kill -9 $PORT_PID 2>/dev/null
+                fi
+            done
         fi
         
         sleep 2
@@ -87,16 +107,19 @@ if [ "$BACKEND_RUNNING" = true ] || [ "$FRONTEND_RUNNING" = true ]; then
                 echo ""
                 echo -e "${YELLOW}Stopping existing ISync...${NC}"
                 pkill -f 'uvicorn.*backend.main' 2>/dev/null
-                pkill -f 'vite.*5173' 2>/dev/null
+                pkill -f 'vite' 2>/dev/null
                 pkill -f 'npm.*dev' 2>/dev/null
+                pkill -f 'node.*vite' 2>/dev/null
                 
-                # Additional check for port 8000
+                # Kill any processes on ISync ports
                 if command -v lsof &> /dev/null; then
-                    PORT_PID=$(lsof -t -i:8000)
-                    if [ -n "$PORT_PID" ]; then
-                        echo -e "${YELLOW}Port 8000 still occupied by PID $PORT_PID. Killing...${NC}"
-                        kill -9 $PORT_PID 2>/dev/null
-                    fi
+                    for port in 5173 5174 8000; do
+                        PORT_PID=$(lsof -t -i:$port 2>/dev/null)
+                        if [ -n "$PORT_PID" ]; then
+                            echo -e "${YELLOW}Killing ghost process on port $port (PID: $PORT_PID)${NC}"
+                            kill -9 $PORT_PID 2>/dev/null
+                        fi
+                    done
                 fi
                 
                 sleep 2

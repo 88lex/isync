@@ -8,6 +8,7 @@ import { listDomainUsers, fetchConfig, bulkUserOps, Config, BulkOpRequest } from
 import { SESSION_KEYS } from '../constants/storageKeys';
 import { PageHeader } from '../components/PageHeader';
 import { Dropdown } from '../components/Dropdown';
+import { useSortableData } from '../hooks/useSortableData';
 
 const UserManagement = () => {
 
@@ -316,6 +317,13 @@ const UserManagement = () => {
         return true;
     });
 
+    // Use sortable data hook
+    const { sortedData: sortedFilteredUsers, handleSort, SortIcon } = useSortableData({
+        data: filteredUsers,
+        initialSortColumn: null,
+        initialSortDirection: 'asc'
+    });
+
     const getUniqueValues = (key: string) => {
         const values = new Set<string>();
         users.forEach(u => {
@@ -334,13 +342,15 @@ const UserManagement = () => {
         return arr;
     };
 
+
+
     return (
         <div className="p-6 max-w-7xl mx-auto space-y-6">
 
             {/* Header */}
             <PageHeader
                 icon={Users}
-                title="User Management"
+                title="User Manager"
                 subtitle="Manage Google Workspace users across domains"
                 gradient="from-indigo-600 to-purple-600"
             />
@@ -404,7 +414,7 @@ const UserManagement = () => {
                         />
                         {users.length > 0 && (
                             <div className="absolute right-3 top-3.5 text-xs text-zinc-500 font-mono bg-zinc-800 px-2 py-0.5 rounded">
-                                {filteredUsers.length}/{users.length}
+                                {sortedFilteredUsers.length}/{users.length}
                             </div>
                         )}
                     </div>
@@ -485,64 +495,81 @@ const UserManagement = () => {
                                             onChange={() => selectAllUsers(filteredUsers)}
                                         />
                                     </th>
-                                    <th className="p-4">User</th>
-                                    <th className="p-4 flex items-center">
-                                        Status
-                                        <ColumnFilter
-                                            column="status"
-                                            title="Filter Status"
-                                            options={getUniqueValues('status')}
-                                            selected={columnFilters['status']}
-                                            onToggle={toggleColumnFilter}
-                                            onClear={clearColumnFilter}
-                                        />
+                                    <th className="p-4 cursor-pointer hover:bg-zinc-900" onClick={() => handleSort('email')}>
+                                        <div className="flex items-center">
+                                            User
+                                            <SortIcon column="email" />
+                                        </div>
                                     </th>
-                                    <th className="p-4">
-                                        Domain
-                                        <ColumnFilter
-                                            column="domain"
-                                            title="Filter Domain"
-                                            options={getUniqueValues('domain')}
-                                            selected={columnFilters['domain']}
-                                            onToggle={toggleColumnFilter}
-                                            onClear={clearColumnFilter}
-                                        />
+                                    <th className="p-4 cursor-pointer hover:bg-zinc-900" onClick={() => handleSort('status')}>
+                                        <div className="flex items-center">
+                                            Status
+                                            <SortIcon column="status" />
+                                            <ColumnFilter
+                                                column="status"
+                                                title="Filter Status"
+                                                options={getUniqueValues('status')}
+                                                selected={columnFilters['status']}
+                                                onToggle={toggleColumnFilter}
+                                                onClear={clearColumnFilter}
+                                            />
+                                        </div>
                                     </th>
-                                    <th className="p-4">
-                                        Group
-                                        <ColumnFilter
-                                            column="group"
-                                            title="Filter Group"
-                                            options={getUniqueValues('group')}
-                                            selected={columnFilters['group']}
-                                            onToggle={toggleColumnFilter}
-                                            onClear={clearColumnFilter}
-                                        />
+                                    <th className="p-4 cursor-pointer hover:bg-zinc-900" onClick={() => handleSort('domain')}>
+                                        <div className="flex items-center">
+                                            Domain
+                                            <SortIcon column="domain" />
+                                            <ColumnFilter
+                                                column="domain"
+                                                title="Filter Domain"
+                                                options={getUniqueValues('domain')}
+                                                selected={columnFilters['domain']}
+                                                onToggle={toggleColumnFilter}
+                                                onClear={clearColumnFilter}
+                                            />
+                                        </div>
                                     </th>
-                                    <th className="p-4">
-                                        JSON Key
-                                        <ColumnFilter
-                                            column="json"
-                                            title="Filter JSON Key"
-                                            options={getUniqueValues('json')}
-                                            selected={columnFilters['json']}
-                                            onToggle={toggleColumnFilter}
-                                            onClear={clearColumnFilter}
-                                        />
+                                    <th className="p-4 cursor-pointer hover:bg-zinc-900" onClick={() => handleSort('group')}>
+                                        <div className="flex items-center">
+                                            Group
+                                            <SortIcon column="group" />
+                                            <ColumnFilter
+                                                column="group"
+                                                title="Filter Group"
+                                                options={getUniqueValues('group')}
+                                                selected={columnFilters['group']}
+                                                onToggle={toggleColumnFilter}
+                                                onClear={clearColumnFilter}
+                                            />
+                                        </div>
+                                    </th>
+                                    <th className="p-4 cursor-pointer hover:bg-zinc-900" onClick={() => handleSort('json')}>
+                                        <div className="flex items-center">
+                                            JSON Key
+                                            <SortIcon column="json" />
+                                            <ColumnFilter
+                                                column="json"
+                                                title="Filter JSON Key"
+                                                options={getUniqueValues('json')}
+                                                selected={columnFilters['json']}
+                                                onToggle={toggleColumnFilter}
+                                                onClear={clearColumnFilter}
+                                            />
+                                        </div>
                                     </th>
                                     <th className="p-4">ID</th>
                                     <th className="p-4 text-right">Actions</th>
                                 </tr>
                             </thead>
                             <tbody className="divide-y divide-zinc-800/50">
-                                {filteredUsers.length === 0 ? (
+                                {sortedFilteredUsers.length === 0 ? (
                                     <tr>
                                         <td colSpan={8} className="p-8 text-center text-zinc-600 italic">
                                             {loadingUsers ? "Loading users..." : "No users found. Select domains and click List Users."}
                                         </td>
                                     </tr>
                                 ) : (
-                                    filteredUsers.map((u, i) => {
+                                    sortedFilteredUsers.map((u, i) => {
                                         const isProtected = config.protected_users?.includes(u.email);
                                         return (
                                             <tr key={i} className={`group hover:bg-zinc-800/50 transition ${selectedUsers.has(u.email) ? 'bg-indigo-900/10' : ''}`}>
@@ -632,7 +659,7 @@ const UserManagement = () => {
                         </table>
                     </div>
                     <div className="p-2 border-t border-zinc-800 bg-zinc-950 text-xs text-zinc-500 flex justify-between">
-                        <span>Showing {filteredUsers.length} of {users.length} users</span>
+                        <span>Showing {sortedFilteredUsers.length} of {users.length} users</span>
                         <span>{selectedUsers.size} selected</span>
                     </div>
                 </div>

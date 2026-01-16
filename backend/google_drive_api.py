@@ -180,7 +180,8 @@ async def list_shared_drives_api(
     service_account_file: str,
     impersonate_email: str,
     prefix: Optional[str] = None,
-    page_size: int = 100
+    page_size: int = 100,
+    limit: Optional[int] = None
 ) -> Dict[str, Any]:
     """
     List Shared Drives using Google Drive API.
@@ -190,6 +191,7 @@ async def list_shared_drives_api(
         impersonate_email: Admin email for impersonation
         prefix: Optional prefix to filter drives
         page_size: Number of results per page
+        limit: Maximum number of drives to return
     
     Returns:
         Dict with list of drives
@@ -214,7 +216,13 @@ async def list_shared_drives_api(
                         "name": drive['name'],
                         "kind": drive.get('kind', 'drive#drive')
                     })
+                    if limit and len(drives) >= limit:
+                        page_token = None
+                        break
             
+            if limit and len(drives) >= limit:
+                break
+
             page_token = result.get('nextPageToken')
             if not page_token:
                 break
@@ -265,18 +273,29 @@ async def add_drive_member_api(
     try:
         service = get_drive_service(service_account_file, impersonate_email)
         
-        permission = {
-            'type': 'user',
-            'role': role,
-            'emailAddress': member_email
-        }
-        
-        result = service.permissions().create(
-            fileId=drive_id,
-            body=permission,
-            supportsAllDrives=True,
-            sendNotificationEmail=False
-        ).execute()
+        # Helper to try adding permission with a specific type
+        def try_add_permission(p_type):
+            permission = {
+                'type': p_type,
+                'role': role,
+                'emailAddress': member_email
+            }
+            return service.permissions().create(
+                fileId=drive_id,
+                body=permission,
+                supportsAllDrives=True,
+                sendNotificationEmail=False
+            ).execute()
+
+        # Try 'group' first, fallback to 'user'
+        try:
+            result = try_add_permission('group')
+        except HttpError:
+            try:
+                result = try_add_permission('user')
+            except HttpError as e:
+                # If both fail, re-raise the last error to be caught by outer block
+                raise e
         
         return {
             "status": "ok",
@@ -367,3 +386,43 @@ def check_api_available() -> Dict[str, Any]:
         "available": GOOGLE_API_AVAILABLE,
         "message": "Google API available" if GOOGLE_API_AVAILABLE else "Install: pip install google-api-python-client google-auth"
     }
+
+
+async def rename_shared_drive_api(
+    service_account_file: str,
+    impersonate_email: str,
+    drive_id: str,
+    new_name: str
+) -> Dict[str, Any]:
+    """Rename a Shared Drive."""
+    try:
+        service = get_drive_service(service_account_file, impersonate_email)
+        
+        result = service.drives().update(
+            driveId=drive_id,
+            body={'name': new_name}
+        ).execute()
+        
+        return {
+            "status": "ok",
+            "id": result.get('id'),
+            "name": result.get('name')
+        }
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
+
+
+async def delete_shared_drive_api(
+    service_account_file: str,
+    impersonate_email: str,
+    drive_id: str
+) -> Dict[str, Any]:
+    """Delete a Shared Drive."""
+    try:
+        service = get_drive_service(service_account_file, impersonate_email)
+        
+        service.drives().delete(driveId=drive_id).execute()
+        
+        return {"status": "ok", "id": drive_id}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}

@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useMemo } from 'react';
 import { Terminal, Copy, Play, FileCode, Zap, Save, FolderOpen, Users, BarChart3, ChevronDown, ChevronUp, X, Plus, Trash2, Edit2, Server, HardDrive, Folder, ChevronRight, Check, Shuffle, List, Layers, GripVertical } from 'lucide-react';
 import {
     fetchConfig, fetchSyncList, generateBatch, startJob, saveBatch, listSavedBatches,
@@ -39,6 +39,12 @@ const BatchGenerator: React.FC<BatchGeneratorProps> = ({ activeSection }) => {
     const [unifiedPairs, setUnifiedPairs] = useState<SyncPairWithBatch[]>([]);
     const [bulkGenerating, setBulkGenerating] = useState(false);
 
+    // Sorted versions for display
+    const sortedUnifiedPairs = useMemo(() =>
+        [...unifiedPairs].sort((a, b) => a.source.localeCompare(b.source)),
+        [unifiedPairs]
+    );
+
     // Get selected users from session storage (shared with User Management)
     const [selectedUsers] = useState<Set<string>>(() => {
         const saved = sessionStorage.getItem(SESSION_KEYS.SELECTED_USERS);
@@ -55,6 +61,10 @@ const BatchGenerator: React.FC<BatchGeneratorProps> = ({ activeSection }) => {
     const [saveFilename, setSaveFilename] = useState('');
     const [saving, setSaving] = useState(false);
     const [savedBatches, setSavedBatches] = useState<BatchFile[]>([]);
+    const sortedSavedBatches = useMemo(() =>
+        [...savedBatches].sort((a, b) => a.name.localeCompare(b.name)),
+        [savedBatches]
+    );
     const [showLoadDialog, setShowLoadDialog] = useState(false);
     const [loadedContent, setLoadedContent] = useState<string | null>(null);
 
@@ -974,7 +984,7 @@ const BatchGenerator: React.FC<BatchGeneratorProps> = ({ activeSection }) => {
                                 </button>
                             </div>
                         ) : (
-                            unifiedPairs.map((p) => (
+                            sortedUnifiedPairs.map((p) => (
                                 <div
                                     key={p.index}
                                     className={`flex items-center gap-3 p-3 rounded-lg border transition ${selectedPairs.has(p.index)
@@ -1140,7 +1150,7 @@ const BatchGenerator: React.FC<BatchGeneratorProps> = ({ activeSection }) => {
                                     Previously Saved ({savedBatches.length})
                                 </h4>
                                 <div className="max-h-32 overflow-y-auto space-y-1">
-                                    {savedBatches.slice(0, 5).map((f) => (
+                                    {sortedSavedBatches.slice(0, 5).map((f) => (
                                         <div key={f.name} className="flex items-center justify-between text-xs text-zinc-400 bg-zinc-800/50 px-2 py-1 rounded">
                                             <span className="truncate">{f.name}</span>
                                             <span className="text-zinc-600">{(f.size / 1024).toFixed(1)} KB</span>
@@ -1168,7 +1178,7 @@ const BatchGenerator: React.FC<BatchGeneratorProps> = ({ activeSection }) => {
                         </button>
                     </div>
                     <div className="space-y-2">
-                        {savedBatches.map((f) => {
+                        {sortedSavedBatches.map((f) => {
                             const isExpanded = expandedBatchFile === f.name;
                             const isEditing = editingBatch === f.name;
                             const content = batchContentCache[f.name] || '';
@@ -1568,7 +1578,7 @@ const BatchGenerator: React.FC<BatchGeneratorProps> = ({ activeSection }) => {
                                         </div>
                                     ) : (
                                         <div className="space-y-1">
-                                            {savedBatches.map((batch) => (
+                                            {sortedSavedBatches.map((batch) => (
                                                 <label
                                                     key={batch.name}
                                                     className="flex items-center gap-2 p-1 hover:bg-zinc-700/50 rounded cursor-pointer"

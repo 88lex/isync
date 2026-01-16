@@ -373,7 +373,8 @@ async def list_drives_unified(
     gdrive_remote: Optional[str] = None,
     # google_api-specific
     service_account_file: Optional[str] = None,
-    impersonate_email: Optional[str] = None
+    impersonate_email: Optional[str] = None,
+    limit: Optional[int] = None
 ) -> Dict[str, Any]:
     """
     Unified function to list Shared Drives using either fclone or Google API.
@@ -383,6 +384,10 @@ async def list_drives_unified(
             return {"status": "error", "message": "gdrive_remote required for fclone method", "drives": []}
         
         result = await list_drives(gdrive_remote, prefix)
+        if limit and result.get("drives"):
+            result["drives"] = result["drives"][:limit]
+            result["count"] = len(result["drives"])
+            
         result["method"] = "fclone"
         return result
     
@@ -399,7 +404,8 @@ async def list_drives_unified(
             return await list_shared_drives_api(
                 service_account_file=service_account_file,
                 impersonate_email=impersonate_email,
-                prefix=prefix
+                prefix=prefix,
+                limit=limit
             )
         except ImportError as e:
             return {"status": "error", "message": str(e), "drives": []}
@@ -431,3 +437,113 @@ def check_methods_available() -> Dict[str, Any]:
             "message": "Google API ready" if google_api_available else "Install: pip install google-api-python-client google-auth"
         }
     }
+
+
+async def add_drive_managers(
+    drive_id: str,
+    service_account_file: str,
+    impersonate_email: str,
+    group_emails: List[str],
+    role: str = "organizer"
+) -> Dict[str, Any]:
+    """Add managers to a Shared Drive."""
+    try:
+        from backend.google_drive_api import add_drive_member_api
+        
+        added = []
+        failed = []
+        
+        for email in group_emails:
+            res = await add_drive_member_api(
+                service_account_file=service_account_file,
+                impersonate_email=impersonate_email,
+                drive_id=drive_id,
+                member_email=email,
+                role=role
+            )
+            if res["status"] == "ok":
+                added.append(email)
+            else:
+                failed.append({"email": email, "error": res.get("message")})
+                
+        return {
+            "status": "ok" if not failed else ("partial" if added else "error"),
+            "added": added,
+            "failed": failed,
+            "drive_id": drive_id
+        }
+    except ImportError:
+         return {"status": "error", "message": "Google API module failed to import"}
+    except Exception as e:
+         return {"status": "error", "message": str(e)}
+
+
+async def create_single_drive_remote(
+    name: str,
+    team_drive_id: str,
+    sa_file: str
+) -> Dict[str, Any]:
+    """Create a single rclone remote for a drive."""
+    # Remove trailing colon if present
+    name = name.rstrip(":")
+    
+    cmd = [
+        "rclone", "config", "create", name, "drive",
+        "scope", "drive",
+        "team_drive", team_drive_id,
+        "service_account_file", sa_file
+    ]
+    
+    # We use run_command logic from this module
+    result = run_command(cmd, timeout=30)
+    
+    if result["status"] == "ok":
+        return {"status": "ok", "name": name}
+    else:
+        return {
+            "status": "error", 
+            "message": result.get("stderr", result.get("message", "Unknown error"))
+        }
+
+
+async def rename_drive_unified(
+    method: str,
+    drive_id: str,
+    new_name: str,
+    # google_api specific
+    service_account_file: Optional[str] = None,
+    impersonate_email: Optional[str] = None
+) -> Dict[str, Any]:
+    """Rename a Shared Drive."""
+    if method == "google_api":
+        if not service_account_file or not impersonate_email:
+            return {"status": "error", "message": "Service account and impersonate email required"}
+            
+        try:
+            from backend.google_drive_api import rename_shared_drive_api
+            return await rename_shared_drive_api(service_account_file, impersonate_email, drive_id, new_name)
+        except ImportError:
+            return {"status": "error", "message": "Google API module failed to import"}
+            
+    return {"status": "error", "message": "Rename not supported for method: " + method}
+
+
+async def delete_drive_unified(
+    method: str,
+    drive_id: str,
+    # google_api specific
+    service_account_file: Optional[str] = None,
+    impersonate_email: Optional[str] = None
+) -> Dict[str, Any]:
+    """Delete a Shared Drive."""
+    if method == "google_api":
+        if not service_account_file or not impersonate_email:
+            return {"status": "error", "message": "Service account and impersonate email required"}
+            
+        try:
+            from backend.google_drive_api import delete_shared_drive_api
+            return await delete_shared_drive_api(service_account_file, impersonate_email, drive_id)
+        except ImportError:
+            return {"status": "error", "message": "Google API module failed to import"}
+            
+    return {"status": "error", "message": "Delete not supported for method: " + method}

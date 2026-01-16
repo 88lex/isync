@@ -91,7 +91,8 @@ class ConfigStore:
             'include_protected_users': False,
             'step_check': False,
             'domains': [],
-            'ssh_servers': []  # List of saved remote SSH server configurations
+            'ssh_servers': [],
+            'known_emails': []  # List of known user/group emails
         }
 
     def load_all(self):
@@ -192,6 +193,28 @@ class ConfigStore:
             except Exception as e:
                 logger.error(f"[ConfigStore] Failed to save config: {e}")
                 return False
+
+    def add_known_email(self, email: str):
+        """Adds an email to known_emails and saves."""
+        if not email or not isinstance(email, str):
+            return
+
+        with self._lock:
+            # Check defaults
+            if 'known_emails' not in self.config:
+                self.config['known_emails'] = []
+
+            known = self.config['known_emails']
+            if email not in known:
+                known.append(email)
+                known.sort()
+                
+                # Save directly
+                try:
+                    self._atomic_write_yaml(CURRENT_CONFIG_FILE, self.config)
+                    logger.info(f"[ConfigStore] Added known email: {email}")
+                except Exception as e:
+                    logger.error(f"[ConfigStore] Failed to save known email: {e}")
 
     def save_synclist(self, new_pairs: Optional[List[Dict]] = None) -> bool:
         """

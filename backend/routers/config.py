@@ -8,7 +8,7 @@ from typing import List, Optional, Dict, Any
 import os
 import shutil
 
-from backend.dependencies import get_store, reload_config, get_base_path
+from backend.dependencies import get_store, reload_config, get_base_path, reset_engine
 from backend.logging_config import get_logger
 
 logger = get_logger("isync.routers.config")
@@ -66,6 +66,10 @@ def update_config(update: Dict[str, Any]):
     success = store.save_config(current)
     if not success:
         raise HTTPException(status_code=500, detail="Failed to save config")
+    
+    # Reset engine to pick up new config
+    reset_engine()
+    
     return {"status": "ok", "config": current}
 
 
@@ -74,6 +78,7 @@ def api_reload_config():
     """Force reload config from disk."""
     store = get_store()
     store.reload()
+    reset_engine()
     return {
         "status": "ok",
         "config_path": store.get_config_path(),

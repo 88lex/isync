@@ -46,8 +46,7 @@ const navGroups: NavGroup[] = [
     label: 'Main',
     defaultOpen: true,
     items: [
-      { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
-      { id: 'users', label: 'User Management', icon: Users },
+      { id: 'users', label: 'User Manager', icon: Users },
       {
         id: 'batch',
         label: 'Batch Generator',
@@ -61,9 +60,20 @@ const navGroups: NavGroup[] = [
     ]
   },
   {
-    label: 'Automation',
+    label: 'Infrastructure',
     defaultOpen: true,
     items: [
+      { id: 'servers', label: 'Remote Servers', icon: Server },
+      { id: 'drives', label: 'Drive Manager', icon: HardDrive },
+      { id: 'rclone', label: 'Rclone Manager', icon: HardDrive },
+      { id: 'remotesync', label: 'Remote Sync', icon: Database },
+    ]
+  },
+  {
+    label: 'Operations',
+    defaultOpen: true,
+    items: [
+      { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
       {
         id: 'schedules',
         label: 'Schedules',
@@ -74,16 +84,6 @@ const navGroups: NavGroup[] = [
         ]
       },
       { id: 'history', label: 'Job History', icon: History },
-    ]
-  },
-  {
-    label: 'Infrastructure',
-    defaultOpen: true,
-    items: [
-      { id: 'servers', label: 'Remote Servers', icon: Server },
-      { id: 'drives', label: 'Drive Manager', icon: HardDrive },
-      { id: 'rclone', label: 'Rclone Management', icon: HardDrive },
-      { id: 'remotesync', label: 'Remote Sync', icon: Database },
     ]
   },
   {
