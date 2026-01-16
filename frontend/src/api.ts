@@ -1283,3 +1283,217 @@ export const checkDriveMethods = async (): Promise<MethodsResponse> => {
     const res = await axios.get(`${API_BASE}/drives/methods`);
     return res.data;
 };
+
+
+// --- Rclone Connection Testing ---
+export interface TestConnectionResponse {
+    status: 'ok' | 'error' | 'partial';
+    message: string;
+    basic: boolean;
+    advanced?: boolean | null;
+}
+
+export const testRcloneConnection = async (remoteName: string, advanced: boolean = false): Promise<TestConnectionResponse> => {
+    const res = await axios.post(`${API_BASE}/rclone/test-connection`, { remote_name: remoteName, advanced });
+    return res.data;
+};
+
+
+// --- Create Drive Remote ---
+export interface CreateDriveRemoteRequest {
+    name: string;
+    team_drive_id: string;
+    service_account_file: string;
+    scope?: string;
+}
+
+export const createDriveRemote = async (req: CreateDriveRemoteRequest): Promise<{ status: string; remote: string }> => {
+    const res = await axios.post(`${API_BASE}/rclone/create-drive-remote`, req);
+    return res.data;
+};
+
+
+// --- Create Union Remote ---
+export interface CreateUnionRemoteRequest {
+    name: string;
+    upstreams: string[];
+    action_policy?: string;
+    create_policy?: string;
+    service_account_file_path?: string;
+}
+
+export const createUnionRemoteDirect = async (req: CreateUnionRemoteRequest): Promise<{ status: string; remote: string; upstreams: string[] }> => {
+    const res = await axios.post(`${API_BASE}/rclone/create-union-remote`, req);
+    return res.data;
+};
+
+
+// --- Add Group Managers to Drive ---
+export interface AddManagersRequest {
+    drive_id: string;
+    service_account_file: string;
+    impersonate_email: string;
+    group_emails: string[];
+}
+
+export interface AddManagersResponse {
+    status: 'ok' | 'partial' | 'error';
+    drive_id?: string;
+    added: string[];
+    failed: { email: string; error: string }[];
+    message?: string;
+}
+
+export const addDriveManagers = async (req: AddManagersRequest): Promise<AddManagersResponse> => {
+    const res = await axios.post(`${API_BASE}/drives/add-managers`, req);
+    return res.data;
+};
+
+
+// --- List Known Groups ---
+export const listKnownGroups = async (): Promise<{ groups: string[] }> => {
+    const res = await axios.get(`${API_BASE}/drives/groups`);
+    return res.data;
+};
+
+
+// --- Union Remote Operations ---
+
+export interface UnionDrive {
+    remote_name: string;
+    type: string;
+    team_drive: string;
+    scope: string;
+    service_account_file: string;
+}
+
+export interface UnionDetails {
+    name: string;
+    type: string;
+    upstreams: string[];
+    action_policy: string;
+    create_policy: string;
+    service_account_file: string;
+    drives: UnionDrive[];
+}
+
+export interface UnionInfo {
+    name: string;
+    upstream_count: number;
+    upstreams: string[];
+}
+
+export const listUnionRemotes = async (): Promise<{ unions: UnionInfo[] }> => {
+    const res = await axios.get(`${API_BASE}/rclone/unions`);
+    return res.data;
+};
+
+export const getUnionDetails = async (name: string): Promise<UnionDetails> => {
+    const res = await axios.get(`${API_BASE}/rclone/union/${encodeURIComponent(name)}/details`);
+    return res.data;
+};
+
+export interface ExpandUnionResponse {
+    status: string;
+    name: string;
+    previous_upstreams: string[];
+    new_upstreams: string[];
+    updated_upstreams: string[];
+}
+
+export const expandUnion = async (name: string, newUpstreams: string[]): Promise<ExpandUnionResponse> => {
+    const res = await axios.put(`${API_BASE}/rclone/union/${encodeURIComponent(name)}/expand`, {
+        new_upstreams: newUpstreams
+    });
+    return res.data;
+};
+
+
+// --- Remote Flags (Ignore/Protect) Management ---
+
+export interface RemoteFlags {
+    ignored: string[];
+    protected: string[];
+}
+
+export const getRemoteFlags = async (): Promise<RemoteFlags> => {
+    const res = await axios.get(`${API_BASE}/rclone/remote-flags`);
+    return res.data;
+};
+
+export const updateRemoteFlags = async (flags: RemoteFlags): Promise<{ status: string; flags: RemoteFlags }> => {
+    const res = await axios.put(`${API_BASE}/rclone/remote-flags`, flags);
+    return res.data;
+};
+
+export const addRemoteFlag = async (remoteName: string, flagType: 'ignored' | 'protected'): Promise<{ status: string; flags: RemoteFlags }> => {
+    const res = await axios.post(`${API_BASE}/rclone/remote-flags/add`, null, {
+        params: { remote_name: remoteName, flag_type: flagType }
+    });
+    return res.data;
+};
+
+export const removeRemoteFlag = async (remoteName: string, flagType: 'ignored' | 'protected'): Promise<{ status: string; flags: RemoteFlags }> => {
+    const res = await axios.post(`${API_BASE}/rclone/remote-flags/remove`, null, {
+        params: { remote_name: remoteName, flag_type: flagType }
+    });
+    return res.data;
+};
+
+
+// --- Batch Connection Testing ---
+
+export interface BatchTestResult {
+    name: string;
+    status: 'ok' | 'error';
+    message: string;
+}
+
+export interface BatchTestResponse {
+    total: number;
+    ok: number;
+    failed: number;
+    results: BatchTestResult[];
+}
+
+export const testBatchConnections = async (remoteNames: string[], serverId?: string): Promise<BatchTestResponse> => {
+    const res = await axios.post(`${API_BASE}/rclone/test-batch`, {
+        remote_names: remoteNames,
+        server_id: serverId
+    });
+    return res.data;
+};
+
+
+// --- Remote with Flags ---
+
+export interface RemoteWithFlags {
+    name: string;
+    type: string;
+    status: 'normal' | 'ignored' | 'protected';
+    config: Record<string, string>;
+}
+
+export interface RemotesWithFlagsResponse {
+    remotes: RemoteWithFlags[];
+    counts: {
+        total: number;
+        ignored: number;
+        protected: number;
+        normal: number;
+    };
+}
+
+export const listRemotesWithFlags = async (serverId?: string): Promise<RemotesWithFlagsResponse> => {
+    const res = await axios.get(`${API_BASE}/rclone/remotes/list-with-flags`, {
+        params: serverId ? { server_id: serverId } : undefined
+    });
+    return res.data;
+};
+
+export const deleteRemoteWithConfirm = async (name: string, confirm: boolean = false, serverId?: string): Promise<{ status: string; deleted: string }> => {
+    const res = await axios.delete(`${API_BASE}/rclone/remotes/${encodeURIComponent(name)}`, {
+        params: { confirm, server_id: serverId }
+    });
+    return res.data;
+};
