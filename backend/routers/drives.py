@@ -57,8 +57,6 @@ async def api_delete_drive(
     """Delete a Shared Drive."""
     from backend.drive_manager import delete_drive_unified
     # Delete requests typically don't have body in some clients, but here we can use query params or body.
-    # We'll use query params for simplicity as DeleteDriveRequest is not strictly required if we explode args.
-    # But usually APIs perform actions via POST if complex body.
     # Let's support DELETE method with query params.
     result = await delete_drive_unified(
         method=method,
@@ -67,6 +65,18 @@ async def api_delete_drive(
         impersonate_email=impersonate_email
     )
     return result
+
+
+@router.get("/{drive_id}/details")
+async def api_get_drive_details(
+    drive_id: str,
+    method: str = "google_api",
+    service_account_file: Optional[str] = None,
+    impersonate_email: Optional[str] = None
+):
+    """Get detailed stats and permissions for a drive."""
+    from backend.drive_manager import get_drive_details_unified
+    return await get_drive_details_unified(method, drive_id, service_account_file, impersonate_email)
 
 # Alternative POST endpoint for delete if body is needed (for robust params)
 @router.post("/delete")

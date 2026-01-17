@@ -247,6 +247,44 @@ export const listLocalRemotes = async (): Promise<{ remotes: RcloneRemote[]; con
     return res.data;
 };
 
+export interface SearchRcloneResponse {
+    matches: { name: string; type: string }[];
+    count: number;
+}
+
+export const searchRcloneConfig = async (query: string, serverId?: string): Promise<SearchRcloneResponse> => {
+    const res = await axios.post(`${API_BASE}/rclone/search-config`, { query, server_id: serverId });
+    return res.data;
+};
+
+export const backupRcloneConfig = async (serverId: string) => {
+    const res = await axios.post(`${API_BASE}/rclone/backup`, { server_id: serverId });
+    return res.data;
+};
+
+export const copyRcloneConfig = async (
+    sourceId: string,
+    destId: string,
+    mode: 'backup' | 'replace',
+    options?: { sourcePath?: string; destPath?: string; customName?: string; dryRun?: boolean }
+) => {
+    const res = await axios.post(`${API_BASE}/rclone/copy-config`, {
+        source_server_id: sourceId,
+        dest_server_id: destId,
+        mode,
+        source_path: options?.sourcePath,
+        dest_path: options?.destPath,
+        custom_name: options?.customName,
+        dry_run: options?.dryRun
+    });
+    return res.data;
+};
+
+export const checkRcloneDuplicates = async (serverId: string) => {
+    const res = await axios.post(`${API_BASE}/rclone/duplicates`, { server_id: serverId });
+    return res.data;
+};
+
 export interface SharedDrive {
     id: string;
     name: string;
@@ -1035,7 +1073,10 @@ export interface FilesStatus {
     status: string;
     path_exists: boolean;
     rclone_conf: boolean;
+    keys_list: string[];
     keys_count: number;
+    groups_list: string[];
+    groups_count: number;
     batch_count: number;
     runner_exists: boolean;
     cron_entries: number;
@@ -1050,6 +1091,8 @@ export interface BatchStatus {
     status: string;
     running: boolean;
     processes: string[];
+    batch_files_list: string[];
+    batch_count: number;
 }
 
 export const getServerBatchStatus = async (serverId: string): Promise<BatchStatus> => {
@@ -1066,7 +1109,13 @@ export interface FullVerification {
     mounts?: MountsStatus;
     files?: FilesStatus;
     batch?: BatchStatus;
-    cron?: { status: string; has_crontab: boolean; content: string };
+    cron?: {
+        status: string;
+        has_crontab: boolean;
+        content: string;
+        entries_list: string[];
+        entries_count: number;
+    };
 }
 
 export const verifyServer = async (serverId: string): Promise<FullVerification> => {
@@ -1447,6 +1496,35 @@ export const deleteDrive = async (req: DeleteDriveRequest) => {
     return res.data;
 };
 
+export interface DriveDetails {
+    id: string;
+    name: string;
+    kind: string;
+    createdTime?: string;
+    orgUnitId?: string;
+    permissions?: {
+        email: string;
+        role: string;
+        type: string;
+        name?: string;
+    }[];
+}
+
+export const getDriveDetails = async (
+    driveId: string,
+    serviceAccountFile?: string,
+    impersonateEmail?: string
+): Promise<{ status: string; drive?: DriveDetails; permissions?: any[]; message?: string }> => {
+    const res = await axios.get(`${API_BASE}/drives/${driveId}/details`, {
+        params: {
+            method: 'google_api',
+            service_account_file: serviceAccountFile,
+            impersonate_email: impersonateEmail
+        }
+    });
+    return res.data;
+};
+
 
 // --- Remote Flags (Ignore/Protect) Management ---
 
@@ -1545,6 +1623,25 @@ export const updateLocalRemote = async (name: string, config: any): Promise<any>
 export const renameRemote = async (oldName: string, newName: string): Promise<any> => {
     const res = await axios.post(`${API_BASE}/rclone/remotes/${encodeURIComponent(oldName)}/rename`, {
         new_name: newName
+    });
+    return res.data;
+};
+
+export const verifyPath = async (type: 'local' | 'ssh' | 'rclone', path: string, serverId: string = 'local', rcloneRemote?: string): Promise<{ status: string; message: string }> => {
+    const res = await axios.post(`${API_BASE}/ssh/verify-path`, {
+        type,
+        server_id: serverId,
+        path,
+        rclone_remote: rcloneRemote
+    });
+    return res.data;
+};
+
+export const browseRcloneContent = async (remoteName: string, path: string, serverId: string = 'local'): Promise<{ status: string; dirs: string[] }> => {
+    const res = await axios.post(`${API_BASE}/rclone/browse`, {
+        server_id: serverId,
+        remote_name: remoteName,
+        path
     });
     return res.data;
 };

@@ -28,18 +28,33 @@ def build_ssh_command(server: Dict[str, Any]) -> List[str]:
     return cmd
 
 
-def run_ssh_command(server: Dict[str, Any], remote_cmd: str, timeout: int = 30) -> Dict[str, Any]:
-    """Run a command on remote server via SSH."""
-    ssh_cmd = build_ssh_command(server)
-    ssh_cmd.append(remote_cmd)
-    
+def run_ssh_command(server: Optional[Dict[str, Any]], remote_cmd: str, timeout: int = 30) -> Dict[str, Any]:
+    """Run a command on remote server via SSH, or locally if server is None/'local'."""
     try:
-        result = subprocess.run(
-            ssh_cmd,
-            capture_output=True,
-            text=True,
-            timeout=timeout
-        )
+        if not server or server.get('id') == 'local':
+            # Local execution
+            # cmd needs to be list for subprocess.run if not shell=True
+            # But remote_cmd is string (e.g. "find / ...").
+            # We use shell=True for local complex commands
+            result = subprocess.run(
+                remote_cmd,
+                shell=True,
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+                executable='/bin/bash' # Ensure bash
+            )
+        else:
+            # Remote SSH
+            ssh_cmd = build_ssh_command(server)
+            ssh_cmd.append(remote_cmd)
+            result = subprocess.run(
+                ssh_cmd,
+                capture_output=True,
+                text=True,
+                timeout=timeout
+            )
+            
         return {
             "success": result.returncode == 0,
             "stdout": result.stdout,
@@ -52,7 +67,7 @@ def run_ssh_command(server: Dict[str, Any], remote_cmd: str, timeout: int = 30) 
         return {"success": False, "error": str(e)}
 
 
-def list_remote_folders(server: Dict[str, Any], path: str = "/", depth: int = 2) -> Dict[str, Any]:
+def list_remote_folders(server: Optional[Dict[str, Any]], path: str = "/", depth: int = 2) -> Dict[str, Any]:
     """
     List folders on a remote server via SSH.
     

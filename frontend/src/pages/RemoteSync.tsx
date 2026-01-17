@@ -1,9 +1,10 @@
 import { useState, useEffect } from 'react';
-import { RefreshCw, Server, FileCode, Layers, Key, HardDrive, Clock, ChevronDown, Check, ArrowRight, ArrowLeft, Loader, Database } from 'lucide-react';
+import { RefreshCw, Server, FileCode, Layers, Key, HardDrive, Clock, ChevronDown, Check, ArrowRight, ArrowLeft, Loader, Database, AlertTriangle } from 'lucide-react';
 import axios from 'axios';
 import { fetchSSHServers, SSHServer } from '../api';
 import { PageHeader } from '../components/PageHeader';
 import { Card } from '../components/Card';
+import { SESSION_KEYS } from '../constants/storageKeys';
 
 const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:8000/api';
 
@@ -30,6 +31,7 @@ const ITEM_TYPES: { type: ItemType; label: string; icon: React.ReactNode }[] = [
 const RemoteSync: React.FC = () => {
     const [servers, setServers] = useState<SSHServer[]>([]);
     const [selectedServers, setSelectedServers] = useState<Set<string>>(new Set());
+    const [sourceServerId, setSourceServerId] = useState('local');
     const [activeTab, setActiveTab] = useState<ItemType>('batch');
 
     const [localItems, setLocalItems] = useState<SyncItem[]>([]);
@@ -40,6 +42,28 @@ const RemoteSync: React.FC = () => {
     const [selectedLocal, setSelectedLocal] = useState<Set<string>>(new Set());
     const [selectedRemote, setSelectedRemote] = useState<Set<string>>(new Set());
 
+    const [filters, setFilters] = useState<Record<string, { local: string; remote: string }>>(() => {
+        const saved = sessionStorage.getItem(SESSION_KEYS.REMOTE_SYNC_FILTERS);
+        return saved ? JSON.parse(saved) : {};
+    });
+
+    const activeLocalFilter = filters[activeTab]?.local || '';
+    const activeRemoteFilter = filters[activeTab]?.remote || '';
+
+    const updateFilter = (type: 'local' | 'remote', value: string) => {
+        setFilters(prev => {
+            const next = {
+                ...prev,
+                [activeTab]: {
+                    ...(prev[activeTab] || { local: '', remote: '' }),
+                    [type]: value
+                }
+            };
+            sessionStorage.setItem(SESSION_KEYS.REMOTE_SYNC_FILTERS, JSON.stringify(next));
+            return next;
+        });
+    };
+
     const [loading, setLoading] = useState(false);
     const [syncing, setSyncing] = useState(false);
     const [message, setMessage] = useState<string | null>(null);
@@ -48,6 +72,8 @@ const RemoteSync: React.FC = () => {
     const [pushStatus, setPushStatus] = useState<string>('');
     const [pushResults, setPushResults] = useState<any[]>([]);
     const [showResults, setShowResults] = useState(false);
+
+    const [conflictModal, setConflictModal] = useState<{ conflicts: { server: string; remotes: string[] }[]; onConfirm: (overwrite: boolean) => void } | null>(null);
 
     // Sync All options
     const [syncAllBatches, setSyncAllBatches] = useState(true);
@@ -71,7 +97,7 @@ const RemoteSync: React.FC = () => {
         if (selectedServers.size > 0) {
             loadItems();
         }
-    }, [selectedServers, activeTab]);
+    }, [selectedServers, activeTab, sourceServerId]);
 
     const toggleServer = (serverId: string) => {
         const next = new Set(selectedServers);
@@ -100,23 +126,42 @@ const RemoteSync: React.FC = () => {
         setSelectedRemote(new Set());
 
         try {
-            // Load local items
-            if (activeTab === 'batch') {
-                const res = await axios.get(`${API_BASE}/manual/batch/list`);
-                setLocalItems(res.data.files.map((f: any) => ({ name: f.name, size: f.size })));
-            } else if (activeTab === 'group') {
-                // List local groups from batch groups
-                const res = await axios.get(`${API_BASE}/batch-groups`);
-                setLocalItems(res.data.map((g: any) => ({ name: `group_${g.name.replace(/ /g, '_').toLowerCase()}.sh`, size: 0 })));
-            } else if (activeTab === 'key') {
-                const res = await axios.get(`${API_BASE}/drives/keys`);
-                setLocalItems(res.data.keys.map((k: any) => ({ name: k.name, size: k.size })));
-            } else if (activeTab === 'remote') {
+            // Load Source Items
+            if (activeTab === 'remote') {
+                // Rclone always from local config for now
                 const res = await axios.get(`${API_BASE}/rclone/remotes`);
                 setLocalItems(res.data.remotes.map((r: any) => ({ name: r.name, size: 0 })));
+            } else if (sourceServerId === 'local') {
+                if (activeTab === 'batch') {
+                    const res = await axios.get(`${API_BASE}/manual/batch/list`);
+                    setLocalItems(res.data.files.map((f: any) => ({ name: f.name, size: f.size })));
+                } else if (activeTab === 'group') {
+                    const res = await axios.get(`${API_BASE}/batch-groups`);
+                    setLocalItems(res.data.map((g: any) => ({ name: `group_${g.name.replace(/ /g, '_').toLowerCase()}.sh`, size: 0 })));
+                } else if (activeTab === 'key') {
+                    const res = await axios.get(`${API_BASE}/drives/keys`);
+                    setLocalItems(res.data.keys.map((k: any) => ({ name: k.name, size: k.size })));
+                }
+            } else {
+                // Remote Source
+                if (activeTab === 'batch') {
+                    const res = await axios.post(`${API_BASE}/ssh/remote/list-batches`, { server_id: sourceServerId });
+                    setLocalItems(res.data.items || []);
+                } else if (activeTab === 'group') {
+                    const res = await axios.post(`${API_BASE}/ssh/remote/list-groups`, { server_id: sourceServerId });
+                    setLocalItems(res.data.items || []);
+                } else if (activeTab === 'key') {
+                    const res = await axios.post(`${API_BASE}/ssh/remote/list-keys`, { server_id: sourceServerId });
+                    setLocalItems(res.data.items || []);
+                } else if (activeTab === 'cron') {
+                    // Map cron to items? Or use simple display
+                    // For now, simple list
+                    const res = await axios.post(`${API_BASE}/ssh/remote/list-crons`, { server_id: sourceServerId });
+                    setLocalItems((res.data.items || []).map((c: any) => ({ name: c.entry, size: 0 })));
+                }
             }
 
-            // Load remote items from primary selected server
+            // Load Target Items (from primary selected)
             if (activeTab === 'batch') {
                 const res = await axios.post(`${API_BASE}/ssh/remote/list-batches`, { server_id: primaryServer });
                 setRemoteItems(res.data.items || []);
@@ -136,7 +181,7 @@ const RemoteSync: React.FC = () => {
             }
         } catch (e: any) {
             console.error(e);
-            setMessage(`Error loading: ${e.message}`);
+            setMessage(`Error loading: {e.message}`);
         } finally {
             setLoading(false);
         }
@@ -156,7 +201,7 @@ const RemoteSync: React.FC = () => {
         setSelectedRemote(next);
     };
 
-    const handlePush = async () => {
+    const executePush = async (overwrite: boolean) => {
         if (selectedLocal.size === 0 || selectedServers.size === 0) return;
         setSyncing(true);
         setMessage(null);
@@ -165,39 +210,66 @@ const RemoteSync: React.FC = () => {
 
         const allResults: any[] = [];
         const serverNames = servers.filter(s => selectedServers.has(s.id)).map(s => s.name);
-        const localPath = getLocalPath(activeTab);
+        const sourceName = sourceServerId === 'local' ? 'Local' : servers.find(s => s.id === sourceServerId)?.name;
 
-        setPushStatus(`Starting push of ${selectedLocal.size} items to ${serverNames.join(', ')}...`);
-        setPushStatus(`Source: ${localPath}`);
+        setPushStatus(`Starting push...`);
 
         try {
             for (const serverId of Array.from(selectedServers)) {
                 const server = servers.find(s => s.id === serverId);
                 const serverName = server?.name || serverId;
-                setPushStatus(`Pushing to ${serverName}...`);
 
-                if (activeTab === 'remote') {
-                    const res = await axios.post(`${API_BASE}/rclone/remote/push`, {
-                        server_id: serverId,
-                        remote_names: Array.from(selectedLocal)
-                    });
-                    allResults.push({ server: serverName, ...res.data });
+                if (sourceServerId === 'local') {
+                    // Local Source -> Remote Target
+                    setPushStatus(`Pushing to ${serverName}...`);
+                    if (activeTab === 'remote') {
+                        const res = await axios.post(`${API_BASE}/rclone/remote/push`, {
+                            server_id: serverId,
+                            remote_names: Array.from(selectedLocal),
+                            overwrite: overwrite
+                        });
+                        allResults.push({ server: serverName, ...res.data });
+                    } else {
+                        const res = await axios.post(`${API_BASE}/ssh/remote/push-items`, {
+                            server_id: serverId,
+                            items: Array.from(selectedLocal),
+                            item_type: activeTab
+                        });
+                        allResults.push({ server: serverName, ...res.data });
+                    }
                 } else {
-                    const res = await axios.post(`${API_BASE}/ssh/remote/push-items`, {
-                        server_id: serverId,
+                    // Remote Source -> Remote Target (Relay)
+                    setPushStatus(`Relaying ${sourceName} -> ${serverName}...`);
+                    const res = await axios.post(`${API_BASE}/ssh/remote/relay-sync`, {
+                        source_id: sourceServerId,
+                        target_ids: [serverId],
                         items: Array.from(selectedLocal),
-                        item_type: activeTab
+                        item_type: activeTab,
+                        direction: 'push'
                     });
-                    allResults.push({ server: serverName, ...res.data });
+
+                    // Transform relay result to push result format
+                    allResults.push({
+                        server: serverName,
+                        pushed: res.data.pushed,
+                        total: res.data.total,
+                        results: res.data.results.map((r: any) => ({
+                            item: r.item,
+                            status: r.targets[0]?.status || 'error',
+                            destination: r.targets[0]?.message
+                        }))
+                    });
                 }
             }
 
-            const totalPushed = allResults.reduce((sum, r) => sum + (r.pushed || 0), 0);
-            const totalItems = allResults.reduce((sum, r) => sum + (r.total || 0), 0);
+            const totalPushed = allResults.reduce((sum, r) => {
+                if (Array.isArray(r.pushed)) return sum + r.pushed.length;
+                return sum + (r.pushed || 0);
+            }, 0);
 
-            setPushStatus(`✓ Complete: ${totalPushed}/${totalItems} items pushed to ${serverNames.length} server(s)`);
+            setPushStatus(`✓ Complete: Pushed to ${serverNames.length} server(s)`);
             setPushResults(allResults);
-            setMessage(`✓ Pushed ${totalPushed} items to ${serverNames.join(', ')}`);
+            setMessage(`✓ Operation Complete`);
             await loadItems();
         } catch (e: any) {
             setPushStatus(`✗ Error: ${e.response?.data?.detail || e.message}`);
@@ -207,6 +279,47 @@ const RemoteSync: React.FC = () => {
         }
     };
 
+    const handlePush = async () => {
+        if (selectedLocal.size === 0 || selectedServers.size === 0) return;
+
+        if (activeTab === 'remote' && sourceServerId === 'local') {
+            // Check conflicts
+            setSyncing(true);
+            setPushStatus('Checking for duplicates...');
+
+            const conflicts: { server: string; remotes: string[] }[] = [];
+
+            try {
+                for (const serverId of Array.from(selectedServers)) {
+                    const serverName = servers.find(s => s.id === serverId)?.name || serverId;
+                    const res = await axios.post(`${API_BASE}/rclone/remote/list`, null, { params: { server_id: serverId } });
+                    const remoteNames = (res.data.remotes || []).map((r: any) => r.name);
+
+                    const common = Array.from(selectedLocal).filter(n => remoteNames.includes(n));
+                    if (common.length > 0) {
+                        conflicts.push({ server: serverName, remotes: common });
+                    }
+                }
+            } catch (e) { console.error("Conflict check failed", e); }
+
+            setSyncing(false);
+            setPushStatus('');
+
+            if (conflicts.length > 0) {
+                setConflictModal({
+                    conflicts,
+                    onConfirm: (ovr) => {
+                        setConflictModal(null);
+                        executePush(ovr);
+                    }
+                });
+                return;
+            }
+        }
+
+        executePush(true);
+    };
+
     const handlePull = async () => {
         if (selectedRemote.size === 0 || selectedServers.size === 0) return;
         const primaryServer = Array.from(selectedServers)[0];
@@ -214,17 +327,25 @@ const RemoteSync: React.FC = () => {
         setMessage(null);
 
         try {
-            if (activeTab === 'remote') {
-                // Pull rclone remotes (merge)
+            if (sourceServerId === 'local' && activeTab === 'remote') {
                 await axios.post(`${API_BASE}/rclone/remote/pull`, {
                     server_id: primaryServer,
                     remote_names: Array.from(selectedRemote)
                 });
-            } else {
+            } else if (sourceServerId === 'local') {
                 await axios.post(`${API_BASE}/ssh/remote/pull-items`, {
                     server_id: primaryServer,
                     items: Array.from(selectedRemote),
                     item_type: activeTab
+                });
+            } else {
+                // Relay Pull: Target -> Source
+                await axios.post(`${API_BASE}/ssh/remote/relay-sync`, {
+                    source_id: sourceServerId,
+                    target_ids: [primaryServer],
+                    items: Array.from(selectedRemote),
+                    item_type: activeTab,
+                    direction: 'pull'
                 });
             }
             setMessage(`✓ Pulled ${selectedRemote.size} items`);
@@ -279,10 +400,15 @@ const RemoteSync: React.FC = () => {
         }
     };
 
-    const selectAllLocal = () => setSelectedLocal(new Set(localItems.map(i => i.name)));
-    const selectAllRemote = () => setSelectedRemote(new Set(remoteItems.map(i => i.name)));
     const clearLocal = () => setSelectedLocal(new Set());
     const clearRemote = () => setSelectedRemote(new Set());
+
+    const filteredLocalItems = localItems.filter(i => i.name.toLowerCase().includes(activeLocalFilter.toLowerCase()));
+    const filteredRemoteItems = remoteItems.filter(i => i.name.toLowerCase().includes(activeRemoteFilter.toLowerCase()));
+    const filteredRemoteCrons = remoteCrons.filter(c => c.entry.toLowerCase().includes(activeRemoteFilter.toLowerCase()));
+
+    const selectAllLocal = () => setSelectedLocal(new Set(filteredLocalItems.map(i => i.name)));
+    const selectAllRemote = () => setSelectedRemote(new Set(filteredRemoteItems.map(i => i.name)));
 
     return (
         <div className="space-y-6">
@@ -365,7 +491,8 @@ const RemoteSync: React.FC = () => {
                 <div className="flex gap-2">
                     <button
                         onClick={() => handleSyncAll('push')}
-                        disabled={syncing}
+                        disabled={syncing || sourceServerId !== 'local'}
+                        title={sourceServerId !== 'local' ? "Sync All only available for Local Source" : "Push All to Remote"}
                         className="flex items-center gap-2 px-4 py-2 bg-cyan-600 hover:bg-cyan-500 text-white rounded-lg text-sm font-medium transition disabled:opacity-50"
                     >
                         {syncing ? <Loader size={14} className="animate-spin" /> : <ArrowRight size={14} />}
@@ -373,7 +500,8 @@ const RemoteSync: React.FC = () => {
                     </button>
                     <button
                         onClick={() => handleSyncAll('pull')}
-                        disabled={syncing}
+                        disabled={syncing || sourceServerId !== 'local'}
+                        title={sourceServerId !== 'local' ? "Sync All only available for Local Source" : "Pull All from Remote"}
                         className="flex items-center gap-2 px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg text-sm font-medium transition disabled:opacity-50"
                     >
                         {syncing ? <Loader size={14} className="animate-spin" /> : <ArrowLeft size={14} />}
@@ -387,19 +515,41 @@ const RemoteSync: React.FC = () => {
                 {/* Local Items */}
                 <Card>
                     <div className="flex items-center justify-between mb-3">
-                        <h3 className="text-sm font-medium text-emerald-400">Local Items ({localItems.length})</h3>
+                        <div className="flex items-center gap-2">
+                            <span className="text-sm font-medium text-emerald-400">Source:</span>
+                            <select
+                                value={sourceServerId}
+                                onChange={(e) => { setSourceServerId(e.target.value); setSelectedLocal(new Set()); }}
+                                disabled={activeTab === 'remote'}
+                                className="bg-zinc-800 border border-zinc-700 text-xs rounded px-2 py-1 text-white focus:outline-none focus:border-emerald-500 disabled:opacity-50"
+                                title={activeTab === 'remote' ? "Rclone sync restricted to Local Source" : "Select Source Server"}
+                            >
+                                <option value="local">Local Server</option>
+                                {servers.filter(s => !selectedServers.has(s.id)).map(s => (
+                                    <option key={s.id} value={s.id}>{s.name}</option>
+                                ))}
+                            </select>
+                            <span className="text-sm text-emerald-400">({filteredLocalItems.length}{activeLocalFilter && `/${localItems.length}`})</span>
+                        </div>
                         <div className="flex gap-2">
                             <button onClick={selectAllLocal} className="text-xs text-zinc-500 hover:text-zinc-300">All</button>
                             <button onClick={clearLocal} className="text-xs text-zinc-500 hover:text-zinc-300">None</button>
                         </div>
                     </div>
-                    <div className="space-y-1 max-h-64 overflow-y-auto">
+                    <input
+                        type="text"
+                        placeholder="Filter local items..."
+                        value={activeLocalFilter}
+                        onChange={e => updateFilter('local', e.target.value)}
+                        className="w-full bg-zinc-900 border border-zinc-700 rounded px-3 py-2 text-xs mb-2 focus:outline-none focus:border-emerald-500"
+                    />
+                    <div className="space-y-1 max-h-64 overflow-y-auto custom-scrollbar">
                         {loading ? (
                             <div className="text-center py-4 text-zinc-500">Loading...</div>
-                        ) : localItems.length === 0 ? (
-                            <div className="text-center py-4 text-zinc-500 text-sm">No local items</div>
+                        ) : filteredLocalItems.length === 0 ? (
+                            <div className="text-center py-4 text-zinc-500 text-sm">No items match filter</div>
                         ) : (
-                            localItems.map(item => (
+                            filteredLocalItems.map(item => (
                                 <label
                                     key={item.name}
                                     className={`flex items-center gap-2 p-2 rounded cursor-pointer transition ${selectedLocal.has(item.name) ? 'bg-emerald-600/20' : 'hover:bg-zinc-800'
@@ -432,29 +582,38 @@ const RemoteSync: React.FC = () => {
                 {/* Remote Items */}
                 <Card>
                     <div className="flex items-center justify-between mb-3">
-                        <h3 className="text-sm font-medium text-cyan-400">Remote Items ({remoteItems.length})</h3>
+                        <h3 className="text-sm font-medium text-cyan-400">
+                            Remote Items ({activeTab === 'cron' ? filteredRemoteCrons.length : filteredRemoteItems.length})
+                        </h3>
                         <div className="flex gap-2">
                             <button onClick={selectAllRemote} className="text-xs text-zinc-500 hover:text-zinc-300">All</button>
                             <button onClick={clearRemote} className="text-xs text-zinc-500 hover:text-zinc-300">None</button>
                         </div>
                     </div>
-                    <div className="space-y-1 max-h-64 overflow-y-auto">
+                    <input
+                        type="text"
+                        placeholder="Filter remote items..."
+                        value={activeRemoteFilter}
+                        onChange={e => updateFilter('remote', e.target.value)}
+                        className="w-full bg-zinc-900 border border-zinc-700 rounded px-3 py-2 text-xs mb-2 focus:outline-none focus:border-cyan-500"
+                    />
+                    <div className="space-y-1 max-h-64 overflow-y-auto custom-scrollbar">
                         {loading ? (
                             <div className="text-center py-4 text-zinc-500">Loading...</div>
                         ) : activeTab === 'cron' ? (
-                            remoteCrons.length === 0 ? (
+                            filteredRemoteCrons.length === 0 ? (
                                 <div className="text-center py-4 text-zinc-500 text-sm">No cron entries</div>
                             ) : (
-                                remoteCrons.map((cron, idx) => (
+                                filteredRemoteCrons.map((cron, idx) => (
                                     <div key={idx} className="p-2 bg-zinc-800/50 rounded text-xs font-mono text-zinc-400 truncate">
                                         {cron.entry}
                                     </div>
                                 ))
                             )
-                        ) : remoteItems.length === 0 ? (
+                        ) : filteredRemoteItems.length === 0 ? (
                             <div className="text-center py-4 text-zinc-500 text-sm">No remote items</div>
                         ) : (
-                            remoteItems.map(item => (
+                            filteredRemoteItems.map(item => (
                                 <label
                                     key={item.name}
                                     className={`flex items-center gap-2 p-2 rounded cursor-pointer transition ${selectedRemote.has(item.name) ? 'bg-cyan-600/20' : 'hover:bg-zinc-800'
@@ -517,8 +676,11 @@ const RemoteSync: React.FC = () => {
                                     Destination: {serverResult.remote_base || '/opt/isync'}
                                 </div>
                                 <div className="text-xs text-zinc-400 mb-2">
-                                    {serverResult.pushed || 0}/{serverResult.total || 0} items pushed
+                                    {Array.isArray(serverResult.pushed)
+                                        ? `${serverResult.pushed.length} pushed${serverResult.skipped?.length ? `, ${serverResult.skipped.length} skipped` : ''}`
+                                        : `${serverResult.pushed || 0}/${serverResult.total || 0} items pushed`}
                                 </div>
+
                                 {Array.isArray(serverResult.results) && serverResult.results.length > 0 && (
                                     <div className="space-y-1">
                                         {serverResult.results.slice(0, 10).map((r: any, i: number) => (
@@ -533,6 +695,21 @@ const RemoteSync: React.FC = () => {
                                         )}
                                     </div>
                                 )}
+
+                                {(Array.isArray(serverResult.pushed) || Array.isArray(serverResult.skipped)) && (
+                                    <div className="space-y-1">
+                                        {serverResult.pushed?.map((name: string) => (
+                                            <div key={`p-${name}`} className="text-xs flex items-center gap-2 text-emerald-400">
+                                                <Check size={10} /> {name}
+                                            </div>
+                                        ))}
+                                        {serverResult.skipped?.map((name: string) => (
+                                            <div key={`s-${name}`} className="text-xs flex items-center gap-2 text-zinc-500">
+                                                <span className="text-[10px] uppercase border px-1 rounded border-zinc-700">Skip</span> {name}
+                                            </div>
+                                        ))}
+                                    </div>
+                                )}
                             </div>
                         ))}
                     </div>
@@ -543,6 +720,49 @@ const RemoteSync: React.FC = () => {
             {message && (
                 <div className={`p-3 rounded-lg text-sm ${message.startsWith('✓') ? 'bg-emerald-600/20 text-emerald-400' : 'bg-red-600/20 text-red-400'}`}>
                     {message}
+                </div>
+            )}
+            {/* Conflict Modal */}
+            {conflictModal && (
+                <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-4">
+                    <div className="bg-zinc-900 border border-red-900/50 rounded-xl p-6 w-full max-w-lg shadow-2xl">
+                        <h3 className="text-lg font-bold text-white flex items-center gap-2 mb-4">
+                            <AlertTriangle size={20} className="text-amber-500" />
+                            Remote Conflicts Detected
+                        </h3>
+                        <div className="text-sm text-zinc-400 mb-4">
+                            The following remotes already exist on the target server(s).
+                            How would you like to proceed?
+                        </div>
+
+                        <div className="mb-6 max-h-48 overflow-y-auto space-y-2 bg-zinc-950/50 p-3 rounded border border-zinc-800">
+                            {conflictModal.conflicts.map((c, i) => (
+                                <div key={i}>
+                                    <div className="text-cyan-400 font-medium text-xs mb-1">{c.server}</div>
+                                    <div className="pl-2 border-l border-zinc-700 space-y-1">
+                                        {c.remotes.map(r => (
+                                            <div key={r} className="text-zinc-300 text-xs font-mono">{r}</div>
+                                        ))}
+                                    </div>
+                                </div>
+                            ))}
+                        </div>
+
+                        <div className="flex flex-col gap-2">
+                            <button onClick={() => conflictModal.onConfirm(true)}
+                                className="w-full py-2 bg-red-600 hover:bg-red-500 text-white rounded font-medium transition flex items-center justify-center gap-2">
+                                <Database size={16} /> Overwrite Existing (Updates Config)
+                            </button>
+                            <button onClick={() => conflictModal.onConfirm(false)}
+                                className="w-full py-2 bg-zinc-700 hover:bg-zinc-600 text-zinc-200 rounded font-medium transition">
+                                Skip Duplicates (Keep Existing)
+                            </button>
+                            <button onClick={() => setConflictModal(null)}
+                                className="w-full py-2 border border-zinc-700 hover:bg-zinc-800 text-zinc-400 rounded font-medium transition mt-2">
+                                Cancel Operation
+                            </button>
+                        </div>
+                    </div>
                 </div>
             )}
         </div>

@@ -10,12 +10,14 @@ import {
     deleteBatchGroup, updateBatchGroup, generateGroupScript, BatchGroup, pushBatch, pushBatchGroup,
     updateBatchContent, checkBatchRemote, pullBatch, deleteBatchRemote, deleteBatchLocal,
     checkGroupRemote, pullGroupRemote, deleteGroupRemote, getGroupScript, regenerateBatch,
-    getSyncPairsWithBatches, bulkGenerateBatches, SyncPairWithBatch, renameBatchFile
+    getSyncPairsWithBatches, bulkGenerateBatches, SyncPairWithBatch, renameBatchFile,
+    verifyPath, browseRcloneContent
 } from '../api';
 import { SESSION_KEYS } from '../constants/storageKeys';
 import { PageHeader } from '../components/PageHeader';
 import { Card } from '../components/Card';
 import { useSetToggle } from '../hooks/useSetToggle';
+import { FileBrowserModal } from '../components/FileBrowserModal';
 
 interface BatchGeneratorProps {
     activeSection?: string | null;
@@ -51,8 +53,52 @@ const BatchGenerator: React.FC<BatchGeneratorProps> = ({ activeSection }) => {
         return saved ? new Set(JSON.parse(saved)) : new Set();
     });
 
-    // Batch State - using shared hook
-    const { set: selectedPairs, toggle: togglePair, clear: clearPairs, addAll: selectAllPairsSet } = useSetToggle<number>(new Set());
+    // Batch State - Shift-Click Selection
+    const [lastClickedPair, setLastClickedPair] = useState<number | null>(null);
+    const [selectedPairs, setSelectedPairs] = useState<Set<number>>(new Set());
+
+    const togglePair = (index: number) => {
+        setSelectedPairs(prev => {
+            const next = new Set(prev);
+            if (next.has(index)) next.delete(index);
+            else next.add(index);
+            return next;
+        });
+        setLastClickedPair(index);
+    };
+
+    const handlePairClick = (index: number, e: React.MouseEvent, allIndices: number[]) => {
+        if (e.shiftKey && lastClickedPair !== null) {
+            const start = allIndices.indexOf(lastClickedPair);
+            const end = allIndices.indexOf(index);
+
+            if (start !== -1 && end !== -1) {
+                const min = Math.min(start, end);
+                const max = Math.max(start, end);
+
+                setSelectedPairs(prev => {
+                    const next = new Set(prev);
+                    for (let i = min; i <= max; i++) {
+                        next.add(allIndices[i]);
+                    }
+                    return next;
+                });
+            }
+        } else {
+            // Normal toggle
+            if ((e.target as HTMLElement).closest('button')) return;
+            togglePair(index);
+        }
+    };
+
+    const clearPairs = () => setSelectedPairs(new Set());
+    const selectAllPairs = () => {
+        if (selectedPairs.size === unifiedPairs.length) {
+            clearPairs();
+        } else {
+            setSelectedPairs(new Set(unifiedPairs.map(p => p.index)));
+        }
+    };
     const [batchResults, setBatchResults] = useState<Record<string, string>>({});
     const [batchLoading, setBatchLoading] = useState(false);
 
@@ -83,19 +129,33 @@ const BatchGenerator: React.FC<BatchGeneratorProps> = ({ activeSection }) => {
     const [remoteStatusCache, setRemoteStatusCache] = useState<Record<string, Record<string, boolean>>>({});
     const [batchOperationLoading, setBatchOperationLoading] = useState<string | null>(null);
 
-    // Sync Pair Wizard State
+    // Flexible Sync Pair Wizard State
     const [showWizard, setShowWizard] = useState(false);
     const [wizardStep, setWizardStep] = useState(1);
-    const [servers, setServers] = useState<SSHServer[]>([]);
-    const [selectedServer, setSelectedServer] = useState<string | null>(null);
-    const [browseBasePath, setBrowseBasePath] = useState('/');
-    const [browseDepth, setBrowseDepth] = useState(2);
-    const [folderTree, setFolderTree] = useState<RemoteFolder[]>([]);
-    const [selectedSourceFolder, setSelectedSourceFolder] = useState<string | null>(null);
-    const [rcloneRemotes, setRcloneRemotes] = useState<RcloneRemote[]>([]);
-    const [selectedRemote, setSelectedRemote] = useState<string | null>(null);
-    const [targetPath, setTargetPath] = useState('');
+
+    // Source
+    const [srcType, setSrcType] = useState<'local' | 'ssh' | 'rclone'>('local');
+    const [srcServerId, setSrcServerId] = useState('local');
+    const [srcPath, setSrcPath] = useState('');
+    const [srcRcloneRemote, setSrcRcloneRemote] = useState('');
+
+    // Destination
+    const [destType, setDestType] = useState<'local' | 'ssh' | 'rclone'>('rclone');
+    const [destServerId, setDestServerId] = useState('local');
+    const [destPath, setDestPath] = useState('');
+    const [destRcloneRemote, setDestRcloneRemote] = useState('');
+
+    // Verification & UI
     const [wizardLoading, setWizardLoading] = useState(false);
+    const [srcVerified, setSrcVerified] = useState(false);
+    const [destVerified, setDestVerified] = useState(false);
+    const [wizardMsg, setWizardMsg] = useState('');
+    const [rcloneRemotesList, setRcloneRemotesList] = useState<string[]>([]);
+
+    // Browsing
+    const [showBrowse, setShowBrowse] = useState<'source' | 'dest' | null>(null);
+    const [browsePath, setBrowsePath] = useState('/');
+    const [browseItems, setBrowseItems] = useState<string[]>([]);
 
     // Random Batch Generation State
     const [randomUserCount, setRandomUserCount] = useState(10);
@@ -366,13 +426,7 @@ const BatchGenerator: React.FC<BatchGeneratorProps> = ({ activeSection }) => {
         }
     };
 
-    const selectAllPairs = () => {
-        if (selectedPairs.size === unifiedPairs.length) {
-            clearPairs();
-        } else {
-            selectAllPairsSet(unifiedPairs.map((p) => p.index));
-        }
-    };
+
 
     const generate = async (dryRun: boolean) => {
         if (selectedPairs.size === 0) return alert("Select at least one sync pair.");
@@ -696,81 +750,81 @@ const BatchGenerator: React.FC<BatchGeneratorProps> = ({ activeSection }) => {
     const openWizard = async () => {
         setShowWizard(true);
         setWizardStep(1);
-        setSelectedServer(null);
-        setFolderTree([]);
-        setSelectedSourceFolder(null);
-        setRcloneRemotes([]);
-        setSelectedRemote(null);
-        setTargetPath('');
-        setBrowseBasePath('/');
 
-        // Load servers
+        // Reset State
+        setSrcType('local'); setSrcServerId('local'); setSrcPath(''); setSrcRcloneRemote('');
+        setDestType('rclone'); setDestServerId('local'); setDestPath(''); setDestRcloneRemote('');
+        setSrcVerified(false); setDestVerified(false); setWizardMsg('');
+
         try {
             const srv = await fetchSSHServers();
-            setServers(srv);
-        } catch (e) {
-            console.error('Failed to load servers', e);
-        }
+            setSshServers(srv);
+        } catch (e) { console.error(e) }
     };
 
-    const loadFolders = async () => {
-        if (!selectedServer) return;
+    const loadRcloneRemotesList = async (serverId: string) => {
         setWizardLoading(true);
         try {
-            const result = await listServerFolders(selectedServer, browseBasePath, browseDepth);
-            if (result.status === 'ok') {
-                setFolderTree(result.tree);
-            } else {
-                alert('Failed to list folders: ' + (result.message || 'Unknown error'));
+            const res = await listServerRemotes(serverId);
+            if (res.status === 'ok') {
+                setRcloneRemotesList(res.remotes.map((r: any) => r.name));
             }
-        } catch (e: any) {
-            alert(`Error: ${e.message}`);
-        } finally {
-            setWizardLoading(false);
-        }
+        } catch (e) { console.error(e); }
+        finally { setWizardLoading(false); }
     };
 
-    const loadRemotes = async () => {
-        if (!selectedServer) return;
-        setWizardLoading(true);
+    const handleVerify = async (side: 'source' | 'dest') => {
+        setWizardLoading(true); setWizardMsg('');
+        const type = side === 'source' ? srcType : destType;
+        const serverId = side === 'source' ? srcServerId : destServerId;
+        const path = side === 'source' ? srcPath : destPath;
+        const remote = side === 'source' ? srcRcloneRemote : destRcloneRemote;
+
+        if (!path && type !== 'rclone') { setWizardLoading(false); return; } // Rclone remote root might use empty path
+
         try {
-            const result = await listServerRemotes(selectedServer);
-            if (result.status === 'ok') {
-                setRcloneRemotes(result.remotes);
+            const res = await verifyPath(type, path, serverId, remote);
+            if (res.status === 'ok') {
+                if (side === 'source') setSrcVerified(true);
+                else setDestVerified(true);
+                setWizardMsg(`${side.toUpperCase()} Verified: ${res.message}`);
             } else {
-                alert('Failed to list remotes');
+                setWizardMsg(`${side === 'source' ? 'Source' : 'Dest'} Verification Failed: ${res.message}`);
+                if (side === 'source') setSrcVerified(false);
+                else setDestVerified(false);
             }
         } catch (e: any) {
-            alert(`Error: ${e.message}`);
+            setWizardMsg(`Verification Error: ${e.message}`);
         } finally {
             setWizardLoading(false);
         }
     };
 
     const handleCreateSyncPair = async () => {
-        if (!selectedSourceFolder || !selectedRemote) {
-            alert('Please select source folder and rclone remote');
-            return;
-        }
-
-        const newPair: SyncPair = {
-            source: selectedSourceFolder,
-            dest: `${selectedRemote}:${targetPath}`
+        const buildPath = (type: string, serverId: string, path: string, remote: string) => {
+            if (type === 'local') return path;
+            if (type === 'ssh') {
+                const srv = sshServers.find(s => s.id === serverId);
+                const host = srv?.alias || srv?.host || serverId;
+                return `${host}:${path}`;
+            }
+            if (type === 'rclone') return `${remote}:${path}`;
+            return path;
         };
+
+        const source = buildPath(srcType, srcServerId, srcPath, srcRcloneRemote);
+        const dest = buildPath(destType, destServerId, destPath, destRcloneRemote);
+
+        if (!source || !dest) return alert("Source and Destination required");
 
         setWizardLoading(true);
         try {
-            await createSyncPair(newPair);
-            const p = await fetchSyncList();
-            setPairs(p);
+            await createSyncPair({ source, dest });
+            alert("Sync Pair Created! Don't forget to Generate Batch.");
+            await loadData();
             setShowWizard(false);
-            alert(`✅ Sync pair created!\n${newPair.source} → ${newPair.dest}`);
         } catch (e: any) {
-            if (e.response?.status === 409) {
-                alert('This sync pair already exists!');
-            } else {
-                alert(`Failed to create: ${e.message}`);
-            }
+            alert(`Failed to create pair: ${e.message}`);
         } finally {
             setWizardLoading(false);
         }
@@ -984,54 +1038,54 @@ const BatchGenerator: React.FC<BatchGeneratorProps> = ({ activeSection }) => {
                                 </button>
                             </div>
                         ) : (
-                            sortedUnifiedPairs.map((p) => (
-                                <div
-                                    key={p.index}
-                                    className={`flex items-center gap-3 p-3 rounded-lg border transition ${selectedPairs.has(p.index)
-                                        ? 'bg-indigo-900/20 border-indigo-500/50'
-                                        : 'bg-zinc-950 border-zinc-800 hover:border-zinc-700'
-                                        }`}
-                                >
+                            sortedUnifiedPairs.map((p) => {
+                                const isSelected = selectedPairs.has(p.index);
+                                return (
                                     <div
-                                        onClick={() => togglePair(p.index)}
-                                        className={`w-5 h-5 rounded border-2 flex items-center justify-center transition cursor-pointer flex-shrink-0 ${selectedPairs.has(p.index) ? 'bg-indigo-500 border-indigo-500' : 'border-zinc-600'
-                                            }`}>
-                                        {selectedPairs.has(p.index) && <div className="w-2 h-2 bg-white rounded-sm" />}
-                                    </div>
-                                    <div
-                                        onClick={() => togglePair(p.index)}
-                                        className="flex-1 grid grid-cols-3 gap-2 text-sm font-mono cursor-pointer min-w-0"
+                                        key={p.index}
+                                        onClick={(e) => handlePairClick(p.index, e, sortedUnifiedPairs.map(sp => sp.index))}
+                                        className={`flex items-center gap-3 p-2 rounded border transition cursor-pointer group ${isSelected
+                                            ? 'bg-indigo-900/20 border-indigo-500/50'
+                                            : 'bg-zinc-950 border-zinc-800 hover:border-zinc-700'
+                                            }`}
                                     >
-                                        <div className="text-orange-300 truncate" title={p.source}>
-                                            {p.source}
+                                        <div
+                                            className={`w-4 h-4 rounded border flex items-center justify-center shrink-0 transition-colors ${isSelected ? 'bg-indigo-500 border-indigo-500' : 'border-zinc-600 bg-zinc-800'
+                                                }`}>
+                                            {isSelected && <Check size={10} className="text-white" />}
                                         </div>
-                                        <div className="text-blue-300 truncate" title={p.dest}>
-                                            {p.dest}
+                                        <div className="flex-1 grid grid-cols-3 gap-2 text-sm font-mono min-w-0">
+                                            <div className="text-orange-300 truncate" title={p.source}>
+                                                {p.source}
+                                            </div>
+                                            <div className="text-blue-300 truncate" title={p.dest}>
+                                                {p.dest}
+                                            </div>
+                                            <div className="flex items-center gap-2">
+                                                {p.batch.exists ? (
+                                                    <>
+                                                        <span className="text-xs bg-emerald-500/20 text-emerald-400 px-1.5 py-0.5 rounded">
+                                                            {p.batch.user_count || 0} users
+                                                        </span>
+                                                        <span className="text-xs text-zinc-500 truncate" title={p.batch.filename}>
+                                                            {p.batch.filename}
+                                                        </span>
+                                                    </>
+                                                ) : (
+                                                    <span className="text-xs text-amber-500/80 italic">No batch file</span>
+                                                )}
+                                            </div>
                                         </div>
-                                        <div className="flex items-center gap-2">
-                                            {p.batch.exists ? (
-                                                <>
-                                                    <span className="text-xs bg-emerald-500/20 text-emerald-400 px-1.5 py-0.5 rounded">
-                                                        {p.batch.user_count || 0} users
-                                                    </span>
-                                                    <span className="text-xs text-zinc-500 truncate" title={p.batch.filename}>
-                                                        {p.batch.filename}
-                                                    </span>
-                                                </>
-                                            ) : (
-                                                <span className="text-xs text-amber-500/80 italic">No batch file</span>
-                                            )}
-                                        </div>
+                                        <button
+                                            onClick={(e) => { e.stopPropagation(); handleDeleteSyncPair(p.index); }}
+                                            className="text-zinc-600 hover:text-red-400 opacity-0 group-hover:opacity-100 transition p-1 flex-shrink-0"
+                                            title="Delete sync pair"
+                                        >
+                                            <Trash2 size={14} />
+                                        </button>
                                     </div>
-                                    <button
-                                        onClick={(e) => { e.stopPropagation(); handleDeleteSyncPair(p.index); }}
-                                        className="text-zinc-600 hover:text-red-400 transition p-1 flex-shrink-0"
-                                        title="Delete sync pair"
-                                    >
-                                        <Trash2 size={14} />
-                                    </button>
-                                </div>
-                            ))
+                                )
+                            })
                         )}
                     </div>
 
@@ -1791,239 +1845,163 @@ const BatchGenerator: React.FC<BatchGeneratorProps> = ({ activeSection }) => {
 
             {/* Wizard Placeholder - Commented out for debugging 
 {/* Sync Pair Wizard Modal */}
+            {/* Flexible Sync Pair Wizard Modal */}
             {showWizard && (
-                <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 overflow-y-auto p-4">
-                    <div className="bg-zinc-900 border border-zinc-700 rounded-xl p-6 w-full max-w-2xl shadow-2xl my-8">
-                        <div className="flex items-center justify-between mb-4">
-                            <h3 className="text-lg font-bold text-white flex items-center gap-2">
-                                <Plus size={20} className="text-emerald-400" />
-                                New Sync Pair - Step {wizardStep} of 4
+                <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50 overflow-y-auto p-4 backdrop-blur-sm">
+                    <div className="bg-zinc-900 border border-zinc-700 rounded-xl p-6 w-full max-w-4xl shadow-2xl my-8">
+                        <div className="flex items-center justify-between mb-6">
+                            <h3 className="text-xl font-bold text-white flex items-center gap-2">
+                                <Shuffle size={24} className="text-emerald-400" />
+                                Create New Sync Pair
                             </h3>
-                            <button
-                                onClick={() => setShowWizard(false)}
-                                className="text-zinc-400 hover:text-white"
-                            >
-                                <X size={20} />
+                            <button onClick={() => setShowWizard(false)} className="text-zinc-400 hover:text-white">
+                                <X size={24} />
                             </button>
                         </div>
 
-                        {/* Step Indicator */}
-                        <div className="flex gap-2 mb-6">
-                            {[1, 2, 3, 4].map(step => (
-                                <div
-                                    key={step}
-                                    className={`flex-1 h-2 rounded ${step === wizardStep ? 'bg-emerald-500' : step < wizardStep ? 'bg-emerald-700' : 'bg-zinc-700'}`}
-                                />
-                            ))}
+                        {/* Wizard Content */}
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-6">
+
+                            {/* Source Col */}
+                            <div className="bg-zinc-800/30 p-4 rounded-lg border border-zinc-700/50">
+                                <h4 className="text-amber-400 font-bold mb-4 flex items-center gap-2">
+                                    <Folder size={18} /> Source
+                                    {srcVerified && <Check size={16} className="text-emerald-500" />}
+                                </h4>
+                                <div className="space-y-4">
+                                    <div>
+                                        <label className="block text-xs text-zinc-500 mb-1">Type</label>
+                                        <select value={srcType} onChange={e => setSrcType(e.target.value as any)}
+                                            className="w-full bg-zinc-800 border border-zinc-600 rounded px-2 py-1.5 text-sm text-white font-medium">
+                                            <option value="local">Local Folder</option>
+                                            <option value="ssh">SSH Server</option>
+                                            <option value="rclone">Rclone Remote</option>
+                                        </select>
+                                    </div>
+
+                                    {srcType !== 'local' && (
+                                        <div>
+                                            <label className="block text-xs text-zinc-500 mb-1">Server</label>
+                                            <select value={srcServerId} onChange={e => { setSrcServerId(e.target.value); if (srcType === 'rclone') loadRcloneRemotesList(e.target.value); }}
+                                                className="w-full bg-zinc-800 border border-zinc-600 rounded px-2 py-1.5 text-sm text-white">
+                                                <option value="local">Local Machine</option>
+                                                {sshServers.map(s => <option key={s.id} value={s.id}>{s.name} ({s.host})</option>)}
+                                            </select>
+                                        </div>
+                                    )}
+
+                                    {srcType === 'rclone' && (
+                                        <div>
+                                            <label className="block text-xs text-zinc-500 mb-1">Rclone Remote</label>
+                                            <div className="flex gap-2">
+                                                <input list="srcRemotes" type="text" value={srcRcloneRemote} onChange={e => setSrcRcloneRemote(e.target.value)}
+                                                    className="w-full bg-zinc-800 border border-zinc-600 rounded px-2 py-1.5 text-sm text-white font-mono" placeholder="remote:" />
+                                                <datalist id="srcRemotes">
+                                                    {rcloneRemotesList.map(r => <option key={r} value={r} />)}
+                                                </datalist>
+                                                <button onClick={() => loadRcloneRemotesList(srcServerId)} className="p-1.5 bg-zinc-700 rounded hover:bg-zinc-600 text-zinc-300"><Shuffle size={14} /></button>
+                                            </div>
+                                        </div>
+                                    )}
+
+                                    <div>
+                                        <label className="block text-xs text-zinc-500 mb-1">Path</label>
+                                        <div className="flex gap-2">
+                                            <input type="text" value={srcPath} onChange={e => setSrcPath(e.target.value)}
+                                                className="w-full bg-zinc-800 border border-zinc-600 rounded px-2 py-1.5 text-sm text-white font-mono" placeholder="/path/to/source" />
+                                            <button onClick={() => { setShowBrowse('source'); setBrowsePath(srcPath || '/'); }}
+                                                className="px-3 py-1.5 bg-zinc-700 hover:bg-zinc-600 rounded text-zinc-300 text-sm flex items-center gap-1">
+                                                <FolderOpen size={14} />
+                                            </button>
+                                        </div>
+                                    </div>
+
+                                    <button onClick={() => handleVerify('source')} disabled={wizardLoading}
+                                        className={`w-full py-2 rounded text-sm transition font-medium ${srcVerified ? 'bg-emerald-600/20 text-emerald-400 border border-emerald-600/50' : 'bg-zinc-700 hover:bg-zinc-600 text-zinc-300'}`}>
+                                        {srcVerified ? '✓ Verified Access' : 'Test Access'}
+                                    </button>
+                                </div>
+                            </div>
+
+                            {/* Destination Col */}
+                            <div className="bg-zinc-800/30 p-4 rounded-lg border border-zinc-700/50">
+                                <h4 className="text-purple-400 font-bold mb-4 flex items-center gap-2">
+                                    <HardDrive size={18} /> Destination
+                                    {destVerified && <Check size={16} className="text-emerald-500" />}
+                                </h4>
+                                <div className="space-y-4">
+                                    <div>
+                                        <label className="block text-xs text-zinc-500 mb-1">Type</label>
+                                        <select value={destType} onChange={e => setDestType(e.target.value as any)}
+                                            className="w-full bg-zinc-800 border border-zinc-600 rounded px-2 py-1.5 text-sm text-white font-medium">
+                                            <option value="local">Local Folder</option>
+                                            <option value="ssh">SSH Server</option>
+                                            <option value="rclone">Rclone Remote</option>
+                                        </select>
+                                    </div>
+
+                                    {destType !== 'local' && (
+                                        <div>
+                                            <label className="block text-xs text-zinc-500 mb-1">Server</label>
+                                            <select value={destServerId} onChange={e => { setDestServerId(e.target.value); if (destType === 'rclone') loadRcloneRemotesList(e.target.value); }}
+                                                className="w-full bg-zinc-800 border border-zinc-600 rounded px-2 py-1.5 text-sm text-white">
+                                                <option value="local">Local Machine</option>
+                                                {sshServers.map(s => <option key={s.id} value={s.id}>{s.name} ({s.host})</option>)}
+                                            </select>
+                                        </div>
+                                    )}
+
+                                    {destType === 'rclone' && (
+                                        <div>
+                                            <label className="block text-xs text-zinc-500 mb-1">Rclone Remote</label>
+                                            <div className="flex gap-2">
+                                                <input list="destRemotes" type="text" value={destRcloneRemote} onChange={e => setDestRcloneRemote(e.target.value)}
+                                                    className="w-full bg-zinc-800 border border-zinc-600 rounded px-2 py-1.5 text-sm text-white font-mono" placeholder="remote:" />
+                                                <datalist id="destRemotes">
+                                                    {rcloneRemotesList.map(r => <option key={r} value={r} />)}
+                                                </datalist>
+                                                <button onClick={() => loadRcloneRemotesList(destServerId)} className="p-1.5 bg-zinc-700 rounded hover:bg-zinc-600 text-zinc-300"><Shuffle size={14} /></button>
+                                            </div>
+                                        </div>
+                                    )}
+
+                                    <div>
+                                        <label className="block text-xs text-zinc-500 mb-1">Path</label>
+                                        <div className="flex gap-2">
+                                            <input type="text" value={destPath} onChange={e => setDestPath(e.target.value)}
+                                                className="w-full bg-zinc-800 border border-zinc-600 rounded px-2 py-1.5 text-sm text-white font-mono" placeholder="/path/to/dest" />
+                                            <button onClick={() => { setShowBrowse('dest'); setBrowsePath(destPath || '/'); }}
+                                                className="px-3 py-1.5 bg-zinc-700 hover:bg-zinc-600 rounded text-zinc-300 text-sm flex items-center gap-1">
+                                                <FolderOpen size={14} />
+                                            </button>
+                                        </div>
+                                    </div>
+
+                                    <button onClick={() => handleVerify('dest')} disabled={wizardLoading}
+                                        className={`w-full py-2 rounded text-sm transition font-medium ${destVerified ? 'bg-emerald-600/20 text-emerald-400 border border-emerald-600/50' : 'bg-zinc-700 hover:bg-zinc-600 text-zinc-300'}`}>
+                                        {destVerified ? '✓ Verified Access' : 'Test Access'}
+                                    </button>
+                                </div>
+                            </div>
+
                         </div>
 
-                        {/* Step 1: Select Server */}
-                        {wizardStep === 1 && (
-                            <div className="space-y-4">
-                                <h4 className="text-sm font-medium text-zinc-300 flex items-center gap-2">
-                                    <Server size={16} className="text-cyan-400" /> Select Remote Server
-                                </h4>
-                                {servers.length === 0 ? (
-                                    <div className="text-center py-8 text-zinc-500">
-                                        No SSH servers configured. Add them in Remote Servers page.
-                                    </div>
-                                ) : (
-                                    <div className="grid gap-2 max-h-64 overflow-y-auto">
-                                        {servers.map(srv => (
-                                            <button
-                                                key={srv.id}
-                                                onClick={() => setSelectedServer(srv.id)}
-                                                className={`flex items-center gap-3 p-3 rounded-lg border text-left transition ${selectedServer === srv.id
-                                                    ? 'bg-cyan-900/30 border-cyan-500'
-                                                    : 'border-zinc-700 hover:border-zinc-600'
-                                                    }`}
-                                            >
-                                                <Server size={16} className={selectedServer === srv.id ? 'text-cyan-400' : 'text-zinc-500'} />
-                                                <div>
-                                                    <div className="text-sm font-medium text-zinc-200">{srv.name}</div>
-                                                    <div className="text-xs text-zinc-500">{srv.alias || srv.host}</div>
-                                                </div>
-                                                {selectedServer === srv.id && <Check size={16} className="text-cyan-400 ml-auto" />}
-                                            </button>
-                                        ))}
-                                    </div>
-                                )}
+                        {/* Footer / Status */}
+                        {wizardMsg && (
+                            <div className={`mb-6 p-3 rounded border text-sm ${wizardMsg.includes('Failed') || wizardMsg.includes('Error') ? 'bg-red-900/20 border-red-800 text-red-400' : 'bg-emerald-900/20 border-emerald-800 text-emerald-400'}`}>
+                                {wizardMsg}
                             </div>
                         )}
 
-                        {/* Step 2: Browse Folders */}
-                        {wizardStep === 2 && (
-                            <div className="space-y-4">
-                                <h4 className="text-sm font-medium text-zinc-300 flex items-center gap-2">
-                                    <Folder size={16} className="text-amber-400" /> Select Source Folder
-                                </h4>
-                                <div className="flex gap-2 items-center">
-                                    <input
-                                        type="text"
-                                        value={browseBasePath}
-                                        onChange={e => setBrowseBasePath(e.target.value)}
-                                        placeholder="Base path (e.g. /zmedia)"
-                                        className="flex-1 bg-zinc-800 border border-zinc-700 rounded px-3 py-2 text-sm"
-                                    />
-                                    <select
-                                        value={browseDepth}
-                                        onChange={e => setBrowseDepth(parseInt(e.target.value))}
-                                        className="bg-zinc-800 border border-zinc-700 rounded px-3 py-2 text-sm"
-                                    >
-                                        <option value={1}>1 Level</option>
-                                        <option value={2}>2 Levels</option>
-                                        <option value={3}>3 Levels</option>
-                                    </select>
-                                    <button
-                                        onClick={loadFolders}
-                                        disabled={wizardLoading}
-                                        className="px-4 py-2 bg-zinc-700 hover:bg-zinc-600 rounded text-sm"
-                                    >
-                                        {wizardLoading ? 'Loading...' : 'Browse'}
-                                    </button>
-                                </div>
-                                <div className="max-h-64 overflow-y-auto bg-zinc-800/50 rounded-lg p-2">
-                                    {folderTree.length === 0 ? (
-                                        <div className="text-center py-4 text-zinc-500 text-sm">
-                                            Enter a path and click Browse to list folders
-                                        </div>
-                                    ) : (
-                                        folderTree.map((f, i) => (
-                                            <button
-                                                key={i}
-                                                onClick={() => setSelectedSourceFolder(f.path)}
-                                                className={`flex items-center gap-2 w-full text-left px-3 py-2 rounded text-sm transition ${selectedSourceFolder === f.path
-                                                    ? 'bg-amber-600/30 text-amber-300'
-                                                    : 'hover:bg-zinc-700 text-zinc-300'
-                                                    }`}
-                                                style={{ paddingLeft: `${12 + f.depth * 16}px` }}
-                                            >
-                                                <Folder size={14} className={selectedSourceFolder === f.path ? 'text-amber-400' : 'text-zinc-500'} />
-                                                {f.name}
-                                                {selectedSourceFolder === f.path && <Check size={14} className="ml-auto text-amber-400" />}
-                                            </button>
-                                        ))
-                                    )}
-                                </div>
-                                {selectedSourceFolder && (
-                                    <div className="text-sm text-zinc-400">
-                                        Selected: <span className="text-amber-300 font-mono">{selectedSourceFolder}</span>
-                                    </div>
-                                )}
-                            </div>
-                        )}
-
-                        {/* Step 3: Select Rclone Remote */}
-                        {wizardStep === 3 && (
-                            <div className="space-y-4">
-                                <h4 className="text-sm font-medium text-zinc-300 flex items-center gap-2">
-                                    <HardDrive size={16} className="text-purple-400" /> Select Rclone Remote
-                                </h4>
-                                <button
-                                    onClick={loadRemotes}
-                                    disabled={wizardLoading}
-                                    className="px-4 py-2 bg-zinc-700 hover:bg-zinc-600 rounded text-sm"
-                                >
-                                    {wizardLoading ? 'Loading...' : 'Load Remotes from Server'}
-                                </button>
-                                <div className="max-h-64 overflow-y-auto bg-zinc-800/50 rounded-lg p-2">
-                                    {rcloneRemotes.length === 0 ? (
-                                        <div className="text-center py-4 text-zinc-500 text-sm">
-                                            Click "Load Remotes" to fetch rclone configuration
-                                        </div>
-                                    ) : (
-                                        rcloneRemotes.map((r, i) => (
-                                            <button
-                                                key={i}
-                                                onClick={() => setSelectedRemote(r.name)}
-                                                className={`flex items-center gap-2 w-full text-left px-3 py-2 rounded text-sm transition ${selectedRemote === r.name
-                                                    ? 'bg-purple-600/30 text-purple-300'
-                                                    : 'hover:bg-zinc-700 text-zinc-300'
-                                                    }`}
-                                            >
-                                                <HardDrive size={14} className={selectedRemote === r.name ? 'text-purple-400' : 'text-zinc-500'} />
-                                                <span className="font-mono">{r.name}</span>
-                                                <span className="text-xs text-zinc-500 ml-2">({r.type})</span>
-                                                {selectedRemote === r.name && <Check size={14} className="ml-auto text-purple-400" />}
-                                            </button>
-                                        ))
-                                    )}
-                                </div>
-                            </div>
-                        )}
-
-                        {/* Step 4: Target Path & Review */}
-                        {wizardStep === 4 && (
-                            <div className="space-y-4">
-                                <h4 className="text-sm font-medium text-zinc-300 flex items-center gap-2">
-                                    <ChevronRight size={16} className="text-blue-400" /> Target Path & Review
-                                </h4>
-                                <div>
-                                    <label className="block text-xs text-zinc-500 mb-1">Target Path in Remote (optional)</label>
-                                    <input
-                                        type="text"
-                                        value={targetPath}
-                                        onChange={e => setTargetPath(e.target.value)}
-                                        placeholder="e.g. Backups/Media"
-                                        className="w-full bg-zinc-800 border border-zinc-700 rounded px-3 py-2 text-sm font-mono"
-                                    />
-                                </div>
-
-                                <div className="bg-zinc-800/50 p-4 rounded-lg border border-zinc-700 mt-4">
-                                    <h5 className="text-xs font-bold text-zinc-400 uppercase mb-3">Preview</h5>
-                                    <div className="space-y-2 text-sm font-mono">
-                                        <div className="flex items-center gap-2">
-                                            <span className="text-zinc-500">Source:</span>
-                                            <span className="text-amber-300">{selectedSourceFolder || '(not selected)'}</span>
-                                        </div>
-                                        <div className="flex items-center gap-2">
-                                            <span className="text-zinc-500">Destination:</span>
-                                            <span className="text-blue-300">{selectedRemote}:{targetPath}</span>
-                                        </div>
-                                    </div>
-                                </div>
-                            </div>
-                        )}
-
-                        {/* Navigation */}
-                        <div className="flex justify-between mt-6">
-                            <button
-                                onClick={() => setWizardStep(Math.max(1, wizardStep - 1))}
-                                disabled={wizardStep === 1}
-                                className="px-4 py-2 bg-zinc-800 hover:bg-zinc-700 disabled:opacity-50 text-zinc-300 rounded-lg text-sm transition"
-                            >
-                                Back
+                        <div className="flex justify-end gap-3 pt-6 border-t border-zinc-800">
+                            <button onClick={() => setShowWizard(false)} className="px-5 py-2.5 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 rounded-lg text-sm font-medium transition">
+                                Cancel
                             </button>
-                            <div className="flex gap-2">
-                                <button
-                                    onClick={() => setShowWizard(false)}
-                                    className="px-4 py-2 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 rounded-lg text-sm transition"
-                                >
-                                    Cancel
-                                </button>
-                                {wizardStep < 4 ? (
-                                    <button
-                                        onClick={() => setWizardStep(wizardStep + 1)}
-                                        disabled={
-                                            (wizardStep === 1 && !selectedServer) ||
-                                            (wizardStep === 2 && !selectedSourceFolder) ||
-                                            (wizardStep === 3 && !selectedRemote)
-                                        }
-                                        className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white rounded-lg text-sm font-medium transition"
-                                    >
-                                        Next
-                                    </button>
-                                ) : (
-                                    <button
-                                        onClick={handleCreateSyncPair}
-                                        disabled={wizardLoading || !selectedSourceFolder || !selectedRemote}
-                                        className="px-4 py-2 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white rounded-lg text-sm font-medium transition flex items-center gap-2"
-                                    >
-                                        <Check size={16} />
-                                        {wizardLoading ? 'Creating...' : 'Create Sync Pair'}
-                                    </button>
-                                )}
-                            </div>
+                            <button onClick={handleCreateSyncPair} disabled={wizardLoading}
+                                className="px-5 py-2.5 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white rounded-lg text-sm font-bold transition flex items-center gap-2">
+                                <Plus size={18} />
+                                Create Sync Pair
+                            </button>
                         </div>
                     </div>
                 </div>
@@ -2164,6 +2142,22 @@ const BatchGenerator: React.FC<BatchGeneratorProps> = ({ activeSection }) => {
                         </div>
                     </div>
                 </div>
+            )}
+
+            {showBrowse && (
+                <FileBrowserModal
+                    isOpen={true}
+                    onClose={() => setShowBrowse(null)}
+                    onSelect={(path) => {
+                        if (showBrowse === 'source') setSrcPath(path);
+                        else setDestPath(path);
+                        setShowBrowse(null);
+                    }}
+                    type={showBrowse === 'source' ? srcType : destType}
+                    serverId={showBrowse === 'source' ? srcServerId : destServerId}
+                    rcloneRemote={showBrowse === 'source' ? srcRcloneRemote : destRcloneRemote}
+                    initialPath={showBrowse === 'source' ? srcPath : destPath}
+                />
             )}
         </div>
     );

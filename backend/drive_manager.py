@@ -547,3 +547,22 @@ async def delete_drive_unified(
             return {"status": "error", "message": "Google API module failed to import"}
             
     return {"status": "error", "message": "Delete not supported for method: " + method}
+
+
+async def get_drive_details_unified(
+    method: str,
+    drive_id: str,
+    service_account_file: Optional[str] = None,
+    impersonate_email: Optional[str] = None
+) -> Dict[str, Any]:
+    """Get detailed information about a Shared Drive."""
+    if method == "google_api":
+         if not service_account_file or not impersonate_email:
+            return {"status": "error", "message": "Auth required"}
+         try:
+            from backend.google_drive_api import get_drive_details_api
+            return await get_drive_details_api(service_account_file, impersonate_email, drive_id)
+         except ImportError:
+            return {"status": "error", "message": "Import error"}
+    
+    return {"status": "error", "message": "Not supported for method: " + method}

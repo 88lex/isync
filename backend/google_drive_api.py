@@ -426,3 +426,45 @@ async def delete_shared_drive_api(
         return {"status": "ok", "id": drive_id}
     except Exception as e:
         return {"status": "error", "message": str(e)}
+
+
+async def get_drive_details_api(
+    service_account_file: str,
+    impersonate_email: str,
+    drive_id: str
+) -> Dict[str, Any]:
+    """Get detailed information about a Shared Drive."""
+    try:
+        service = get_drive_service(service_account_file, impersonate_email)
+
+        # Get Drive Metadata
+        drive = service.drives().get(
+            driveId=drive_id,
+            fields="id, name, createdTime, orgUnitId, restrictions"
+        ).execute()
+
+        # Get Permissions
+        permissions_res = service.permissions().list(
+            fileId=drive_id,
+            supportsAllDrives=True,
+            fields="permissions(id, emailAddress, role, type, displayName)",
+            pageSize=100
+        ).execute()
+
+        permissions = []
+        for p in permissions_res.get('permissions', []):
+             permissions.append({
+                 "email": p.get('emailAddress'),
+                 "role": p.get('role'),
+                 "type": p.get('type'),
+                 "name": p.get('displayName')
+             })
+
+        return {
+            "status": "ok",
+            "drive": drive,
+            "permissions": permissions
+        }
+
+    except Exception as e:
+        return {"status": "error", "message": str(e)}

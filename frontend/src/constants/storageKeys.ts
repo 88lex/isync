@@ -20,4 +20,17 @@ export const SESSION_KEYS = {
     SELECTED_DOMAINS: 'isync_sel_domains',
     USERS: 'isync_users',
     SELECTED_USERS: 'isync_sel_users',
+    USER_FILTER: 'isync_user_filter',
+    USER_COL_FILTERS: 'isync_user_col_filters',
+
+    // Drive Manager
+    DRIVE_MANAGER_QUERY: 'isync_dm_query',
+    DRIVE_MANAGER_LIMIT: 'isync_dm_limit',
+
+    // Rclone Manager
+    RCLONE_SEARCH_FILTER: 'isync_rclone_search',
+    RCLONE_STATUS_FILTER: 'isync_rclone_status',
+
+    // Remote Sync
+    REMOTE_SYNC_FILTERS: 'isync_remote_sync_filters',
 } as const;

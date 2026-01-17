@@ -69,10 +69,15 @@ const UserManagement = () => {
         const saved = sessionStorage.getItem(SESSION_KEYS.SELECTED_USERS);
         return saved ? new Set(JSON.parse(saved)) : new Set();
     });
+    const [lastClickedEmail, setLastClickedEmail] = useState<string | null>(null);
 
     const [loadingUsers, setLoadingUsers] = useState(false);
-    const [filter, setFilter] = useState("");
+    const [filter, setFilter] = useState(() => sessionStorage.getItem(SESSION_KEYS.USER_FILTER) || "");
     const [opStatus, setOpStatus] = useState<string | null>(null);
+
+    useEffect(() => {
+        sessionStorage.setItem(SESSION_KEYS.USER_FILTER, filter);
+    }, [filter]);
 
     // Persistence Hooks
     useEffect(() => {
@@ -267,7 +272,24 @@ const UserManagement = () => {
     };
 
     // Column Filters State
-    const [columnFilters, setColumnFilters] = useState<Record<string, Set<string>>>({});
+    const [columnFilters, setColumnFilters] = useState<Record<string, Set<string>>>(() => {
+        try {
+            const saved = sessionStorage.getItem(SESSION_KEYS.USER_COL_FILTERS);
+            if (saved) {
+                const parsed = JSON.parse(saved);
+                const revived: Record<string, Set<string>> = {};
+                for (const key in parsed) revived[key] = new Set(parsed[key]);
+                return revived;
+            }
+        } catch (e) { }
+        return {};
+    });
+
+    useEffect(() => {
+        const toSave: Record<string, string[]> = {};
+        for (const key in columnFilters) toSave[key] = Array.from(columnFilters[key]);
+        sessionStorage.setItem(SESSION_KEYS.USER_COL_FILTERS, JSON.stringify(toSave));
+    }, [columnFilters]);
 
     const toggleColumnFilter = (column: string, value: string) => {
         const current = columnFilters[column] ? new Set<string>(columnFilters[column]) : new Set<string>();
@@ -481,33 +503,35 @@ const UserManagement = () => {
                     })()}
                 </div>
 
-                {/* Table */}
-                <div className="border border-zinc-800 rounded-lg overflow-hidden bg-zinc-900">
+                {/* Table Logic with Shift-Click */}
+                <div className="border border-zinc-700/50 rounded-lg overflow-hidden bg-zinc-900/50">
                     <div className="overflow-x-auto max-h-[600px]">
                         <table className="w-full text-left text-sm">
-                            <thead className="bg-zinc-950 text-zinc-500 font-medium sticky top-0 z-10">
+                            <thead className="bg-zinc-950/80 backdrop-blur text-zinc-400 font-semibold text-xs uppercase tracking-wider sticky top-0 z-10">
                                 <tr>
-                                    <th className="p-4 w-10">
-                                        <input
-                                            type="checkbox"
-                                            className="rounded border-zinc-700 bg-zinc-800"
-                                            checked={filteredUsers.length > 0 && selectedUsers.size === filteredUsers.length}
-                                            onChange={() => selectAllUsers(filteredUsers)}
-                                        />
+                                    <th className="p-3 w-10">
+                                        <div className="flex items-center justify-center">
+                                            <input
+                                                type="checkbox"
+                                                className="w-4 h-4 rounded border-zinc-600 bg-zinc-800 checked:bg-indigo-600 focus:ring-indigo-600 transition"
+                                                checked={filteredUsers.length > 0 && selectedUsers.size === filteredUsers.length}
+                                                onChange={() => selectAllUsers(filteredUsers)}
+                                            />
+                                        </div>
                                     </th>
-                                    <th className="p-4 cursor-pointer hover:bg-zinc-900" onClick={() => handleSort('email')}>
-                                        <div className="flex items-center">
+                                    <th className="p-3 cursor-pointer hover:bg-zinc-800 transition-colors" onClick={() => handleSort('email')}>
+                                        <div className="flex items-center gap-1">
                                             User
                                             <SortIcon column="email" />
                                         </div>
                                     </th>
-                                    <th className="p-4 cursor-pointer hover:bg-zinc-900" onClick={() => handleSort('status')}>
-                                        <div className="flex items-center">
+                                    <th className="p-3 cursor-pointer hover:bg-zinc-800 transition-colors" onClick={() => handleSort('status')}>
+                                        <div className="flex items-center gap-1">
                                             Status
                                             <SortIcon column="status" />
                                             <ColumnFilter
                                                 column="status"
-                                                title="Filter Status"
+                                                title="Status"
                                                 options={getUniqueValues('status')}
                                                 selected={columnFilters['status']}
                                                 onToggle={toggleColumnFilter}
@@ -515,13 +539,13 @@ const UserManagement = () => {
                                             />
                                         </div>
                                     </th>
-                                    <th className="p-4 cursor-pointer hover:bg-zinc-900" onClick={() => handleSort('domain')}>
-                                        <div className="flex items-center">
+                                    <th className="p-3 cursor-pointer hover:bg-zinc-800 transition-colors" onClick={() => handleSort('domain')}>
+                                        <div className="flex items-center gap-1">
                                             Domain
                                             <SortIcon column="domain" />
                                             <ColumnFilter
                                                 column="domain"
-                                                title="Filter Domain"
+                                                title="Domain"
                                                 options={getUniqueValues('domain')}
                                                 selected={columnFilters['domain']}
                                                 onToggle={toggleColumnFilter}
@@ -529,13 +553,13 @@ const UserManagement = () => {
                                             />
                                         </div>
                                     </th>
-                                    <th className="p-4 cursor-pointer hover:bg-zinc-900" onClick={() => handleSort('group')}>
-                                        <div className="flex items-center">
+                                    <th className="p-3 cursor-pointer hover:bg-zinc-800 transition-colors" onClick={() => handleSort('group')}>
+                                        <div className="flex items-center gap-1">
                                             Group
                                             <SortIcon column="group" />
                                             <ColumnFilter
                                                 column="group"
-                                                title="Filter Group"
+                                                title="Group"
                                                 options={getUniqueValues('group')}
                                                 selected={columnFilters['group']}
                                                 onToggle={toggleColumnFilter}
@@ -543,13 +567,13 @@ const UserManagement = () => {
                                             />
                                         </div>
                                     </th>
-                                    <th className="p-4 cursor-pointer hover:bg-zinc-900" onClick={() => handleSort('json')}>
-                                        <div className="flex items-center">
+                                    <th className="p-3 cursor-pointer hover:bg-zinc-800 transition-colors" onClick={() => handleSort('json')}>
+                                        <div className="flex items-center gap-1">
                                             JSON Key
                                             <SortIcon column="json" />
                                             <ColumnFilter
                                                 column="json"
-                                                title="Filter JSON Key"
+                                                title="JSON Key"
                                                 options={getUniqueValues('json')}
                                                 selected={columnFilters['json']}
                                                 onToggle={toggleColumnFilter}
@@ -557,70 +581,108 @@ const UserManagement = () => {
                                             />
                                         </div>
                                     </th>
-                                    <th className="p-4">ID</th>
-                                    <th className="p-4 text-right">Actions</th>
+                                    <th className="p-3">ID</th>
+                                    <th className="p-3 text-right">Actions</th>
                                 </tr>
                             </thead>
                             <tbody className="divide-y divide-zinc-800/50">
                                 {sortedFilteredUsers.length === 0 ? (
                                     <tr>
-                                        <td colSpan={8} className="p-8 text-center text-zinc-600 italic">
+                                        <td colSpan={8} className="p-8 text-center text-zinc-500 italic text-sm">
                                             {loadingUsers ? "Loading users..." : "No users found. Select domains and click List Users."}
                                         </td>
                                     </tr>
                                 ) : (
                                     sortedFilteredUsers.map((u, i) => {
                                         const isProtected = config.protected_users?.includes(u.email);
+                                        const isSelected = selectedUsers.has(u.email);
+
                                         return (
-                                            <tr key={i} className={`group hover:bg-zinc-800/50 transition ${selectedUsers.has(u.email) ? 'bg-indigo-900/10' : ''}`}>
-                                                <td className="p-4">
-                                                    <input
-                                                        type="checkbox"
-                                                        className="rounded border-zinc-700 bg-zinc-800"
-                                                        checked={selectedUsers.has(u.email)}
-                                                        onChange={() => toggleUser(u.email)}
-                                                    />
-                                                </td>
-                                                <td className="p-4">
-                                                    <div
-                                                        className="font-medium text-zinc-200 flex items-center gap-2 cursor-pointer hover:text-white transition"
-                                                        onClick={() => copyText(u.name?.fullName || u.email.split('@')[0])}
-                                                        title="Click to copy name"
-                                                    >
-                                                        {u.name?.fullName || u.email.split('@')[0]}
-                                                        {isProtected && (
-                                                            <span className="bg-purple-900/30 border border-purple-500/30 text-purple-400 text-[10px] px-1.5 py-0.5 rounded flex items-center gap-1" title="Protected User">
-                                                                <Shield size={10} /> Protected
-                                                            </span>
-                                                        )}
+                                            <tr
+                                                key={u.email} // Use email as key for safer Shift-click logic
+                                                onClick={(e) => {
+                                                    // Handle Row Click Selection
+                                                    if (e.target instanceof HTMLInputElement || e.target instanceof HTMLButtonElement || (e.target as HTMLElement).closest('button')) return;
+
+                                                    if (e.shiftKey && lastClickedEmail) {
+                                                        const lastIdx = sortedFilteredUsers.findIndex(user => user.email === lastClickedEmail);
+                                                        const currIdx = i; // Use current index 'i' directly
+                                                        if (lastIdx !== -1) {
+                                                            const start = Math.min(lastIdx, currIdx);
+                                                            const end = Math.max(lastIdx, currIdx);
+                                                            const next = new Set(selectedUsers);
+                                                            // Logic: If the clicked item is not selected, we select the range.
+                                                            // If it is selected, we could deselect, but standard behavior is usually "Add range to selection" or "Set selection to range"
+                                                            // Let's implement "Add range to selection"
+                                                            for (let k = start; k <= end; k++) {
+                                                                next.add(sortedFilteredUsers[k].email);
+                                                            }
+                                                            setSelectedUsers(next);
+                                                        }
+                                                    } else {
+                                                        // Toggle single
+                                                        toggleUser(u.email);
+                                                        setLastClickedEmail(u.email);
+                                                    }
+                                                }}
+                                                className={`group hover:bg-zinc-800/80 transition-colors cursor-pointer ${isSelected ? 'bg-indigo-900/20 border-l-2 border-l-indigo-500' : 'border-l-2 border-l-transparent'}`}
+                                            >
+                                                <td className="p-3">
+                                                    <div className="flex items-center justify-center">
+                                                        <input
+                                                            type="checkbox"
+                                                            className="w-4 h-4 rounded border-zinc-600 bg-zinc-800 checked:bg-indigo-600 focus:ring-indigo-600 transition"
+                                                            checked={isSelected}
+                                                            onChange={(e) => {
+                                                                e.stopPropagation(); // Stop propagation to row click
+                                                                toggleUser(u.email);
+                                                                setLastClickedEmail(u.email);
+                                                            }}
+                                                        />
                                                     </div>
-                                                    <div
-                                                        className="text-xs text-indigo-300 font-mono cursor-pointer hover:text-indigo-200 transition"
-                                                        onClick={() => copyText(u.email)}
-                                                        title="Click to copy email"
-                                                    >
-                                                        {u.email}
+                                                </td>
+                                                <td className="p-3">
+                                                    <div className="flex flex-col">
+                                                        <div
+                                                            className="font-medium text-zinc-200 flex items-center gap-2 hover:text-white transition text-sm"
+                                                            onClick={(e) => { e.stopPropagation(); copyText(u.name?.fullName || u.email.split('@')[0]); }}
+                                                            title="Click to copy name"
+                                                        >
+                                                            {u.name?.fullName || u.email.split('@')[0]}
+                                                            {isProtected && (
+                                                                <span className="bg-purple-900/30 border border-purple-500/30 text-purple-400 text-[10px] px-1.5 py-0.5 rounded flex items-center gap-1" title="Protected User">
+                                                                    <Shield size={10} />
+                                                                </span>
+                                                            )}
+                                                        </div>
+                                                        <div
+                                                            className="text-xs text-indigo-400/80 font-mono hover:text-indigo-300 transition"
+                                                            onClick={(e) => { e.stopPropagation(); copyText(u.email); }}
+                                                            title="Click to copy email"
+                                                        >
+                                                            {u.email}
+                                                        </div>
                                                     </div>
                                                 </td>
-                                                <td className="p-4">
+                                                <td className="p-3">
                                                     {u.suspended ? (
-                                                        <span onClick={() => copyText("Suspended")} className="px-2 py-0.5 rounded text-xs bg-red-500/10 text-red-500 border border-red-500/20 cursor-pointer hover:bg-red-500/20" title="Click to copy status">Suspended</span>
+                                                        <span onClick={(e) => { e.stopPropagation(); copyText("Suspended"); }} className="px-2 py-1 rounded text-xs font-medium bg-red-900/20 text-red-400 border border-red-900/30 hover:bg-red-900/40" title="Click to copy">Suspended</span>
                                                     ) : (
-                                                        <span onClick={() => copyText("Active")} className="px-2 py-0.5 rounded text-xs bg-emerald-500/10 text-emerald-500 border border-emerald-500/20 cursor-pointer hover:bg-emerald-500/20" title="Click to copy status">Active</span>
+                                                        <span onClick={(e) => { e.stopPropagation(); copyText("Active"); }} className="px-2 py-1 rounded text-xs font-medium bg-emerald-900/20 text-emerald-400 border border-emerald-900/30 hover:bg-emerald-900/40" title="Click to copy">Active</span>
                                                     )}
                                                 </td>
                                                 <td
-                                                    className="p-4 text-xs text-indigo-300 cursor-pointer hover:text-indigo-200"
-                                                    onClick={() => copyText(u._sourceDomain)}
+                                                    className="p-3 text-sm text-zinc-300 hover:text-zinc-100"
+                                                    onClick={(e) => { e.stopPropagation(); copyText(u._sourceDomain); }}
                                                     title="Click to copy domain"
                                                 >
                                                     {u._sourceDomain || 'N/A'}
                                                 </td>
-                                                <td className="p-4">
+                                                <td className="p-3">
                                                     <div className="flex items-center gap-2">
                                                         <span
-                                                            className="text-xs font-mono text-indigo-300 cursor-pointer hover:text-indigo-200"
-                                                            onClick={() => copyText(u._groupEmail)}
+                                                            className="text-xs font-mono text-zinc-400 hover:text-zinc-200 truncate max-w-[150px]"
+                                                            onClick={(e) => { e.stopPropagation(); copyText(u._groupEmail); }}
                                                             title="Click to copy group email"
                                                         >
                                                             {u._groupEmail}
@@ -628,28 +690,29 @@ const UserManagement = () => {
                                                         {u._groupEmail !== 'N/A' && (
                                                             u.in_group
                                                                 ? <span title="Member"><CheckSquare size={14} className="text-emerald-500" /></span>
-                                                                : <span className="text-red-500 font-bold text-xs" title="Not a Member">✕</span>
+                                                                : <span className="text-red-500/80 font-bold text-xs" title="Not a Member">✕</span>
                                                         )}
                                                     </div>
                                                 </td>
                                                 <td
-                                                    className="p-4 text-xs font-mono text-indigo-300 cursor-pointer hover:text-indigo-200"
-                                                    onClick={() => copyText(u._jsonKey)}
+                                                    className="p-3 text-xs font-mono text-zinc-400 hover:text-zinc-200"
+                                                    onClick={(e) => { e.stopPropagation(); copyText(u._jsonKey); }}
                                                     title="Click to copy JSON key"
                                                 >
                                                     {u._jsonKey}
                                                 </td>
                                                 <td
-                                                    className="p-4 text-xs font-mono text-indigo-300 cursor-pointer hover:text-indigo-200"
-                                                    onClick={() => copyText(u.id)}
-                                                    title="Click to copy ID"
+                                                    className="p-3 text-[10px] font-mono text-zinc-500 hover:text-zinc-300 truncate max-w-[80px]"
+                                                    onClick={(e) => { e.stopPropagation(); copyText(u.id); }}
+                                                    title={u.id}
                                                 >
                                                     {u.id}
                                                 </td>
-                                                <td className="p-4 text-right">
-                                                    <button onClick={() => {
+                                                <td className="p-3 text-right">
+                                                    <button onClick={(e) => {
+                                                        e.stopPropagation();
                                                         copyText(u.email);
-                                                    }} className="text-zinc-600 hover:text-white transition p-1"><Copy size={14} /></button>
+                                                    }} className="text-zinc-500 hover:text-indigo-400 transition p-1.5 hover:bg-zinc-800 rounded"><Copy size={16} /></button>
                                                 </td>
                                             </tr>
                                         );

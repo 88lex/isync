@@ -66,6 +66,16 @@ const RemoteServers = () => {
         is_default: false
     });
 
+    const [filterQuery, setFilterQuery] = useState('');
+    const [verificationFilters, setVerificationFilters] = useState<Record<string, string>>({});
+    const filteredServers = servers.filter(s =>
+        filterQuery === '' ||
+        s.name.toLowerCase().includes(filterQuery.toLowerCase()) ||
+        s.alias?.toLowerCase().includes(filterQuery.toLowerCase()) ||
+        s.host.toLowerCase().includes(filterQuery.toLowerCase()) ||
+        s.user?.toLowerCase().includes(filterQuery.toLowerCase())
+    );
+
     useEffect(() => {
         loadServers();
     }, []);
@@ -285,23 +295,71 @@ const RemoteServers = () => {
         }
     };
 
-    const toggleServerSelection = (serverId: string) => {
-        setSelectedServers(prev => {
-            const newSet = new Set(prev);
-            if (newSet.has(serverId)) {
-                newSet.delete(serverId);
-            } else {
-                newSet.add(serverId);
+    const [lastClickedServer, setLastClickedServer] = useState<string | null>(null);
+
+    const toggleServerSelection = (serverId: string, multi?: boolean, rangeStart?: string, rangeEnd?: string, allItems?: string[]) => {
+        let newSet = new Set(selectedServers);
+
+        if (rangeStart && rangeEnd && allItems) {
+            const startIdx = allItems.indexOf(rangeStart);
+            const endIdx = allItems.indexOf(rangeEnd);
+            if (startIdx !== -1 && endIdx !== -1) {
+                const s = Math.min(startIdx, endIdx);
+                const e = Math.max(startIdx, endIdx);
+                for (let i = s; i <= e; i++) {
+                    newSet.add(allItems[i]);
+                }
             }
-            return newSet;
-        });
+        } else if (multi) {
+            if (newSet.has(serverId)) newSet.delete(serverId);
+            else newSet.add(serverId);
+        } else {
+            if (newSet.has(serverId)) newSet.delete(serverId);
+            else newSet.add(serverId);
+        }
+        setSelectedServers(newSet);
+    };
+
+    const handleServerClick = (serverId: string, e: React.MouseEvent, visibleServers: string[]) => {
+        if (e.shiftKey && lastClickedServer) {
+            // Shift-Click logic
+            const startIdx = visibleServers.indexOf(lastClickedServer);
+            const endIdx = visibleServers.indexOf(serverId);
+            if (startIdx !== -1 && endIdx !== -1) {
+                const min = Math.min(startIdx, endIdx);
+                const max = Math.max(startIdx, endIdx);
+                const newSet = new Set(selectedServers);
+
+                // Add all in range that are currently visible
+                for (let i = min; i <= max; i++) {
+                    newSet.add(visibleServers[i]);
+                }
+                setSelectedServers(newSet);
+            }
+        } else {
+            // Normal click
+            const newSet = new Set(selectedServers);
+            if (newSet.has(serverId)) newSet.delete(serverId);
+            else newSet.add(serverId);
+            setSelectedServers(newSet);
+            setLastClickedServer(serverId);
+        }
     };
 
     const selectAllServers = () => {
-        if (selectedServers.size === servers.length) {
-            setSelectedServers(new Set());
+        const visibleIds = filteredServers.map(s => s.id);
+        const allVisibleSelected = visibleIds.every(id => selectedServers.has(id));
+
+        if (allVisibleSelected) {
+            // Deselect all visible
+            const newSet = new Set(selectedServers);
+            visibleIds.forEach(id => newSet.delete(id));
+            setSelectedServers(newSet);
         } else {
-            setSelectedServers(new Set(servers.map(s => s.id)));
+            // Select all visible
+            const newSet = new Set(selectedServers);
+            visibleIds.forEach(id => newSet.add(id));
+            setSelectedServers(newSet);
         }
     };
 
@@ -437,30 +495,50 @@ const RemoteServers = () => {
             {/* Action Bar */}
             <div className="flex flex-wrap items-center justify-between gap-4">
                 <div className="flex items-center gap-4">
+                    <div className="relative">
+                        <input
+                            type="text"
+                            placeholder="Filter servers..."
+                            value={filterQuery}
+                            onChange={(e) => setFilterQuery(e.target.value)}
+                            className="bg-zinc-900 border border-zinc-700 text-sm rounded-lg pl-3 pr-8 py-2 w-64 focus:outline-none focus:border-cyan-500 transition-colors"
+                        />
+                        {filterQuery && (
+                            <button
+                                onClick={() => setFilterQuery('')}
+                                className="absolute right-2 top-2.5 text-zinc-500 hover:text-white"
+                            >
+                                <X size={14} />
+                            </button>
+                        )}
+                    </div>
+
                     {servers.length > 0 && (
                         <>
-                            <label className="flex items-center gap-2 text-sm text-zinc-400 cursor-pointer">
-                                <input
-                                    type="checkbox"
-                                    checked={selectedServers.size === servers.length && servers.length > 0}
-                                    onChange={selectAllServers}
-                                    className="w-4 h-4 rounded"
-                                />
-                                Select All ({selectedServers.size}/{servers.length})
-                            </label>
+                            <button
+                                onClick={selectAllServers}
+                                className="flex items-center gap-2 text-sm text-zinc-400 hover:text-white transition"
+                            >
+                                <div className={`w-4 h-4 rounded border flex items-center justify-center transition-colors ${filteredServers.length > 0 && filteredServers.every(s => selectedServers.has(s.id))
+                                    ? 'bg-cyan-600 border-cyan-600' : 'border-zinc-600 bg-zinc-800'
+                                    }`}>
+                                    {filteredServers.length > 0 && filteredServers.every(s => selectedServers.has(s.id)) && <CheckCircle size={10} className="text-white" />}
+                                </div>
+                                Select All ({selectedServers.size})
+                            </button>
                             {selectedServers.size > 0 && (
                                 <>
                                     <button
                                         onClick={openPushModal}
                                         className="flex items-center gap-2 px-4 py-2 bg-purple-600 hover:bg-purple-500 text-white rounded-lg text-sm font-medium transition"
                                     >
-                                        <Upload size={16} /> Push Files to {selectedServers.size} Server{selectedServers.size > 1 ? 's' : ''}
+                                        <Upload size={16} /> Push Files
                                     </button>
                                     <button
                                         onClick={openPullModal}
                                         className="flex items-center gap-2 px-4 py-2 bg-teal-600 hover:bg-teal-500 text-white rounded-lg text-sm font-medium transition"
                                     >
-                                        <Download size={16} /> Pull/Backup from {selectedServers.size} Server{selectedServers.size > 1 ? 's' : ''}
+                                        <Download size={16} /> Pull/Backup
                                     </button>
                                 </>
                             )}
@@ -490,234 +568,346 @@ const RemoteServers = () => {
                     </div>
                 </Card>
             ) : (
-                <div className="grid gap-4">
-                    {servers.map((server) => {
-                        const status = serverStatuses[server.id];
-                        const isLoading = actionLoading[server.id];
+                <div className="grid gap-3">
+                    {filteredServers.length === 0 ? (
+                        <div className="text-center py-12 text-zinc-500 border border-dashed border-zinc-800 rounded-xl">
+                            <p>No servers match your filter.</p>
+                            <button onClick={() => setFilterQuery('')} className="text-cyan-500 hover:underline mt-2 text-sm">Clear filter</button>
+                        </div>
+                    ) : (
+                        filteredServers.map((server) => {
+                            const status = serverStatuses[server.id];
+                            const isLoading = actionLoading[server.id];
+                            const isSelected = selectedServers.has(server.id);
 
-                        return (
-                            <Card key={server.id}>
-                                <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
-                                    {/* Server Selection Checkbox */}
-                                    <div className="flex items-start gap-3">
-                                        <input
-                                            type="checkbox"
-                                            checked={selectedServers.has(server.id)}
-                                            onChange={() => toggleServerSelection(server.id)}
-                                            className="w-5 h-5 mt-1 rounded cursor-pointer"
-                                        />
-                                        {/* Server Info */}
-                                        <div className="flex-1">
-                                            <div className="flex items-center gap-3 mb-2">
-                                                <div className={`w-3 h-3 rounded-full ${status?.isync_running ? 'bg-emerald-500' :
-                                                    status?.connected ? 'bg-yellow-500' :
-                                                        status ? 'bg-red-500' : 'bg-zinc-600'
-                                                    }`} />
-                                                <h3 className="text-lg font-bold text-white">{server.name}</h3>
-                                                {server.is_default && (
-                                                    <span className="flex items-center gap-1 text-xs text-amber-400 bg-amber-500/20 px-2 py-0.5 rounded">
-                                                        <Star size={12} /> Default
-                                                    </span>
-                                                )}
-                                                {getStatusBadge(status)}
+                            return (
+                                <div
+                                    key={server.id}
+                                    onClick={(e) => {
+                                        if ((e.target as HTMLElement).closest('button')) return;
+                                        handleServerClick(server.id, e, filteredServers.map(s => s.id));
+                                    }}
+                                    className={`bg-zinc-900 border rounded-xl p-4 transition-all cursor-pointer ${isSelected ? 'border-cyan-500/50 bg-cyan-900/10' : 'border-zinc-800 hover:border-zinc-700'}`}
+                                >
+                                    <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+                                        {/* Server Selection Checkbox */}
+                                        <div className="flex items-start gap-4">
+                                            <div
+                                                className={`w-5 h-5 mt-1 rounded border flex items-center justify-center shrink-0 transition-colors ${isSelected ? 'bg-cyan-600 border-cyan-600' : 'border-zinc-600 bg-zinc-800'}`}
+                                                onClick={(e) => {
+                                                    e.stopPropagation();
+                                                    toggleServerSelection(server.id);
+                                                }}
+                                            >
+                                                {isSelected && <CheckCircle size={12} className="text-white" />}
                                             </div>
-
-                                            <div className="text-sm text-zinc-400 space-y-1">
-                                                {server.alias ? (
-                                                    <p>SSH Alias: <span className="text-cyan-400 font-mono">{server.alias}</span></p>
-                                                ) : (
-                                                    <p>
-                                                        <span className="text-cyan-400 font-mono">
-                                                            {server.user && `${server.user}@`}{server.host}
-                                                            {server.port !== 22 && `:${server.port}`}
+                                            {/* Server Info */}
+                                            <div className="flex-1">
+                                                <div className="flex items-center gap-3 mb-2">
+                                                    <div className={`w-3 h-3 rounded-full ${status?.isync_running ? 'bg-emerald-500' :
+                                                        status?.connected ? 'bg-yellow-500' :
+                                                            status ? 'bg-red-500' : 'bg-zinc-600'
+                                                        }`} />
+                                                    <h3 className="text-lg font-bold text-white">{server.name}</h3>
+                                                    {server.is_default && (
+                                                        <span className="flex items-center gap-1 text-xs text-amber-400 bg-amber-500/20 px-2 py-0.5 rounded">
+                                                            <Star size={12} /> Default
                                                         </span>
-                                                    </p>
+                                                    )}
+                                                    {getStatusBadge(status)}
+                                                </div>
+
+                                                <div className="text-sm text-zinc-400 space-y-1">
+                                                    {server.alias ? (
+                                                        <p>SSH Alias: <span className="text-cyan-400 font-mono">{server.alias}</span></p>
+                                                    ) : (
+                                                        <p>
+                                                            <span className="text-cyan-400 font-mono">
+                                                                {server.user && `${server.user}@`}{server.host}
+                                                                {server.port !== 22 && `:${server.port}`}
+                                                            </span>
+                                                        </p>
+                                                    )}
+                                                    <p>Path: <span className="font-mono text-zinc-300">{server.remote_path}</span></p>
+                                                </div>
+
+                                                {status && status.connected && (
+                                                    <div className="flex gap-4 mt-3 text-xs text-zinc-500">
+                                                        <span className={status.backend_running ? 'text-emerald-400' : 'text-zinc-600'}>
+                                                            Backend: {status.backend_running ? 'Running' : 'Stopped'}
+                                                        </span>
+                                                        <span className={status.frontend_running ? 'text-emerald-400' : 'text-zinc-600'}>
+                                                            Frontend: {status.frontend_running ? 'Running' : 'Stopped'}
+                                                        </span>
+                                                        <span className={status.tmux_session ? 'text-emerald-400' : 'text-zinc-600'}>
+                                                            Tmux: {status.tmux_session ? 'Active' : 'None'}
+                                                        </span>
+                                                    </div>
                                                 )}
-                                                <p>Path: <span className="font-mono text-zinc-300">{server.remote_path}</span></p>
                                             </div>
 
-                                            {status && status.connected && (
-                                                <div className="flex gap-4 mt-3 text-xs text-zinc-500">
-                                                    <span className={status.backend_running ? 'text-emerald-400' : 'text-zinc-600'}>
-                                                        Backend: {status.backend_running ? 'Running' : 'Stopped'}
-                                                    </span>
-                                                    <span className={status.frontend_running ? 'text-emerald-400' : 'text-zinc-600'}>
-                                                        Frontend: {status.frontend_running ? 'Running' : 'Stopped'}
-                                                    </span>
-                                                    <span className={status.tmux_session ? 'text-emerald-400' : 'text-zinc-600'}>
-                                                        Tmux: {status.tmux_session ? 'Active' : 'None'}
-                                                    </span>
-                                                </div>
-                                            )}
-                                        </div>
-
-                                        {/* Actions */}
-                                        <div className="flex flex-wrap gap-2">
-                                            <button
-                                                onClick={() => handleCheckStatus(server.id)}
-                                                disabled={!!isLoading}
-                                                className="flex items-center gap-1 px-3 py-1.5 bg-zinc-800 hover:bg-zinc-700 disabled:opacity-50 text-zinc-300 rounded text-xs transition"
-                                            >
-                                                <RefreshCw size={14} className={isLoading === 'status' ? 'animate-spin' : ''} />
-                                                Status
-                                            </button>
-                                            <button
-                                                onClick={() => handleTestConnection(server.id)}
-                                                disabled={!!isLoading}
-                                                className="flex items-center gap-1 px-3 py-1.5 bg-zinc-800 hover:bg-zinc-700 disabled:opacity-50 text-zinc-300 rounded text-xs transition"
-                                            >
-                                                <Wifi size={14} />
-                                                Test
-                                            </button>
-
-                                            {status?.isync_running ? (
-                                                <>
-                                                    <button
-                                                        onClick={() => handleRestart(server.id)}
-                                                        disabled={!!isLoading}
-                                                        className="flex items-center gap-1 px-3 py-1.5 bg-amber-600 hover:bg-amber-500 disabled:opacity-50 text-white rounded text-xs transition"
-                                                    >
-                                                        <RotateCcw size={14} className={isLoading === 'restart' ? 'animate-spin' : ''} />
-                                                        Restart
-                                                    </button>
-                                                    <button
-                                                        onClick={() => handleStop(server.id)}
-                                                        disabled={!!isLoading}
-                                                        className="flex items-center gap-1 px-3 py-1.5 bg-red-600 hover:bg-red-500 disabled:opacity-50 text-white rounded text-xs transition"
-                                                    >
-                                                        <Square size={14} />
-                                                        Stop
-                                                    </button>
-                                                </>
-                                            ) : (
+                                            {/* Actions */}
+                                            <div className="flex flex-wrap gap-2">
                                                 <button
-                                                    onClick={() => handleStart(server.id)}
+                                                    onClick={() => handleCheckStatus(server.id)}
                                                     disabled={!!isLoading}
-                                                    className="flex items-center gap-1 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white rounded text-xs transition"
+                                                    className="flex items-center gap-1 px-3 py-1.5 bg-zinc-800 hover:bg-zinc-700 disabled:opacity-50 text-zinc-300 rounded text-xs transition"
                                                 >
-                                                    <Play size={14} />
-                                                    {isLoading === 'start' ? 'Starting...' : 'Start'}
+                                                    <RefreshCw size={14} className={isLoading === 'status' ? 'animate-spin' : ''} />
+                                                    Status
                                                 </button>
-                                            )}
+                                                <button
+                                                    onClick={() => handleTestConnection(server.id)}
+                                                    disabled={!!isLoading}
+                                                    className="flex items-center gap-1 px-3 py-1.5 bg-zinc-800 hover:bg-zinc-700 disabled:opacity-50 text-zinc-300 rounded text-xs transition"
+                                                >
+                                                    <Wifi size={14} />
+                                                    Test
+                                                </button>
 
-                                            <div className="border-l border-zinc-700 mx-1" />
+                                                {status?.isync_running ? (
+                                                    <>
+                                                        <button
+                                                            onClick={() => handleRestart(server.id)}
+                                                            disabled={!!isLoading}
+                                                            className="flex items-center gap-1 px-3 py-1.5 bg-amber-600 hover:bg-amber-500 disabled:opacity-50 text-white rounded text-xs transition"
+                                                        >
+                                                            <RotateCcw size={14} className={isLoading === 'restart' ? 'animate-spin' : ''} />
+                                                            Restart
+                                                        </button>
+                                                        <button
+                                                            onClick={() => handleStop(server.id)}
+                                                            disabled={!!isLoading}
+                                                            className="flex items-center gap-1 px-3 py-1.5 bg-red-600 hover:bg-red-500 disabled:opacity-50 text-white rounded text-xs transition"
+                                                        >
+                                                            <Square size={14} />
+                                                            Stop
+                                                        </button>
+                                                    </>
+                                                ) : (
+                                                    <button
+                                                        onClick={() => handleStart(server.id)}
+                                                        disabled={!!isLoading}
+                                                        className="flex items-center gap-1 px-3 py-1.5 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white rounded text-xs transition"
+                                                    >
+                                                        <Play size={14} />
+                                                        {isLoading === 'start' ? 'Starting...' : 'Start'}
+                                                    </button>
+                                                )}
 
-                                            <button
-                                                onClick={() => copySSHCommand(server)}
-                                                className="flex items-center gap-1 px-3 py-1.5 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 rounded text-xs transition"
-                                                title="Copy SSH command"
-                                            >
-                                                <Terminal size={14} />
-                                            </button>
-                                            <button
-                                                onClick={() => copyTunnelCommand(server)}
-                                                className="flex items-center gap-1 px-3 py-1.5 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 rounded text-xs transition"
-                                                title="Copy SSH tunnel command"
-                                            >
-                                                <ExternalLink size={14} />
-                                            </button>
-                                            <button
-                                                onClick={() => openDeployModal(server.id)}
-                                                className="flex items-center gap-1 px-3 py-1.5 bg-purple-600 hover:bg-purple-500 text-white rounded text-xs transition"
-                                                title="Deploy/Install ISync"
-                                            >
-                                                <Upload size={14} />
-                                                Deploy
-                                            </button>
-                                            <button
-                                                onClick={() => handleVerifyServer(server.id)}
-                                                disabled={!!isLoading}
-                                                className="flex items-center gap-1 px-3 py-1.5 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white rounded text-xs transition"
-                                                title="Full server verification"
-                                            >
-                                                <CheckCircle size={14} className={isLoading === 'verify' ? 'animate-spin' : ''} />
-                                                Verify
-                                            </button>
-                                            <button
-                                                onClick={() => openCronModal(server.id)}
-                                                className="flex items-center gap-1 px-3 py-1.5 bg-amber-600 hover:bg-amber-500 text-white rounded text-xs transition"
-                                                title="Manage crontab"
-                                            >
-                                                <Clock size={14} />
-                                                Cron
-                                            </button>
-                                            <button
-                                                onClick={() => handleEditServer(server)}
-                                                className="flex items-center gap-1 px-3 py-1.5 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 rounded text-xs transition"
-                                            >
-                                                <Edit2 size={14} />
-                                            </button>
-                                            <button
-                                                onClick={() => handleDeleteServer(server.id)}
-                                                className="flex items-center gap-1 px-3 py-1.5 bg-zinc-800 hover:bg-red-600 text-zinc-300 hover:text-white rounded text-xs transition"
-                                            >
-                                                <Trash2 size={14} />
-                                            </button>
+                                                <div className="border-l border-zinc-700 mx-1" />
+
+                                                <button
+                                                    onClick={() => copySSHCommand(server)}
+                                                    className="flex items-center gap-1 px-3 py-1.5 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 rounded text-xs transition"
+                                                    title="Copy SSH command"
+                                                >
+                                                    <Terminal size={14} />
+                                                </button>
+                                                <button
+                                                    onClick={() => copyTunnelCommand(server)}
+                                                    className="flex items-center gap-1 px-3 py-1.5 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 rounded text-xs transition"
+                                                    title="Copy SSH tunnel command"
+                                                >
+                                                    <ExternalLink size={14} />
+                                                </button>
+                                                <button
+                                                    onClick={() => openDeployModal(server.id)}
+                                                    className="flex items-center gap-1 px-3 py-1.5 bg-purple-600 hover:bg-purple-500 text-white rounded text-xs transition"
+                                                    title="Deploy/Install ISync"
+                                                >
+                                                    <Upload size={14} />
+                                                    Deploy
+                                                </button>
+                                                <button
+                                                    onClick={() => handleVerifyServer(server.id)}
+                                                    disabled={!!isLoading}
+                                                    className="flex items-center gap-1 px-3 py-1.5 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white rounded text-xs transition"
+                                                    title="Full server verification"
+                                                >
+                                                    <CheckCircle size={14} className={isLoading === 'verify' ? 'animate-spin' : ''} />
+                                                    Verify
+                                                </button>
+                                                <button
+                                                    onClick={() => openCronModal(server.id)}
+                                                    className="flex items-center gap-1 px-3 py-1.5 bg-amber-600 hover:bg-amber-500 text-white rounded text-xs transition"
+                                                    title="Manage crontab"
+                                                >
+                                                    <Clock size={14} />
+                                                    Cron
+                                                </button>
+                                                <button
+                                                    onClick={() => handleEditServer(server)}
+                                                    className="flex items-center gap-1 px-3 py-1.5 bg-zinc-800 hover:bg-zinc-700 text-zinc-300 rounded text-xs transition"
+                                                >
+                                                    <Edit2 size={14} />
+                                                </button>
+                                                <button
+                                                    onClick={() => handleDeleteServer(server.id)}
+                                                    className="flex items-center gap-1 px-3 py-1.5 bg-zinc-800 hover:bg-red-600 text-zinc-300 hover:text-white rounded text-xs transition"
+                                                >
+                                                    <Trash2 size={14} />
+                                                </button>
+                                            </div>
                                         </div>
                                     </div>
+
+                                    {/* Expanded Verification Panel */}
+                                    {expandedServer === server.id && serverVerifications[server.id] && (
+                                        <div className="mt-4 pt-4 border-t border-zinc-700">
+                                            <div className="flex items-center justify-between mb-3">
+                                                <h4 className="text-sm font-semibold text-white flex items-center gap-2">
+                                                    <Settings size={14} /> Server Verification Details
+                                                </h4>
+                                                <button onClick={() => setExpandedServer(null)} className="text-zinc-400 hover:text-white text-xs">
+                                                    <ChevronUp size={14} />
+                                                </button>
+                                            </div>
+
+                                            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 text-xs h-80">
+                                                {/* Rclone */}
+                                                <div className="bg-zinc-800/50 p-3 rounded flex flex-col border border-zinc-700/50">
+                                                    <div className="flex justify-between items-center mb-2 shrink-0">
+                                                        <div className="text-zinc-300 font-bold flex items-center gap-2"><HardDrive size={12} /> Rclone</div>
+                                                        <span className={serverVerifications[server.id].rclone?.rclone_installed ? 'text-emerald-400' : 'text-red-400'}>
+                                                            {serverVerifications[server.id].rclone?.rclone_installed ? 'Installed' : 'Missing'}
+                                                        </span>
+                                                    </div>
+                                                    <input
+                                                        type="text"
+                                                        placeholder="Filter remotes..."
+                                                        className="bg-zinc-900 border border-zinc-700 rounded px-2 py-1 text-xs mb-2 w-full focus:outline-none focus:border-cyan-500 shrink-0"
+                                                        value={verificationFilters[`${server.id}-rclone`] || ''}
+                                                        onChange={e => setVerificationFilters(prev => ({ ...prev, [`${server.id}-rclone`]: e.target.value }))}
+                                                    />
+                                                    <div className="flex-1 overflow-y-auto space-y-1 pr-1 custom-scrollbar">
+                                                        {(serverVerifications[server.id].rclone?.remotes || [])
+                                                            .filter(r => !verificationFilters[`${server.id}-rclone`] || r.toLowerCase().includes(verificationFilters[`${server.id}-rclone`].toLowerCase()))
+                                                            .map((r, i) => (
+                                                                <div key={i} className="bg-zinc-900/50 px-2 py-1.5 rounded text-zinc-300 truncate border border-zinc-800/50 flex items-center gap-2">
+                                                                    <div className="w-1.5 h-1.5 rounded-full bg-cyan-500/50"></div>
+                                                                    {r}
+                                                                </div>
+                                                            ))}
+                                                        {(!serverVerifications[server.id].rclone?.remotes?.length) && <div className="text-zinc-600 italic text-center py-2">No remotes found</div>}
+                                                    </div>
+                                                </div>
+
+                                                {/* Files & Keys */}
+                                                <div className="bg-zinc-800/50 p-3 rounded flex flex-col border border-zinc-700/50">
+                                                    <div className="flex justify-between items-center mb-2 shrink-0">
+                                                        <div className="text-zinc-300 font-bold flex items-center gap-2"><FileText size={12} /> Files</div>
+                                                        <span className={serverVerifications[server.id].files?.path_exists ? 'text-emerald-400' : 'text-red-400'}>
+                                                            {serverVerifications[server.id].files?.path_exists ? 'Path OK' : 'Missing'}
+                                                        </span>
+                                                    </div>
+                                                    <input
+                                                        type="text"
+                                                        placeholder="Filter keys/groups..."
+                                                        className="bg-zinc-900 border border-zinc-700 rounded px-2 py-1 text-xs mb-2 w-full focus:outline-none focus:border-cyan-500 shrink-0"
+                                                        value={verificationFilters[`${server.id}-files`] || ''}
+                                                        onChange={e => setVerificationFilters(prev => ({ ...prev, [`${server.id}-files`]: e.target.value }))}
+                                                    />
+                                                    <div className="flex-1 overflow-y-auto space-y-3 pr-1 custom-scrollbar">
+                                                        <div>
+                                                            <div className="text-zinc-500 font-semibold mb-1 uppercase text-[10px] tracking-wider">JSON Keys</div>
+                                                            <div className="space-y-1">
+                                                                {(serverVerifications[server.id].files?.keys_list || [])
+                                                                    .filter(k => !verificationFilters[`${server.id}-files`] || k.toLowerCase().includes(verificationFilters[`${server.id}-files`].toLowerCase()))
+                                                                    .map((k, i) => (
+                                                                        <div key={i} className="bg-zinc-900/50 px-2 py-1 rounded text-amber-500/80 truncate border border-zinc-800/50 text-[11px]">{k}</div>
+                                                                    ))}
+                                                                {!serverVerifications[server.id].files?.keys_list?.length && <div className="text-zinc-700 italic">None</div>}
+                                                            </div>
+                                                        </div>
+                                                        <div>
+                                                            <div className="text-zinc-500 font-semibold mb-1 uppercase text-[10px] tracking-wider">Batch Groups</div>
+                                                            <div className="space-y-1">
+                                                                {(serverVerifications[server.id].files?.groups_list || [])
+                                                                    .filter(g => !verificationFilters[`${server.id}-files`] || g.toLowerCase().includes(verificationFilters[`${server.id}-files`].toLowerCase()))
+                                                                    .map((g, i) => (
+                                                                        <div key={i} className="bg-zinc-900/50 px-2 py-1 rounded text-purple-400/80 truncate border border-zinc-800/50 text-[11px]">{g}</div>
+                                                                    ))}
+                                                                {!serverVerifications[server.id].files?.groups_list?.length && <div className="text-zinc-700 italic">None</div>}
+                                                            </div>
+                                                        </div>
+                                                    </div>
+                                                </div>
+
+                                                {/* Batch */}
+                                                <div className="bg-zinc-800/50 p-3 rounded flex flex-col border border-zinc-700/50">
+                                                    <div className="flex justify-between items-center mb-2 shrink-0">
+                                                        <div className="text-zinc-300 font-bold flex items-center gap-2"><Terminal size={12} /> Batch</div>
+                                                        <span className={serverVerifications[server.id].batch?.running ? 'text-amber-400 animate-pulse' : 'text-zinc-500'}>
+                                                            {serverVerifications[server.id].batch?.running ? 'Running' : 'Idle'}
+                                                        </span>
+                                                    </div>
+                                                    <input
+                                                        type="text"
+                                                        placeholder="Filter batch/processes..."
+                                                        className="bg-zinc-900 border border-zinc-700 rounded px-2 py-1 text-xs mb-2 w-full focus:outline-none focus:border-cyan-500 shrink-0"
+                                                        value={verificationFilters[`${server.id}-batch`] || ''}
+                                                        onChange={e => setVerificationFilters(prev => ({ ...prev, [`${server.id}-batch`]: e.target.value }))}
+                                                    />
+                                                    <div className="flex-1 overflow-y-auto space-y-3 pr-1 custom-scrollbar">
+                                                        {serverVerifications[server.id].batch?.processes?.length ? (
+                                                            <div>
+                                                                <div className="text-zinc-500 font-semibold mb-1 uppercase text-[10px] tracking-wider">Processes</div>
+                                                                <div className="space-y-1">
+                                                                    {serverVerifications[server.id].batch?.processes
+                                                                        .filter(p => !verificationFilters[`${server.id}-batch`] || p.toLowerCase().includes(verificationFilters[`${server.id}-batch`].toLowerCase()))
+                                                                        .map((p, i) => (
+                                                                            <div key={i} className="bg-zinc-900/50 px-2 py-1 rounded text-emerald-400/80 truncate border border-zinc-800/50 text-[10px] font-mono">{p}</div>
+                                                                        ))}
+                                                                </div>
+                                                            </div>
+                                                        ) : null}
+                                                        <div>
+                                                            <div className="text-zinc-500 font-semibold mb-1 uppercase text-[10px] tracking-wider">Batch Files ({serverVerifications[server.id].batch?.batch_count})</div>
+                                                            <div className="space-y-1">
+                                                                {(serverVerifications[server.id].batch?.batch_files_list || [])
+                                                                    .filter(f => !verificationFilters[`${server.id}-batch`] || f.toLowerCase().includes(verificationFilters[`${server.id}-batch`].toLowerCase()))
+                                                                    .map((f, i) => (
+                                                                        <div key={i} className="bg-zinc-900/50 px-2 py-1 rounded text-zinc-400 truncate border border-zinc-800/50 text-[11px]">{f}</div>
+                                                                    ))}
+                                                            </div>
+                                                        </div>
+                                                    </div>
+                                                </div>
+
+                                                {/* Cron */}
+                                                <div className="bg-zinc-800/50 p-3 rounded flex flex-col border border-zinc-700/50">
+                                                    <div className="flex justify-between items-center mb-2 shrink-0">
+                                                        <div className="text-zinc-300 font-bold flex items-center gap-2"><Clock size={12} /> Cron</div>
+                                                        <span className={serverVerifications[server.id].cron?.has_crontab ? 'text-emerald-400' : 'text-zinc-500'}>
+                                                            {serverVerifications[server.id].cron?.has_crontab ? 'Active' : 'Empty'}
+                                                        </span>
+                                                    </div>
+                                                    <input
+                                                        type="text"
+                                                        placeholder="Filter entries..."
+                                                        className="bg-zinc-900 border border-zinc-700 rounded px-2 py-1 text-xs mb-2 w-full focus:outline-none focus:border-cyan-500 shrink-0"
+                                                        value={verificationFilters[`${server.id}-cron`] || ''}
+                                                        onChange={e => setVerificationFilters(prev => ({ ...prev, [`${server.id}-cron`]: e.target.value }))}
+                                                    />
+                                                    <div className="flex-1 overflow-y-auto space-y-1 pr-1 custom-scrollbar font-mono text-[10px]">
+                                                        {(serverVerifications[server.id].cron?.entries_list || [])
+                                                            .filter(e => !verificationFilters[`${server.id}-cron`] || e.toLowerCase().includes(verificationFilters[`${server.id}-cron`].toLowerCase()))
+                                                            .map((entry, i) => (
+                                                                <div key={i} className="bg-zinc-900/50 px-2 py-1 rounded text-zinc-400 break-all border border-zinc-800/50">
+                                                                    {entry}
+                                                                </div>
+                                                            ))}
+                                                        {(!serverVerifications[server.id].cron?.entries_list?.length) && <div className="text-zinc-600 italic text-center py-2">No entries</div>}
+                                                    </div>
+                                                </div>
+                                            </div>
+                                        </div>
+                                    )}
                                 </div>
-
-                                {/* Expanded Verification Panel */}
-                                {expandedServer === server.id && serverVerifications[server.id] && (
-                                    <div className="mt-4 pt-4 border-t border-zinc-700">
-                                        <div className="flex items-center justify-between mb-3">
-                                            <h4 className="text-sm font-semibold text-white flex items-center gap-2">
-                                                <Settings size={14} /> Server Verification Details
-                                            </h4>
-                                            <button
-                                                onClick={() => setExpandedServer(null)}
-                                                className="text-zinc-400 hover:text-white text-xs"
-                                            >
-                                                <ChevronUp size={14} />
-                                            </button>
-                                        </div>
-                                        <div className="grid grid-cols-2 md:grid-cols-4 gap-4 text-xs">
-                                            {/* Rclone Status */}
-                                            <div className="bg-zinc-800/50 p-3 rounded">
-                                                <div className="text-zinc-400 mb-1">Rclone</div>
-                                                <div className={serverVerifications[server.id].rclone?.rclone_installed ? 'text-emerald-400' : 'text-red-400'}>
-                                                    {serverVerifications[server.id].rclone?.rclone_installed ? '✓ Installed' : '✗ Not Found'}
-                                                </div>
-                                                <div className="text-zinc-500 mt-1">
-                                                    {serverVerifications[server.id].rclone?.count || 0} remotes
-                                                </div>
-                                            </div>
-                                            {/* Files Status */}
-                                            <div className="bg-zinc-800/50 p-3 rounded">
-                                                <div className="text-zinc-400 mb-1">Files</div>
-                                                <div className={serverVerifications[server.id].files?.path_exists ? 'text-emerald-400' : 'text-red-400'}>
-                                                    {serverVerifications[server.id].files?.path_exists ? '✓ Path exists' : '✗ Path missing'}
-                                                </div>
-                                                <div className="text-zinc-500 mt-1">
-                                                    {serverVerifications[server.id].files?.keys_count || 0} keys, {serverVerifications[server.id].files?.batch_count || 0} batch
-                                                </div>
-                                            </div>
-                                            {/* Batch Status */}
-                                            <div className="bg-zinc-800/50 p-3 rounded">
-                                                <div className="text-zinc-400 mb-1">Batch</div>
-                                                <div className={serverVerifications[server.id].batch?.running ? 'text-amber-400' : 'text-zinc-500'}>
-                                                    {serverVerifications[server.id].batch?.running ? '⚡ Running' : '○ Idle'}
-                                                </div>
-                                                {serverVerifications[server.id].batch?.processes?.slice(0, 2).map((p, i) => (
-                                                    <div key={i} className="text-zinc-600 text-xs truncate mt-1">{p}</div>
-                                                ))}
-                                            </div>
-                                            {/* Cron Status */}
-                                            <div className="bg-zinc-800/50 p-3 rounded">
-                                                <div className="text-zinc-400 mb-1">Cron</div>
-                                                <div className={serverVerifications[server.id].cron?.has_crontab ? 'text-emerald-400' : 'text-zinc-500'}>
-                                                    {serverVerifications[server.id].cron?.has_crontab ? '✓ Configured' : '○ Empty'}
-                                                </div>
-                                                <div className="text-zinc-500 mt-1">
-                                                    {serverVerifications[server.id].files?.cron_entries || 0} entries
-                                                </div>
-                                            </div>
-                                        </div>
-                                    </div>
-                                )}
-                            </Card>
-                        );
-                    })}
+                            );
+                        })
+                    )}
                 </div>
             )}
 

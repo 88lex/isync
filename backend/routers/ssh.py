@@ -174,6 +174,29 @@ def api_get_ssh_server_status(server_id: str):
     return check_remote_status(req)
 
 
+@router.get("/servers/{server_id}/verify")
+def api_verify_ssh_server(server_id: str):
+    """Deep verification of SSH server configuration."""
+    store = get_store()
+    config = store.get_config()
+    servers = config.get('ssh_servers', [])
+    
+    server = next((s for s in servers if s.get('id') == server_id), None)
+    if not server:
+        raise HTTPException(status_code=404, detail="Server not found")
+        
+    from backend.ops import verify_full_server_status, SSHBaseRequest
+    
+    req = SSHBaseRequest(
+        host=server.get('alias') or server.get('host'),
+        user=server.get('user'),
+        key_path=server.get('key_path'),
+        remote_path=server.get('remote_path', '~/isync')
+    )
+    
+    return verify_full_server_status(req, server.get('name'), server_id)
+
+
 # --- Remote Browser Endpoints ---
 @router.get("/servers/{server_id}/folders")
 def api_list_server_folders(server_id: str, path: str = "/", depth: int = 2):
@@ -182,9 +205,12 @@ def api_list_server_folders(server_id: str, path: str = "/", depth: int = 2):
     config = store.get_config()
     servers = config.get('ssh_servers', [])
     
-    server = next((s for s in servers if s.get('id') == server_id), None)
-    if not server:
-        raise HTTPException(status_code=404, detail="Server not found")
+    if server_id == 'local':
+        server = None
+    else:
+        server = next((s for s in servers if s.get('id') == server_id), None)
+        if not server:
+            raise HTTPException(status_code=404, detail="Server not found")
     
     result = list_remote_folders(server, path, depth)
     return result
@@ -602,3 +628,185 @@ def sync_all_items(req: SyncAllRequest):
     
     return {"results": results, "total": total, "success": success, "direction": req.direction}
 
+
+class RelaySyncRequest(BaseModel):
+    source_id: str
+    target_ids: List[str]
+    items: List[str]
+    item_type: str
+    direction: str = "push"
+
+
+@router.post("/remote/relay-sync")
+def api_relay_sync(req: RelaySyncRequest):
+    """Relay sync items between remote servers via local temp."""
+    import tempfile
+    import shutil
+    import os
+    import subprocess
+    from backend.ops import SSHBaseRequest
+    
+    # Resolve Source
+    source_server = None
+    if req.source_id != 'local':
+        source_server = get_server_by_id(req.source_id)
+        
+    # Resolve Targets
+    target_servers = []
+    for tid in req.target_ids:
+        if tid == 'local': continue
+        srv = get_server_by_id(tid)
+        if srv: target_servers.append(srv)
+            
+    if not source_server and req.source_id != 'local':
+        raise HTTPException(404, "Source server not found")
+        
+    results = []
+    base_path = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+    # Helper to resolve paths
+    def get_paths(server, item, itype):
+        remote_base = server.get('remote_path', '/opt/isync')
+        if itype == 'batch': return f"{remote_base}/batch/{item}"
+        if itype == 'group': return f"{remote_base}/batch/groups/{item}"
+        if itype == 'key': return f"{remote_base}/keys/{item}"
+        return f"/tmp/{item}"
+        
+    def get_local_path(item, itype):
+        if itype == 'batch': return os.path.join(base_path, "batch", item)
+        if itype == 'group': return os.path.join(base_path, "batch", "groups", item)
+        if itype == 'key': return os.path.join(base_path, "keys", item)
+        return f"/tmp/{item}"
+
+    # Helper for SCP
+    def scp_transfer(src_str, dst_str, key_path):
+        cmd = ["scp", "-o", "StrictHostKeyChecking=no"]
+        if key_path: cmd.extend(["-i", key_path])
+        cmd.extend([src_str, dst_str])
+        return subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+
+    # 1. PUSH: Source -> Targets
+    if req.direction == "push":
+        with tempfile.TemporaryDirectory() as tmpdir:
+            for item in req.items:
+                item_res = {"item": item, "source": req.source_id, "targets": []}
+                
+                # A. Pull from Source to Temp
+                tmp_path = os.path.join(tmpdir, item)
+                
+                if req.source_id == 'local':
+                    src_path = get_local_path(item, req.item_type)
+                    if not os.path.exists(src_path):
+                        item_res["status"] = "error"
+                        item_res["error"] = "Local file missing"
+                        results.append(item_res)
+                        continue
+                    shutil.copy(src_path, tmp_path)
+                else:
+                    src_addr = source_server.get('alias') or source_server.get('host')
+                    if source_server.get('user'): src_addr = f"{source_server['user']}@{src_addr}"
+                    remote_path = get_paths(source_server, item, req.item_type)
+                    
+                    pull_res = scp_transfer(f"{src_addr}:{remote_path}", tmp_path, source_server.get('key_path'))
+                    if pull_res.returncode != 0:
+                        item_res["status"] = "error"
+                        item_res["error"] = f"Pull failed: {pull_res.stderr}"
+                        results.append(item_res)
+                        continue
+                        
+                # B. Push Temp to Targets
+                for target in target_servers:
+                    tgt_addr = target.get('alias') or target.get('host')
+                    if target.get('user'): tgt_addr = f"{target['user']}@{tgt_addr}"
+                    dest_path = get_paths(target, item, req.item_type)
+                    
+                    push_res = scp_transfer(tmp_path, f"{tgt_addr}:{dest_path}", target.get('key_path'))
+                    t_status = "success" if push_res.returncode == 0 else "error"
+                    t_msg = push_res.stderr if t_status == "error" else ""
+                    
+                    item_res["targets"].append({
+                        "server": target.get('name'), 
+                        "status": t_status, 
+                        "message": t_msg
+                    })
+                    
+                results.append(item_res)
+
+    # 2. PULL: Targets -> Source
+    elif req.direction == "pull":
+         with tempfile.TemporaryDirectory() as tmpdir:
+             for item in req.items:
+                 tmp_path = os.path.join(tmpdir, item)
+                 
+                 for target in target_servers:
+                    tgt_addr = target.get('alias') or target.get('host')
+                    if target.get('user'): tgt_addr = f"{target['user']}@{tgt_addr}"
+                    src_remote_path = get_paths(target, item, req.item_type)
+                    
+                    dl_res = scp_transfer(f"{tgt_addr}:{src_remote_path}", tmp_path, target.get('key_path'))
+                    if dl_res.returncode == 0:
+                        if req.source_id == 'local':
+                             dest_local = get_local_path(item, req.item_type)
+                             os.makedirs(os.path.dirname(dest_local), exist_ok=True)
+                             shutil.copy(tmp_path, dest_local)
+                             results.append({"item": item, "status": "success", "from": target.get('name')})
+                        else:
+                             src_addr = source_server.get('alias') or source_server.get('host')
+                             if source_server.get('user'): src_addr = f"{source_server['user']}@{src_addr}"
+                             dest_remote = get_paths(source_server, item, req.item_type)
+                             
+                             up_res = scp_transfer(tmp_path, f"{src_addr}:{dest_remote}", source_server.get('key_path'))
+                             if up_res.returncode == 0:
+                                 results.append({"item": item, "status": "success", "from": target.get('name')})
+                             else:
+                                 results.append({"item": item, "status": "error", "message": up_res.stderr})
+                    else:
+                        results.append({"item": item, "status": "error", "message": f"Pull from {target.get('name')} failed"})
+
+    total = len(req.items)
+    pushed = len([r for r in results if r.get('status') != 'error'])
+    return {"results": results, "total": total, "pushed": pushed}
+
+# --- Path Verification ---
+class VerifyPathRequest(BaseModel):
+    type: str  # 'local', 'ssh', 'rclone'
+    server_id: Optional[str] = "local"
+    path: str
+    rclone_remote: Optional[str] = None
+
+
+@router.post("/verify-path")
+def api_verify_path(req: VerifyPathRequest):
+    """Verify if a path is accessible."""
+    from backend.remote_browser import run_ssh_command
+    
+    # Resolve Server
+    server = None
+    if req.server_id != 'local' and req.server_id:
+        store = get_store()
+        config = store.get_config()
+        servers = config.get('ssh_servers', [])
+        server = next((s for s in servers if s.get('id') == req.server_id), None)
+        if not server:
+            raise HTTPException(404, "Server not found")
+    
+    # Construct Verification Command
+    if req.type == 'rclone':
+        # Check if remote path exists using rclone lsjson --stat
+        # This works for both files and directories
+        target = f"{req.rclone_remote}:{req.path}"
+        check_cmd = f"rclone lsjson \"{target}\" --stat"
+    else:
+        # Check local/ssh path using test -e
+        # Quote path to handle spaces
+        check_cmd = f"test -e \"{req.path}\""
+        
+    # Execute via unified runner (handles both local and ssh)
+    res = run_ssh_command(server, check_cmd, timeout=10)
+    
+    if res['success']:
+        return {"status": "ok", "message": "Access confirmed"}
+    else:
+        # Use stderr if available, otherwise generic error
+        error_msg = res.get('error') or "Path not found or inaccessible"
+        return {"status": "error", "message": error_msg}

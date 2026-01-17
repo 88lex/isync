@@ -547,3 +547,116 @@ def process_bulk_ops(req: BulkOpRequest):
         raise HTTPException(400, f"Unknown action: {req.action}")
         
     return results
+
+# --- Remote Verification Helpers ---
+
+def list_remote_batches_op(req: SSHBaseRequest) -> List[str]:
+    remote_path = f"{req.remote_path}/batch"
+    cmd = _build_ssh_cmd(req, [f"ls {remote_path} 2>/dev/null | grep -v '^d' | grep -v '^\\.git'"])
+    try:
+        res = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+        return [l.split()[-1] for l in res.stdout.split('\n') if l.strip()]
+    except: return []
+
+def list_remote_groups_op(req: SSHBaseRequest) -> List[str]:
+    remote_path = f"{req.remote_path}/batch/groups"
+    cmd = _build_ssh_cmd(req, [f"ls {remote_path}/*.sh 2>/dev/null"])
+    try:
+        res = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+        return [os.path.basename(l.strip()) for l in res.stdout.split('\n') if l.strip()]
+    except: return []
+
+def list_remote_keys_op(req: SSHBaseRequest) -> List[str]:
+    remote_path = f"{req.remote_path}/keys"
+    cmd = _build_ssh_cmd(req, [f"ls {remote_path}/*.json 2>/dev/null"])
+    try:
+        res = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+        return [os.path.basename(l.strip()) for l in res.stdout.split('\n') if l.strip()]
+    except: return []
+
+def list_remote_crons_op(req: SSHBaseRequest) -> List[str]:
+    cmd = _build_ssh_cmd(req, ["crontab -l 2>/dev/null"])
+    try:
+        res = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+        return [l.strip() for l in res.stdout.split('\n') if l.strip() and not l.strip().startswith('#')]
+    except: return []
+
+def verify_full_server_status(req: SSHBaseRequest, server_name: str, server_id: str):
+    # Base check
+    base = check_remote_status(req)
+    
+    full = {
+        "server_id": server_id,
+        "server_name": server_name,
+        "connected": base["connected"],
+        "status": base["status"],
+        "rclone": {"status": "unknown", "remotes": [], "count": 0, "rclone_installed": False},
+        "files": {"status": "unknown", "keys_list": [], "keys_count": 0, "groups_list": [], "groups_count": 0, "path_exists": False},
+        "batch": {"status": "unknown", "batch_files_list": [], "batch_count": 0, "processes": [], "running": False},
+        "cron": {"status": "unknown", "entries_list": [], "entries_count": 0, "has_crontab": False, "content": ""}
+    }
+    
+    if not base["connected"]:
+        return full
+        
+    # Rclone
+    try:
+        rcv = subprocess.run(_build_ssh_cmd(req, ["rclone listremotes"]), capture_output=True, text=True, timeout=10)
+        remotes = [l.strip() for l in rcv.stdout.split('\n') if l.strip()]
+        full["rclone"] = {
+            "status": "ok",
+            "rclone_installed": rcv.returncode == 0,
+            "remotes": remotes,
+            "count": len(remotes)
+        }
+    except Exception as e:
+        full["rclone"]["status"] = "error"
+
+    # Files
+    keys = list_remote_keys_op(req)
+    groups = list_remote_groups_op(req)
+    # Check path existence
+    try:
+        chk = subprocess.run(_build_ssh_cmd(req, [f"test -d {req.remote_path} && echo YES"]), capture_output=True, text=True, timeout=5)
+        path_exists = "YES" in chk.stdout
+    except: path_exists = False
+    
+    full["files"].update({
+        "status": "ok",
+        "keys_list": keys,
+        "keys_count": len(keys),
+        "groups_list": groups,
+        "groups_count": len(groups),
+        "path_exists": path_exists
+    })
+
+    # Batch
+    batches = list_remote_batches_op(req)
+    # Check processes
+    try:
+        psr = subprocess.run(_build_ssh_cmd(req, ["pgrep -a -f 'bash.*batch'"]), capture_output=True, text=True, timeout=5)
+        procs = [l.strip() for l in psr.stdout.split('\n') if l.strip()]
+        running = len(procs) > 0
+    except: 
+        procs = []
+        running = False
+        
+    full["batch"].update({
+        "status": "ok",
+        "batch_files_list": batches,
+        "batch_count": len(batches),
+        "processes": procs,
+        "running": running
+    })
+    
+    # Cron
+    crons = list_remote_crons_op(req)
+    full["cron"].update({
+        "status": "ok",
+        "entries_list": crons,
+        "entries_count": len(crons),
+        "has_crontab": len(crons) > 0,
+        "content": "\n".join(crons)
+    })
+    
+    return full
