@@ -20,6 +20,7 @@ router = APIRouter(prefix="/api", tags=["Jobs"])
 
 # --- Pydantic Models ---
 class SyncPair(BaseModel):
+    id: Optional[str] = None
     source: str
     dest: str
     domain_reference: Optional[str] = ""
@@ -77,18 +78,31 @@ def extract_users_from_batch(content: str) -> List[str]:
 
 
 def extract_sync_pair_from_batch(content: str) -> Optional[Dict[str, str]]:
-    """Extract the first sync pair (source -> dest) from batch file comments."""
+    """Extract the first sync pair (source -> dest) and PairID from batch file comments."""
     # Look for lines like: # /source/path -> remote:dest/path
+    # And: # PairID: <uuid>
     pattern = r'^#\s*(.+?)\s*->\s*(.+?)\s*$'
+    id_pattern = r'^#\s*PairID:\s*(.+?)\s*$'
+    
+    pair_info = {}
     for line in content.split('\n'):
-        match = re.match(pattern, line.strip())
-        if match:
-            source = match.group(1).strip()
-            dest = match.group(2).strip()
-            # Skip header comments
-            if source and dest and not source.startswith('ISync') and not source.startswith('Generated'):
-                return {"source": source, "dest": dest}
-    return None
+        line = line.strip()
+        
+        # Match ID (first one wins)
+        id_match = re.match(id_pattern, line)
+        if id_match and "id" not in pair_info:
+            pair_info["id"] = id_match.group(1).strip()
+            
+        # Match Source -> Dest (first valid one wins)
+        match = re.match(pattern, line)
+        if match and "source" not in pair_info:
+            s, d = match.group(1).strip(), match.group(2).strip()
+            # Basic validation to skip common headers
+            if s and d and not s.startswith('ISync') and not s.startswith('Generated') and not s.startswith('Regenerated') and not s.startswith('PairID'):
+                pair_info["source"] = s
+                pair_info["dest"] = d
+        
+    return pair_info if pair_info else None
 
 
 def generate_batch_filename(source: str, dest: str) -> str:
@@ -103,7 +117,7 @@ def generate_batch_filename(source: str, dest: str) -> str:
     return f"batch_{source_base}_{dest_remote}.sh"
 
 
-def get_batch_info_for_pair(source: str, dest: str) -> Optional[Dict]:
+def get_batch_info_for_pair(source: str, dest: str, pair_id: Optional[str] = None) -> Optional[Dict]:
     """Get batch file info if it exists for this sync pair (matches by content, not filename)."""
     batch_dir = get_batch_dir()
     default_filename = generate_batch_filename(source, dest)
@@ -111,7 +125,7 @@ def get_batch_info_for_pair(source: str, dest: str) -> Optional[Dict]:
     if not os.path.exists(batch_dir):
         return {"filename": default_filename, "exists": False}
     
-    # Scan all batch files and match by content (source -> dest comment)
+    # Scan all batch files and match by PairID (if provided) or content (source -> dest comment)
     for filename in os.listdir(batch_dir):
         if filename.startswith('.'):
             continue
@@ -121,17 +135,54 @@ def get_batch_info_for_pair(source: str, dest: str) -> Optional[Dict]:
         try:
             with open(filepath, 'r') as f:
                 content = f.read()
-            pair_in_file = extract_sync_pair_from_batch(content)
-            if pair_in_file and pair_in_file.get('source') == source and pair_in_file.get('dest') == dest:
-                # Found a match by content
+            pair_info = extract_sync_pair_from_batch(content)
+            if not pair_info:
+                continue
+                
+            match = False
+            if pair_id and pair_info.get('id') == pair_id:
+                match = True
+                logger.debug(f"[jobs] Matched {filename} by PairID: {pair_id}")
+            elif pair_info.get('source') == source and pair_info.get('dest') == dest:
+                match = True
+                logger.debug(f"[jobs] Matched {filename} by paths: {source} -> {dest}")
+                
+            if match:
+                # Found a match
                 stat = os.stat(filepath)
                 user_count = len(extract_users_from_batch(content))
+                
+                # Auto-migration: If matched by path but file has no ID, add it
+                if match and pair_id and not pair_info.get('id'):
+                    try:
+                        # Append PairID comment to the header area (after shebang)
+                        lines = content.split('\n')
+                        for idx, line in enumerate(lines):
+                            if line.startswith('#') and not line.startswith('#!'):
+                                lines.insert(idx, f"# PairID: {pair_id}")
+                                break
+                        else:
+                            # If no comments found, insert after first line
+                            lines.insert(1, f"# PairID: {pair_id}")
+                            
+                        with open(filepath, 'w') as f:
+                            f.write('\n'.join(lines))
+                        logger.info(f"[jobs] Auto-assigned PairID {pair_id} to batch {filename}")
+                    except Exception as e:
+                        logger.warning(f"[jobs] Failed to auto-assign PairID: {e}")
+                
+                # Check if it needs update (paths changed)
+                needs_update = False
+                if pair_id and (pair_info.get('source') != source or pair_info.get('dest') != dest):
+                    needs_update = True
+                    
                 return {
                     "filename": filename,
                     "size": stat.st_size,
                     "modified": stat.st_mtime,
                     "user_count": user_count,
-                    "exists": True
+                    "exists": True,
+                    "needs_update": needs_update
                 }
         except Exception:
             continue
@@ -151,9 +202,11 @@ def get_sync_pairs_with_batches():
     for i, pair in enumerate(pairs):
         source = pair.get('source', '')
         dest = pair.get('dest', '')
-        batch_info = get_batch_info_for_pair(source, dest)
+        pair_id = pair.get('id')
+        batch_info = get_batch_info_for_pair(source, dest, pair_id)
         result.append({
             "index": i,
+            "id": pair_id,
             "source": source,
             "dest": dest,
             "domain_reference": pair.get('domain_reference', ''),
@@ -187,8 +240,8 @@ def bulk_generate_batches(req: BulkGenerateRequest):
         source = pair.get('source', '')
         dest = pair.get('dest', '')
         
-        # Check for existing batch file to preserve filename
-        batch_info = get_batch_info_for_pair(source, dest)
+        # Check for existing batch file by ID (or paths) to preserve filename
+        batch_info = get_batch_info_for_pair(source, dest, pair.get('id'))
         filename = batch_info.get('filename', generate_batch_filename(source, dest))
         
         try:
@@ -214,6 +267,8 @@ def bulk_generate_batches(req: BulkGenerateRequest):
                 f.write(f"# ISync Batch Commands\n")
                 f.write(f"# Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
                 f.write(f"# Random Order: {req.random_order}\n")
+                if pair.get('id'):
+                    f.write(f"# PairID: {pair.get('id')}\n")
                 f.write("#\n")
                 f.write(f"# {source} -> {dest}\n")
                 f.write("#" + "=" * 60 + "\n\n")
@@ -459,14 +514,22 @@ def list_saved_batches():
                     content = file.read()
                 user_count = len(extract_users_from_batch(content))
                 sync_pair = extract_sync_pair_from_batch(content)
+                
+                # Extract random_order
+                random_order = False
+                if "# Random Order: True" in content:
+                    random_order = True
             except Exception:
+                random_order = False
                 pass  # If we can't read, just leave defaults
+            
             files.append({
                 "name": f,
                 "size": stat.st_size,
                 "modified": stat.st_mtime,
                 "user_count": user_count,
-                "sync_pair": sync_pair
+                "sync_pair": sync_pair,
+                "random_order": random_order
             })
     
     files.sort(key=lambda x: x['modified'], reverse=True)
@@ -791,61 +854,131 @@ def update_batch_content(filename: str, req: UpdateBatchContentRequest):
 
 class RegenerateBatchRequest(BaseModel):
     random_order: bool = False
+    selected_users: Optional[List[str]] = None
+    all_users: bool = False
+    pair_id: Optional[str] = None
 
 
 @router.post("/manual/batch/{filename}/regenerate")
 def regenerate_batch(filename: str, req: RegenerateBatchRequest):
-    """Regenerate a batch file with current users."""
+    """Regenerate a batch file with specific users or latest sync pair paths."""
     batch_dir = get_batch_dir()
     filepath = os.path.join(batch_dir, filename)
     
     if not os.path.exists(filepath):
+        logger.error(f"[jobs] Batch file not found: {filepath}")
         raise HTTPException(status_code=404, detail="Batch file not found")
-    
+        
     try:
         with open(filepath, 'r') as f:
             content = f.read()
+            
+        # 1. Extract what we have
+        current_pair_info = extract_sync_pair_from_batch(content) or {}
         
-        # Extract sync pair from existing batch
-        sync_pair = extract_sync_pair_from_batch(content)
-        if not sync_pair:
-            raise HTTPException(status_code=400, detail="Could not determine sync pair from batch file")
+        # Priority: req.pair_id -> extracted ID -> extracted paths
+        pair_id = req.pair_id or current_pair_info.get('id')
+        current_users = extract_users_from_batch(content)
         
-        # Generate new commands with current users
+        # 2. Find the latest Sync Pair info from store
+        # Start with what we parsed from the file
+        latest_pair = {
+            "source": current_pair_info.get('source', ''), 
+            "dest": current_pair_info.get('dest', '')
+        }
+        domain_ref = ""
+        
+        if pair_id:
+            store = get_store()
+            target_pair = None
+            for p in store.get_sync_pairs():
+                if p.get('id') == pair_id:
+                    target_pair = p
+                    break
+            
+            if target_pair:
+                latest_pair["source"] = target_pair.get('source')
+                latest_pair["dest"] = target_pair.get('dest')
+                domain_ref = target_pair.get('domain_reference', '')
+                logger.info(f"[jobs] Using latest store info for {filename} (PairID: {pair_id}): {latest_pair['source']} -> {latest_pair['dest']}")
+            else:
+                logger.warning(f"[jobs] PairID {pair_id} passed/found but not in current store!")
+        
+        if not latest_pair["source"] or not latest_pair["dest"]:
+            logger.error(f"[jobs] Could not determine paths for regeneration of {filename}")
+            raise HTTPException(status_code=400, detail="Could not determine sync paths. Is the file header missing or Sync Pair deleted?")
+
+        latest_pair["domain_reference"] = domain_ref
+        
+        # 3. Determine User Set
+        user_list = current_users # Default: Keep existing
+        if req.selected_users is not None and len(req.selected_users) > 0:
+            user_list = req.selected_users
+            logger.info(f"[jobs] Regenerating {filename} with {len(user_list)} selected users")
+        elif req.all_users:
+            user_list = None # Engine will fetch all
+            logger.info(f"[jobs] Regenerating {filename} with all domain users")
+        else:
+            # Re-verify we found users in the old file
+            if not user_list:
+                 logger.warning(f"[jobs] No users found in {filename} to preserve!")
+            logger.info(f"[jobs] Regenerating {filename} while keeping existing {len(user_list) if user_list else 0} users")
+
+        # 4. Generate Fresh Commands
         engine = get_engine()
-        pair_dict = {"source": sync_pair["source"], "dest": sync_pair["dest"]}
-        
         new_commands = engine.generate_batch_command(
-            pair_dict,
+            latest_pair,
             dry_run=False,
-            user_list=None,  # Use current users from domain
+            user_list=user_list,
             random_order=req.random_order
         )
         
         if new_commands.startswith("Error"):
+            logger.error(f"[jobs] Engine error during regeneration: {new_commands}")
             raise HTTPException(status_code=400, detail=new_commands)
+            
+        # 5. Build Final Content
+        # We construct a clean new header and append the commands
+        from datetime import datetime
+        now_str = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
         
-        # Rewrite the file
+        header_lines = [
+            "#!/bin/bash",
+            "# ISync Batch Commands",
+            f"# Regenerated: {now_str}",
+            f"# Random Order: {req.random_order}"
+        ]
+        if pair_id:
+            header_lines.append(f"# PairID: {pair_id}")
+        header_lines.append("#")
+        header_lines.append(f"# {latest_pair['source']} -> {latest_pair['dest']}")
+        header_lines.append("#" + "=" * 60)
+        header_lines.append("")
+        
+        new_content = "\n".join(header_lines) + new_commands
+        if not new_content.endswith("\n"):
+            new_content += "\n"
+
+        # 6. Verify and Write
+        if not new_commands.strip() and user_list:
+            logger.error(f"[jobs] Regeneration produced NO commands for file {filename} despite having a user list!")
+            raise HTTPException(status_code=500, detail="Generated command list is empty. Internal engine error?")
+
         with open(filepath, 'w') as f:
-            f.write("#!/bin/bash\n")
-            f.write(f"# ISync Batch Commands\n")
-            f.write(f"# Regenerated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
-            f.write(f"# Random Order: {req.random_order}\n")
-            f.write("#\n")
-            f.write(f"# {sync_pair['source']} -> {sync_pair['dest']}\n")
-            f.write("#" + "=" * 60 + "\n\n")
-            f.write(new_commands)
-            f.write("\n")
+            f.write(new_content)
+            f.flush()
+            os.fsync(f.fileno())
+            
+        logger.info(f"[jobs] Successfully updated {filename} ({len(new_content)} bytes). Paths: {latest_pair['source']} -> {latest_pair['dest']}")
         
-        # Get updated user count
         new_user_count = len(extract_users_from_batch(new_commands))
         
         return {
             "status": "ok",
             "filename": filename,
-            "sync_pair": sync_pair,
+            "sync_pair": {"id": pair_id, "source": latest_pair['source'], "dest": latest_pair['dest']},
             "user_count": new_user_count,
-            "random_order": req.random_order
+            "bytes_written": len(new_content)
         }
     except HTTPException:
         raise

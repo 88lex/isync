@@ -51,6 +51,7 @@ export interface Config {
 }
 
 export interface SyncPair {
+    id?: string;
     source: string;
     dest: string;
     domain_reference?: string;
@@ -129,13 +130,13 @@ export const createSyncPair = async (pair: SyncPair): Promise<{ status: string; 
     return res.data;
 };
 
-export const updateSyncPair = async (index: number, pair: SyncPair): Promise<{ status: string; pair: SyncPair }> => {
-    const res = await axios.put(`${API_BASE}/sync-pairs/${index}`, pair);
+export const updateSyncPair = async (id: string, pair: SyncPair): Promise<{ status: string; pair: SyncPair }> => {
+    const res = await axios.put(`${API_BASE}/sync-pairs/${id}`, pair);
     return res.data;
 };
 
-export const deleteSyncPair = async (index: number): Promise<{ status: string; removed: SyncPair; remaining: number }> => {
-    const res = await axios.delete(`${API_BASE}/sync-pairs/${index}`);
+export const deleteSyncPair = async (id: string): Promise<{ status: string; removed: SyncPair; remaining: number }> => {
+    const res = await axios.delete(`${API_BASE}/sync-pairs/${id}`);
     return res.data;
 };
 
@@ -146,10 +147,12 @@ export interface BatchInfo {
     size?: number;
     modified?: number;
     user_count?: number;
+    needs_update?: boolean;
 }
 
 export interface SyncPairWithBatch {
     index: number;
+    id?: string;
     source: string;
     dest: string;
     domain_reference: string;
@@ -364,7 +367,8 @@ export interface BatchFile {
     size: number;
     modified: number;
     user_count?: number;
-    sync_pair?: { source: string; dest: string };
+    sync_pair?: { id?: string; source: string; dest: string };
+    random_order?: boolean;
 }
 
 export const saveBatch = async (req: SaveBatchRequest) => {
@@ -424,8 +428,13 @@ export const deleteBatchLocal = async (filename: string) => {
     return res.data;
 };
 
-export const regenerateBatch = async (filename: string, randomOrder: boolean) => {
-    const res = await axios.post(`${API_BASE}/manual/batch/${filename}/regenerate`, { random_order: randomOrder });
+export const regenerateBatch = async (filename: string, randomOrder: boolean, selectedUsers?: string[], allUsers: boolean = false, pairId?: string) => {
+    const res = await axios.post(`${API_BASE}/manual/batch/${filename}/regenerate`, {
+        random_order: randomOrder,
+        selected_users: selectedUsers && selectedUsers.length > 0 ? selectedUsers : undefined,
+        all_users: allUsers,
+        pair_id: pairId
+    });
     return res.data;
 };
 

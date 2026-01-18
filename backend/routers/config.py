@@ -26,6 +26,7 @@ class DomainConfig(BaseModel):
 
 
 class SyncPair(BaseModel):
+    id: Optional[str] = None
     source: str
     dest: str
     domain_reference: Optional[str] = ""
@@ -39,9 +40,13 @@ class SyncListUpdate(BaseModel):
 
 
 class SyncPairCreate(BaseModel):
+    id: Optional[str] = None
     source: str
     dest: str
     domain_reference: Optional[str] = None
+    
+    class Config:
+        extra = "ignore"
 
 
 class ProfileRequest(BaseModel):
@@ -145,7 +150,10 @@ def create_sync_pair(pair: SyncPairCreate):
         if existing.get('source') == pair.source and existing.get('dest') == pair.dest:
             raise HTTPException(status_code=409, detail="Sync pair already exists")
     
+    import uuid
     new_pair = pair.dict()
+    if not new_pair.get('id'):
+        new_pair['id'] = str(uuid.uuid4())
     pairs.append(new_pair)
     
     success = store.save_synclist(pairs)
@@ -155,37 +163,80 @@ def create_sync_pair(pair: SyncPairCreate):
     return {"status": "ok", "pair": new_pair, "total": len(pairs)}
 
 
-@router.put("/sync-pairs/{index}")
-def update_sync_pair(index: int, pair: SyncPairCreate):
-    """Update an existing sync pair by index."""
+@router.put("/sync-pairs/{pair_id}")
+def update_sync_pair(pair_id: str, pair: SyncPairCreate):
+    """Update an existing sync pair by ID."""
     store = get_store()
     pairs = store.get_sync_pairs()
     
-    if index < 0 or index >= len(pairs):
+    found_idx = -1
+    for i, p in enumerate(pairs):
+        if p.get('id') == pair_id:
+            found_idx = i
+            break
+            
+    if found_idx == -1:
+        # Fallback to index if pair_id is numeric (for backward compatibility during migration)
+        if pair_id.isdigit():
+            idx = int(pair_id)
+            if 0 <= idx < len(pairs):
+                found_idx = idx
+                
+    if found_idx == -1:
         raise HTTPException(status_code=404, detail="Sync pair not found")
     
-    pairs[index] = pair.dict()
+    # Merge new data into existing pair to preserve domain_reference etc.
+    old_pair = pairs[found_idx]
+    new_data = pair.dict(exclude_unset=True)
+    old_pair.update(new_data)
+    # Ensure ID doesn't change
+    old_pair['id'] = pair_id
+    
     success = store.save_synclist(pairs)
     if not success:
         raise HTTPException(status_code=500, detail="Failed to update sync pair")
     
-    return {"status": "ok", "pair": pairs[index]}
+    return {"status": "ok", "pair": pairs[found_idx]}
 
 
-@router.delete("/sync-pairs/{index}")
-def delete_sync_pair(index: int):
-    """Delete a sync pair by index."""
+@router.delete("/sync-pairs/{pair_id}")
+def delete_sync_pair(pair_id: str):
+    """Delete a sync pair by ID or index."""
+    logger.info(f"[config] Deleting sync pair with ID/Index: {pair_id}")
     store = get_store()
     pairs = store.get_sync_pairs()
     
-    if index < 0 or index >= len(pairs):
+    found_idx = -1
+    # 1. Search by UUID
+    for i, p in enumerate(pairs):
+        if p.get('id') == pair_id:
+            found_idx = i
+            break
+            
+    # 2. Search by string match for other IDs
+    if found_idx == -1:
+        for i, p in enumerate(pairs):
+            if str(p.get('id')) == str(pair_id):
+                found_idx = i
+                break
+                
+    # 3. Fallback to index if pair_id is numeric
+    if found_idx == -1 and pair_id.isdigit():
+        idx = int(pair_id)
+        if 0 <= idx < len(pairs):
+            found_idx = idx
+            logger.info(f"[config] Using index fallback for deletion: {idx}")
+                
+    if found_idx == -1:
+        logger.warning(f"[config] Sync pair not found for deletion: {pair_id}")
         raise HTTPException(status_code=404, detail="Sync pair not found")
     
-    removed = pairs.pop(index)
+    removed = pairs.pop(found_idx)
     success = store.save_synclist(pairs)
     if not success:
-        raise HTTPException(status_code=500, detail="Failed to delete sync pair")
+        raise HTTPException(status_code=500, detail="Failed to delete sync pair from disk")
     
+    logger.info(f"[config] Successfully deleted sync pair: {removed.get('source')} -> {removed.get('dest')}")
     return {"status": "ok", "removed": removed, "remaining": len(pairs)}
 
 

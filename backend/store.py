@@ -3,7 +3,7 @@ import os
 import shutil
 import logging
 import json
-from threading import Lock
+from threading import RLock
 from datetime import datetime
 from typing import Optional, Dict, Any, List
 
@@ -37,7 +37,7 @@ class ConfigStore:
     - Graceful degradation with defaults
     """
     _instance = None
-    _lock = Lock()
+    _lock = RLock()
 
     def __new__(cls):
         if cls._instance is None:
@@ -157,7 +157,22 @@ class ConfigStore:
                 logger.warning("[ConfigStore] sync_pairs is not a list, using empty")
                 pairs = []
             
+            # Ensure all pairs have an ID
+            import uuid
+            modified = False
+            for pair in pairs:
+                if 'id' not in pair:
+                    pair['id'] = str(uuid.uuid4())
+                    modified = True
+            
             self.sync_pairs = pairs
+            if modified:
+                logger.info("[ConfigStore] Assigned IDs to sync pairs")
+                # We don't save immediately here to avoid write loop during load, 
+                # but it will be saved next time synclist is modified.
+                # Actually, better to save it once to persist IDs.
+                self.save_synclist()
+
             logger.info(f"[ConfigStore] Loaded {len(self.sync_pairs)} sync pairs")
             
         except Exception as e:

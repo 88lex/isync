@@ -3,7 +3,7 @@ import { Terminal, Copy, Play, FileCode, Zap, Save, FolderOpen, Users, BarChart3
 import {
     fetchConfig, fetchSyncList, generateBatch, startJob, saveBatch, listSavedBatches,
     getBatchFile, SyncPair, Config, BatchFile, getBatchUsers, compareBatchUsers,
-    BatchUsersResponse, BatchCompareResponse, deleteBatchFile, deleteSyncPair,
+    BatchUsersResponse, BatchCompareResponse, deleteBatchFile, deleteSyncPair, updateSyncPair,
     fetchSSHServers, SSHServer, listServerFolders, listServerRemotes, listRemotePath,
     RemoteFolder, RcloneRemote, createSyncPair, generateRandomBatch, getUserBatchSummary,
     RandomBatchResponse, UserSummaryResponse, listBatchGroups, createBatchGroup,
@@ -132,6 +132,7 @@ const BatchGenerator: React.FC<BatchGeneratorProps> = ({ activeSection }) => {
     // Flexible Sync Pair Wizard State
     const [showWizard, setShowWizard] = useState(false);
     const [wizardStep, setWizardStep] = useState(1);
+    const [editingPair, setEditingPair] = useState<SyncPairWithBatch | null>(null);
 
     // Source
     const [srcType, setSrcType] = useState<'local' | 'ssh' | 'rclone'>('local');
@@ -158,13 +159,41 @@ const BatchGenerator: React.FC<BatchGeneratorProps> = ({ activeSection }) => {
     const [browseItems, setBrowseItems] = useState<string[]>([]);
 
     // Random Batch Generation State
-    const [randomUserCount, setRandomUserCount] = useState(10);
-    const [selectedDomains, setSelectedDomains] = useState<Set<string>>(new Set());
-    const [useRandomMode, setUseRandomMode] = useState(false);
+    // Random Batch Generation State
+    const [randomUserCount, setRandomUserCount] = useState(() => {
+        const saved = localStorage.getItem('isync_bg_random_count');
+        return saved ? parseInt(saved) : 10;
+    });
+
+    const [selectedDomains, setSelectedDomains] = useState<Set<string>>(() => {
+        try {
+            const saved = localStorage.getItem('isync_bg_domains');
+            return saved ? new Set(JSON.parse(saved)) : new Set();
+        } catch { return new Set(); }
+    });
+
+    // Persist Settings
+    useEffect(() => {
+        localStorage.setItem('isync_bg_random_count', String(randomUserCount));
+    }, [randomUserCount]);
+
+    useEffect(() => {
+        localStorage.setItem('isync_bg_domains', JSON.stringify([...selectedDomains]));
+    }, [selectedDomains]);
+
+    const [useRandomMode, setUseRandomMode] = useState(true); // Always true now for simplified UI
     const [randomBatchResult, setRandomBatchResult] = useState<RandomBatchResponse | null>(null);
 
+
+
     // Random Order (shuffle) - separate from random user selection
-    const [randomOrder, setRandomOrder] = useState(false);
+    const [randomOrder, setRandomOrder] = useState(() => {
+        return localStorage.getItem('isync_random_order') === 'true';
+    });
+
+    useEffect(() => {
+        localStorage.setItem('isync_random_order', String(randomOrder));
+    }, [randomOrder]);
 
     // Get ALL users count from session storage (set by User Management page)
     const allUsersCount = (() => {
@@ -184,7 +213,16 @@ const BatchGenerator: React.FC<BatchGeneratorProps> = ({ activeSection }) => {
     const [loadingUserSummary, setLoadingUserSummary] = useState(false);
 
     // Collapsible Sections State
-    const [collapsedSections, setCollapsedSections] = useState<Set<string>>(new Set());
+    const [collapsedSections, setCollapsedSections] = useState<Set<string>>(() => {
+        try {
+            const saved = localStorage.getItem('isync_bg_collapsed');
+            return saved ? new Set(JSON.parse(saved)) : new Set();
+        } catch { return new Set(); }
+    });
+
+    useEffect(() => {
+        localStorage.setItem('isync_bg_collapsed', JSON.stringify([...collapsedSections]));
+    }, [collapsedSections]);
 
     const toggleSection = (section: string) => {
         const next = new Set(collapsedSections);
@@ -205,6 +243,18 @@ const BatchGenerator: React.FC<BatchGeneratorProps> = ({ activeSection }) => {
         }
         setSelectedDomains(next);
     };
+
+    // Auto-select all domains if none selected on load
+    useEffect(() => {
+        if (config.domains && config.domains.length > 0 && selectedDomains.size === 0) {
+            // Check if we have anything in local storage, if not, select all
+            const saved = localStorage.getItem('isync_bg_domains');
+            if (!saved) {
+                const all = new Set(config.domains.map(d => d.domain_name));
+                setSelectedDomains(all);
+            }
+        }
+    }, [config.domains]);
 
     // Batch Groups State
     const [batchGroups, setBatchGroups] = useState<BatchGroup[]>([]);
@@ -533,7 +583,8 @@ const BatchGenerator: React.FC<BatchGeneratorProps> = ({ activeSection }) => {
             alert(`✅ Saved ${result.commands_saved} commands to ${result.file}`);
             setShowSaveDialog(false);
             setSaveFilename('');
-            loadSavedBatches();
+            await loadSavedBatches(); // Refresh saved batches list
+            await loadData(); // Refresh sync pair linkage
         } catch (e: any) {
             alert(`Failed to save: ${e.message}`);
         } finally {
@@ -735,21 +786,89 @@ const BatchGenerator: React.FC<BatchGeneratorProps> = ({ activeSection }) => {
         }
     };
 
-    const handleDeleteSyncPair = async (index: number) => {
-        const pair = pairs[index];
-        if (!confirm(`Delete sync pair?\n${pair.source} → ${pair.dest}`)) return;
+    const handleDeleteSyncPair = async (id: string, source: string, dest: string) => {
+        if (!confirm(`Delete sync pair?\n${source} → ${dest}`)) return;
         try {
-            await deleteSyncPair(index);
-            const p = await fetchSyncList();
-            setPairs(p);
+            await deleteSyncPair(id);
+            await loadData();
         } catch (e: any) {
             alert(`Failed to delete: ${e.message}`);
         }
     };
 
+    const handleEditSyncPair = (p: SyncPairWithBatch) => {
+        setEditingPair(p);
+
+        // Parse source
+        let sType: 'local' | 'ssh' | 'rclone' = 'local';
+        let sServer = 'local';
+        let sPath = p.source;
+        let sRemote = '';
+
+        // Parsing heuristic for paths (e.g., host:path or remote:path)
+        if (p.source.includes(':')) {
+            const parts = p.source.split(':');
+            const hostOrRemote = parts[0];
+            const rest = parts.slice(1).join(':');
+
+            // Check if it's an SSH server alias, host, or ID
+            const isSSH = sshServers.some(s => s.alias === hostOrRemote || s.host === hostOrRemote || s.id === hostOrRemote);
+            if (isSSH) {
+                sType = 'ssh';
+                const srv = sshServers.find(s => s.alias === hostOrRemote || s.host === hostOrRemote || s.id === hostOrRemote);
+                sServer = srv?.id || hostOrRemote;
+                sPath = rest;
+            } else {
+                sType = 'rclone';
+                sRemote = hostOrRemote;
+                sPath = rest;
+            }
+        }
+
+        setSrcType(sType);
+        setSrcServerId(sServer);
+        setSrcPath(sPath);
+        setSrcRcloneRemote(sRemote);
+
+        // Parse dest
+        let dType: 'local' | 'ssh' | 'rclone' = 'local';
+        let dServer = 'local';
+        let dPath = p.dest;
+        let dRemote = '';
+
+        if (p.dest.includes(':')) {
+            const parts = p.dest.split(':');
+            const hostOrRemote = parts[0];
+            const rest = parts.slice(1).join(':');
+
+            const isSSH = sshServers.some(s => s.alias === hostOrRemote || s.host === hostOrRemote || s.id === hostOrRemote);
+            if (isSSH) {
+                dType = 'ssh';
+                const srv = sshServers.find(s => s.id === hostOrRemote || s.alias === hostOrRemote || s.host === hostOrRemote);
+                dServer = srv?.id || hostOrRemote;
+                dPath = rest;
+            } else {
+                dType = 'rclone';
+                dRemote = hostOrRemote;
+                dPath = rest;
+            }
+        }
+
+        setDestType(dType);
+        setDestServerId(dServer);
+        setDestPath(dPath);
+        setDestRcloneRemote(dRemote);
+
+        setSrcVerified(true);
+        setDestVerified(true);
+        setWizardStep(1);
+        setShowWizard(true);
+    };
+
     const openWizard = async () => {
         setShowWizard(true);
         setWizardStep(1);
+        setEditingPair(null);
 
         // Reset State
         setSrcType('local'); setSrcServerId('local'); setSrcPath(''); setSrcRcloneRemote('');
@@ -819,12 +938,78 @@ const BatchGenerator: React.FC<BatchGeneratorProps> = ({ activeSection }) => {
 
         setWizardLoading(true);
         try {
-            await createSyncPair({ source, dest });
-            alert("Sync Pair Created! Don't forget to Generate Batch.");
+            if (editingPair) {
+                const pairId = editingPair.id || String(editingPair.index); // Fallback to index if no ID
+                await updateSyncPair(pairId, {
+                    id: editingPair.id,
+                    source,
+                    dest
+                });
+                alert("Sync Pair Updated!");
+
+                // If this pair has a batch, find its current settings
+                if (editingPair.batch.exists && editingPair.batch.filename) {
+                    // Try to find the SavedBatch to get its options
+                    const existingBatch = savedBatches.find(b => b.name === editingPair.batch.filename);
+                    const oldRandom = existingBatch?.random_order ?? false;
+                    const oldUserCount = existingBatch?.user_count ?? 0;
+
+                    const useSelected = selectedUsers.size > 0;
+
+                    let useRandom = oldRandom;
+                    let useUsers = undefined; // undefined = keep existing file users
+                    let updateMode = "existing options";
+
+                    // Simple logic:
+                    // If the user has explicitly selected users in the UI right now, we assume they want to use THOSE.
+                    // If not, we assume they want to keep the batch file's existing user list.
+
+                    if (useSelected) {
+                        updateMode = `Use currently selected ${selectedUsers.size} users`;
+                        useUsers = Array.from(selectedUsers);
+                        useRandom = randomOrder; // Use checkbox from UI
+                    } else {
+                        updateMode = `Keep existing ${oldUserCount} users`;
+                        // Keep old random setting unless they changed it in UI? 
+                        // Let's bias towards the UI checkbox if it differs? 
+                        // Actually, user requested: "display these options... let the user modify"
+                        // For a simple prompt/confirm flow, we can't easily show a dialog. 
+                        // Best effort: Assume keep existing unless they selected new users.
+                    }
+
+                    const promptMsg = `The sync pair paths have changed.\n\n` +
+                        `Update batch file: ${editingPair.batch.filename}?\n` +
+                        `Mode: ${updateMode}\n` +
+                        `Random Order: ${useUsers ? randomOrder : oldRandom} (Old: ${oldRandom})\n\n` +
+                        `Click OK to update with these settings.`;
+
+                    if (confirm(promptMsg)) {
+                        try {
+                            await regenerateBatch(
+                                editingPair.batch.filename,
+                                useUsers ? randomOrder : oldRandom,
+                                useUsers,
+                                false,
+                                editingPair.id
+                            );
+                            alert(`Batch ${editingPair.batch.filename} updated successfully.`);
+                            // Refresh data to show updated batch info immediately
+                            await loadData();
+                            await loadSavedBatches();
+                        } catch (re: any) {
+                            alert(`Failed to update batch: ${re.message}`);
+                        }
+                    }
+                }
+            } else {
+                await createSyncPair({ source, dest });
+                alert("Sync Pair Created! Don't forget to Generate Batch.");
+            }
             await loadData();
             setShowWizard(false);
+            setEditingPair(null);
         } catch (e: any) {
-            alert(`Failed to create pair: ${e.message}`);
+            alert(`Failed to save pair: ${e.response?.data?.detail || e.message}`);
         } finally {
             setWizardLoading(false);
         }
@@ -882,28 +1067,9 @@ const BatchGenerator: React.FC<BatchGeneratorProps> = ({ activeSection }) => {
 
                     {/* User Selection Mode */}
                     <div className="bg-zinc-950 border border-zinc-800 rounded-lg p-4 mb-6">
-                        {/* Mode Toggle */}
-                        <div className="flex items-center justify-between mb-4">
-                            <div className="flex items-center gap-4">
-                                <button
-                                    onClick={() => setUseRandomMode(false)}
-                                    className={`px-3 py-1.5 rounded text-sm font-medium transition ${!useRandomMode
-                                        ? 'bg-indigo-600 text-white'
-                                        : 'bg-zinc-800 text-zinc-400 hover:text-zinc-200'
-                                        }`}
-                                >
-                                    <Users size={14} className="inline mr-1" /> Manual Selection
-                                </button>
-                                <button
-                                    onClick={() => setUseRandomMode(true)}
-                                    className={`px-3 py-1.5 rounded text-sm font-medium transition ${useRandomMode
-                                        ? 'bg-purple-600 text-white'
-                                        : 'bg-zinc-800 text-zinc-400 hover:text-zinc-200'
-                                        }`}
-                                >
-                                    <Shuffle size={14} className="inline mr-1" /> Random Users
-                                </button>
-                            </div>
+                        {/* Simplified Header - No Mode Toggles */}
+                        <div className="flex items-center justify-between">
+                            <h3 className="text-sm font-semibold text-zinc-300">Generation Settings</h3>
                             <button
                                 onClick={loadUserSummary}
                                 disabled={loadingUserSummary}
@@ -913,96 +1079,105 @@ const BatchGenerator: React.FC<BatchGeneratorProps> = ({ activeSection }) => {
                             </button>
                         </div>
 
-                        {/* Manual Mode Info */}
-                        {!useRandomMode && (
-                            <div className="flex items-center gap-3">
-                                <div className={`w-3 h-3 rounded-full ${selectedUsers.size > 0 ? 'bg-emerald-500' : 'bg-zinc-600'}`}></div>
-                                <span className="text-sm text-zinc-300">
-                                    {selectedUsers.size > 0 ? (
-                                        <>Generating for <span className="text-indigo-400 font-bold">{selectedUsers.size} selected users</span> from User Management</>
-                                    ) : (
-                                        <>Generating for <span className="text-zinc-400">ALL users{allUsersCount > 0 ? ` (${allUsersCount})` : ''}</span> in source</>
-                                    )}
-                                </span>
-                                {/* Random Order Toggle */}
-                                <label className="flex items-center gap-2 ml-auto cursor-pointer">
-                                    <input
-                                        type="checkbox"
-                                        checked={randomOrder}
-                                        onChange={(e) => setRandomOrder(e.target.checked)}
-                                        className="w-4 h-4 rounded border-zinc-600 bg-zinc-800 text-amber-500 focus:ring-amber-500"
-                                    />
-                                    <span className="text-sm text-zinc-400"><Shuffle size={14} className="inline mr-1" />Random Order</span>
-                                </label>
-                            </div>
-                        )}
-
-                        {/* Random Mode Controls */}
-                        {useRandomMode && (
-                            <div className="space-y-4">
-                                <div className="flex items-center gap-4">
-                                    <div>
-                                        <label className="block text-xs text-zinc-500 mb-1">User Count</label>
-                                        <input
-                                            type="number"
-                                            min="1"
-                                            max="100"
-                                            value={randomUserCount}
-                                            onChange={(e) => setRandomUserCount(parseInt(e.target.value) || 1)}
-                                            className="w-20 bg-zinc-800 border border-zinc-700 rounded px-3 py-1.5 text-white text-sm focus:outline-none focus:border-purple-500"
-                                        />
-                                    </div>
-                                    <div className="flex-1">
-                                        <label className="block text-xs text-zinc-500 mb-1">Select Domains</label>
-                                        <div className="flex flex-wrap gap-2">
-                                            {config.domains?.map((d) => (
-                                                <button
-                                                    key={d.domain_name}
-                                                    onClick={() => toggleDomainSelection(d.domain_name)}
-                                                    className={`px-3 py-1 rounded text-xs font-medium transition ${selectedDomains.has(d.domain_name)
-                                                        ? 'bg-purple-600 text-white'
-                                                        : 'bg-zinc-800 text-zinc-400 hover:bg-zinc-700'
-                                                        }`}
-                                                >
-                                                    {d.domain_name}
-                                                </button>
-                                            ))}
-                                            {(!config.domains || config.domains.length === 0) && (
-                                                <span className="text-xs text-zinc-500 italic">No domains configured</span>
-                                            )}
-                                        </div>
-                                    </div>
-                                </div>
+                        {/* Unified Controls */}
+                        <div className="space-y-4">
+                            <div className="flex flex-col gap-4">
                                 <div className="flex items-center justify-between">
-                                    <span className="text-xs text-zinc-500">
-                                        Will select <span className="text-purple-400 font-bold">{randomUserCount}</span> random users from <span className="text-purple-400 font-bold">{selectedDomains.size}</span> domain(s)
-                                    </span>
-                                    <div className="flex gap-2">
-                                        <button
-                                            onClick={() => generateRandomBatchHandler(true)}
-                                            disabled={batchLoading || selectedDomains.size === 0}
-                                            className="px-3 py-1.5 bg-zinc-700 hover:bg-zinc-600 disabled:opacity-50 rounded text-amber-400 text-xs font-medium transition"
-                                        >
-                                            <Zap size={12} className="inline mr-1" /> Dry Run
-                                        </button>
-                                        <button
-                                            onClick={() => generateRandomBatchHandler(false)}
-                                            disabled={batchLoading || selectedDomains.size === 0}
-                                            className="px-3 py-1.5 bg-purple-600 hover:bg-purple-500 disabled:opacity-50 rounded text-white text-xs font-medium transition"
-                                        >
-                                            <Shuffle size={12} className="inline mr-1" /> Generate Random
-                                        </button>
+                                    <div className="flex items-center gap-4">
+                                        <div>
+                                            <label className="block text-xs text-zinc-500 mb-1">User Count (0 for All)</label>
+                                            <input
+                                                type="number"
+                                                min="0"
+                                                max="5000"
+                                                value={randomUserCount}
+                                                onChange={(e) => setRandomUserCount(parseInt(e.target.value) || 0)}
+                                                className="w-20 bg-zinc-800 border border-zinc-700 rounded px-3 py-1.5 text-white text-sm focus:outline-none focus:border-purple-500"
+                                            />
+                                        </div>
+                                        {/* Random Order Toggle - Unified here */}
+                                        <label className="flex items-center gap-2 cursor-pointer mt-5">
+                                            <input
+                                                type="checkbox"
+                                                checked={randomOrder}
+                                                onChange={(e) => setRandomOrder(e.target.checked)}
+                                                className="w-4 h-4 rounded border-zinc-600 bg-zinc-800 text-amber-500 focus:ring-amber-500"
+                                            />
+                                            <span className="text-sm text-zinc-400"><Shuffle size={14} className="inline mr-1" />Random Order</span>
+                                        </label>
                                     </div>
                                 </div>
-                                {randomBatchResult && (
-                                    <div className="bg-purple-900/20 border border-purple-500/30 rounded p-3 mt-2">
-                                        <div className="text-xs text-purple-300">
-                                            Generated batch with <span className="font-bold">{randomBatchResult.user_count}</span> random users from: {randomBatchResult.domains_queried.join(', ')}
-                                        </div>
+
+                                <div className="flex-1">
+                                    <div className="flex items-center justify-between mb-1">
+                                        <label className="block text-xs text-zinc-500">Select Domains</label>
+                                        <button
+                                            onClick={() => {
+                                                const domains = config.domains || [];
+                                                if (selectedDomains.size === domains.length) {
+                                                    setSelectedDomains(new Set());
+                                                } else {
+                                                    setSelectedDomains(new Set(domains.map(d => d.domain_name)));
+                                                }
+                                            }}
+                                            className="text-xs text-indigo-400 hover:text-indigo-300"
+                                        >
+                                            {selectedDomains.size === (config.domains?.length || 0) ? 'Deselect All' : 'Select All'}
+                                        </button>
                                     </div>
-                                )}
+                                    <div className="flex flex-wrap gap-2">
+                                        {config.domains?.map((d) => (
+                                            <button
+                                                key={d.domain_name}
+                                                onClick={() => toggleDomainSelection(d.domain_name)}
+                                                className={`px-3 py-1 rounded text-xs font-medium transition ${selectedDomains.has(d.domain_name)
+                                                    ? 'bg-purple-600 text-white'
+                                                    : 'bg-zinc-800 text-zinc-400 hover:bg-zinc-700'
+                                                    }`}
+                                            >
+                                                {d.domain_name}
+                                            </button>
+                                        ))}
+                                        {(!config.domains || config.domains.length === 0) && (
+                                            <span className="text-xs text-zinc-500 italic">No domains configured</span>
+                                        )}
+                                    </div>
+                                </div>
                             </div>
-                        )}
+
+                            {/* Summary info */}
+                            <div className="flex items-center justify-between bg-zinc-800/50 p-2 rounded">
+                                <span className="text-xs text-zinc-400">
+                                    Generating for <span className="text-emerald-400 font-bold">{selectedDomains.size}</span> domains.
+                                    Limit: <span className="text-emerald-400 font-bold">{randomUserCount === 0 ? 'ALL' : randomUserCount}</span> users.
+                                    {selectedUsers.size > 0 && <span className="ml-2 text-indigo-400">(Overrides with {selectedUsers.size} manual selection if set)</span>}
+                                </span>
+
+                                <div className="flex gap-2">
+                                    <button
+                                        onClick={() => generateRandomBatchHandler(true)}
+                                        disabled={batchLoading || selectedDomains.size === 0}
+                                        className="px-3 py-1.5 bg-zinc-700 hover:bg-zinc-600 disabled:opacity-50 rounded text-amber-400 text-xs font-medium transition"
+                                    >
+                                        <Zap size={12} className="inline mr-1" /> Dry Run
+                                    </button>
+                                    <button
+                                        onClick={() => generateRandomBatchHandler(false)}
+                                        disabled={batchLoading || selectedDomains.size === 0}
+                                        className="px-3 py-1.5 bg-purple-600 hover:bg-purple-500 disabled:opacity-50 rounded text-white text-xs font-medium transition"
+                                    >
+                                        <Shuffle size={12} className="inline mr-1" /> Generate
+                                    </button>
+                                </div>
+                            </div>
+                            {randomBatchResult && (
+                                <div className="bg-purple-900/20 border border-purple-500/30 rounded p-3 mt-2">
+                                    <div className="text-xs text-purple-300">
+                                        Generated batch with <span className="font-bold">{randomBatchResult.user_count}</span> random users from: {randomBatchResult.domains_queried.join(', ')}
+                                    </div>
+                                </div>
+                            )}
+                        </div>
                     </div>
 
                     {/* Unified Sync Pairs + Batch Status */}
@@ -1064,10 +1239,14 @@ const BatchGenerator: React.FC<BatchGeneratorProps> = ({ activeSection }) => {
                                             <div className="flex items-center gap-2">
                                                 {p.batch.exists ? (
                                                     <>
-                                                        <span className="text-xs bg-emerald-500/20 text-emerald-400 px-1.5 py-0.5 rounded">
+                                                        <span className={`text-xs px-1.5 py-0.5 rounded flex items-center gap-1 ${p.batch.needs_update
+                                                            ? 'bg-amber-500/20 text-amber-400 border border-amber-500/30'
+                                                            : 'bg-emerald-500/20 text-emerald-400'
+                                                            }`}>
                                                             {p.batch.user_count || 0} users
+                                                            {p.batch.needs_update && <span title="Sync pair edited - Update Saved Batch"><Zap size={10} /></span>}
                                                         </span>
-                                                        <span className="text-xs text-zinc-500 truncate" title={p.batch.filename}>
+                                                        <span className={`text-xs truncate ${p.batch.needs_update ? 'text-amber-400/70 italic' : 'text-zinc-500'}`} title={p.batch.filename}>
                                                             {p.batch.filename}
                                                         </span>
                                                     </>
@@ -1076,13 +1255,53 @@ const BatchGenerator: React.FC<BatchGeneratorProps> = ({ activeSection }) => {
                                                 )}
                                             </div>
                                         </div>
-                                        <button
-                                            onClick={(e) => { e.stopPropagation(); handleDeleteSyncPair(p.index); }}
-                                            className="text-zinc-600 hover:text-red-400 opacity-0 group-hover:opacity-100 transition p-1 flex-shrink-0"
-                                            title="Delete sync pair"
-                                        >
-                                            <Trash2 size={14} />
-                                        </button>
+                                        <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition flex-shrink-0">
+                                            {p.batch.needs_update && p.batch.filename && (
+                                                <button
+                                                    onClick={async (e) => {
+                                                        e.stopPropagation();
+                                                        if (confirm(`Update ${p.batch.filename} with new paths?`)) {
+                                                            try {
+                                                                await regenerateBatch(
+                                                                    p.batch.filename!,
+                                                                    randomOrder,
+                                                                    undefined,
+                                                                    false,
+                                                                    p.id
+                                                                );
+                                                                await loadData();
+                                                            } catch (err: any) {
+                                                                alert(`Failed: ${err.message}`);
+                                                            }
+                                                        }
+                                                    }}
+                                                    className="text-amber-500 hover:text-amber-400 p-1"
+                                                    title="Regenerate batch with new paths"
+                                                >
+                                                    <Shuffle size={14} />
+                                                </button>
+                                            )}
+                                            <button
+                                                onClick={(e) => { e.stopPropagation(); handleEditSyncPair(p); }}
+                                                className="text-zinc-600 hover:text-cyan-400 p-1"
+                                                title="Edit sync pair"
+                                            >
+                                                <Edit2 size={14} />
+                                            </button>
+                                            <button
+                                                onClick={(e) => { e.stopPropagation(); handleDeleteSyncPair(p.id || String(p.index), p.source, p.dest); }}
+                                                className="text-zinc-600 hover:text-red-400 p-1"
+                                                title="Delete sync pair"
+                                            >
+                                                <Trash2 size={14} />
+                                            </button>
+                                        </div>
+                                        {p.batch.needs_update && (
+                                            <div className="absolute -top-1 -right-1 flex h-3 w-3">
+                                                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75"></span>
+                                                <span className="relative inline-flex rounded-full h-3 w-3 bg-amber-500"></span>
+                                            </div>
+                                        )}
                                     </div>
                                 )
                             })
@@ -1280,6 +1499,11 @@ const BatchGenerator: React.FC<BatchGeneratorProps> = ({ activeSection }) => {
                                             {f.user_count !== undefined && f.user_count > 0 && (
                                                 <span className="text-xs bg-indigo-500/20 text-indigo-400 px-1.5 py-0.5 rounded">{f.user_count} users</span>
                                             )}
+                                            {f.random_order && (
+                                                <span className="text-xs bg-amber-500/20 text-amber-400 px-1.5 py-0.5 rounded flex items-center gap-1" title="Random Order">
+                                                    <Shuffle size={10} /> Random
+                                                </span>
+                                            )}
                                             {f.sync_pair && (
                                                 <span className="text-xs text-zinc-500 truncate max-w-[200px]" title={`${f.sync_pair.source} → ${f.sync_pair.dest}`}>
                                                     {f.sync_pair.source.split('/').pop()} → {f.sync_pair.dest.split(':')[0]}
@@ -1297,14 +1521,41 @@ const BatchGenerator: React.FC<BatchGeneratorProps> = ({ activeSection }) => {
                                             </button>
                                             <button
                                                 onClick={async () => {
-                                                    if (!confirm(`Regenerate ${f.name} with current users?\n\nThis will overwrite the file with fresh commands.`)) return;
+                                                    const choice = prompt(
+                                                        `How would you like to regenerate ${f.name}?\n\n` +
+                                                        `1: Keep existing users in file (just update paths/logic)\n` +
+                                                        `2: Use currently selected ${selectedUsers.size} users from table\n` +
+                                                        `3: Refresh and use ALL users from domain\n\n` +
+                                                        `Enter 1, 2, or 3:`,
+                                                        "1"
+                                                    );
+
+                                                    if (!choice || !['1', '2', '3'].includes(choice)) return;
+
                                                     try {
                                                         setBatchOperationLoading(`regen-${f.name}`);
-                                                        await regenerateBatch(f.name, randomOrder);
+
+                                                        let sUsers: string[] | undefined = undefined;
+                                                        let allU = false;
+
+                                                        if (choice === '2') {
+                                                            if (selectedUsers.size === 0) {
+                                                                alert("No users selected in the table!");
+                                                                setBatchOperationLoading(null);
+                                                                return;
+                                                            }
+                                                            sUsers = Array.from(selectedUsers);
+                                                        } else if (choice === '3') {
+                                                            allU = true;
+                                                        }
+
+                                                        await regenerateBatch(f.name, randomOrder, sUsers, allU, f.sync_pair?.id);
                                                         await loadSavedBatches();
+
                                                         // Refresh content cache
                                                         const data = await getBatchFile(f.name);
                                                         setBatchContentCache(prev => ({ ...prev, [f.name]: data.content }));
+                                                        alert(`Batch ${f.name} regenerated successfully.`);
                                                     } catch (e: any) {
                                                         alert(`Regeneration failed: ${e.response?.data?.detail || e.message}`);
                                                     } finally {
@@ -1851,8 +2102,8 @@ const BatchGenerator: React.FC<BatchGeneratorProps> = ({ activeSection }) => {
                     <div className="bg-zinc-900 border border-zinc-700 rounded-xl p-6 w-full max-w-4xl shadow-2xl my-8">
                         <div className="flex items-center justify-between mb-6">
                             <h3 className="text-xl font-bold text-white flex items-center gap-2">
-                                <Shuffle size={24} className="text-emerald-400" />
-                                Create New Sync Pair
+                                <Shuffle size={24} className={editingPair !== null ? "text-cyan-400" : "text-emerald-400"} />
+                                {editingPair !== null ? 'Update Sync Pair' : 'Create New Sync Pair'}
                             </h3>
                             <button onClick={() => setShowWizard(false)} className="text-zinc-400 hover:text-white">
                                 <X size={24} />
@@ -1998,9 +2249,9 @@ const BatchGenerator: React.FC<BatchGeneratorProps> = ({ activeSection }) => {
                                 Cancel
                             </button>
                             <button onClick={handleCreateSyncPair} disabled={wizardLoading}
-                                className="px-5 py-2.5 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white rounded-lg text-sm font-bold transition flex items-center gap-2">
-                                <Plus size={18} />
-                                Create Sync Pair
+                                className={`px-5 py-2.5 disabled:opacity-50 text-white rounded-lg text-sm font-bold transition flex items-center gap-2 ${editingPair !== null ? 'bg-cyan-600 hover:bg-cyan-500' : 'bg-emerald-600 hover:bg-emerald-500'}`}>
+                                {editingPair !== null ? <Edit2 size={18} /> : <Plus size={18} />}
+                                {editingPair !== null ? 'Update Sync Pair' : 'Create Sync Pair'}
                             </button>
                         </div>
                     </div>

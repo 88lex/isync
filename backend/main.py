@@ -104,9 +104,9 @@ async def status_broadcaster():
     """Background task to broadcast status updates via WebSocket."""
     while True:
         await asyncio.sleep(1)
-        if job_manager.clients:
-            status = job_manager.get_status()
-            for client in list(job_manager.clients):
+        if job_manager.status_listeners:
+            status = job_manager.last_status or {}
+            for client in list(job_manager.status_listeners):
                 try:
                     await client.send_json(status)
                 except Exception:
@@ -147,7 +147,7 @@ def health_check():
 @app.get("/api/status")
 def get_status():
     """Get current job status."""
-    return job_manager.get_status()
+    return job_manager.last_status or {}
 
 
 # --- Run directly ---
