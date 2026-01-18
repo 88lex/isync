@@ -727,7 +727,11 @@ def generate_random_batch(request: RandomBatchRequest):
         raise HTTPException(status_code=400, detail="No users found in specified domains")
     
     # Select random users
-    count = min(request.user_count, len(all_users))
+    if request.user_count == 0:
+        count = len(all_users)
+    else:
+        count = min(request.user_count, len(all_users))
+    
     selected_users = random.sample(all_users, count)
     
     # Generate batch commands
