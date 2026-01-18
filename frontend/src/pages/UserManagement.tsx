@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import {
-    RefreshCw, Terminal, CheckSquare,
+    RefreshCw, RefreshCcw, Terminal, CheckSquare,
     Filter, Globe, Search, Copy,
     Shield, ShieldAlert, UserCheck, UserMinus, Users
 } from 'lucide-react';
@@ -182,6 +182,12 @@ const UserManagement = () => {
         } else {
             setSelectedUsers(new Set(visibleUsers.map(u => u.email)));
         }
+    };
+
+    const invertSelection = (visibleUsers: any[]) => {
+        const allEmails = new Set(visibleUsers.map(u => u.email));
+        const inverted = new Set([...allEmails].filter(email => !selectedUsers.has(email)));
+        setSelectedUsers(inverted);
     };
 
     const runBulkOp = async (action: BulkOpRequest['action']) => {
@@ -367,20 +373,25 @@ const UserManagement = () => {
 
 
     return (
-        <div className="p-6 max-w-7xl mx-auto space-y-6">
+        <div className="page-container">
 
             {/* Header */}
-            <PageHeader
-                icon={Users}
-                title="User Manager"
-                subtitle="Manage Google Workspace users across domains"
-                gradient="from-indigo-600 to-purple-600"
-            />
+            <header className="page-header">
+                <div className="flex items-center gap-2">
+                    <div className="w-8 h-8 rounded-lg bg-gradient-to-tr from-indigo-600 to-purple-600 flex items-center justify-center">
+                        <Users size={16} className="text-white" />
+                    </div>
+                    <div>
+                        <h1 className="page-title">User Manager</h1>
+                        <p className="text-xs text-zinc-400">Manage Workspace users</p>
+                    </div>
+                </div>
+            </header>
 
-            <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
+            <div className="space-y-3">
 
                 {/* Controls */}
-                <div className="grid grid-cols-1 lg:grid-cols-4 gap-4">
+                <div className="grid grid-cols-1 lg:grid-cols-4 gap-3">
                     {/* Domain Selector (Multi) */}
                     <div className="lg:col-span-1">
                         <Dropdown
@@ -470,6 +481,7 @@ const UserManagement = () => {
                             {selectedUsers.size} <span className="text-zinc-400 font-normal">selected</span>
                         </span>
                     </div>
+                    <button onClick={() => invertSelection(filteredUsers)} className="flex items-center gap-1.5 px-2.5 py-1.5 bg-zinc-800 hover:bg-zinc-700 rounded text-xs text-zinc-300 font-medium transition" title="Invert Selection"><RefreshCcw size={13} /> Invert</button>
                     <div className="h-4 w-px bg-zinc-700 mx-1"></div>
                     <button onClick={() => runBulkOp('verify')} className="flex items-center gap-2 px-3 py-1.5 bg-zinc-800 hover:bg-zinc-700 rounded text-xs text-zinc-300 font-medium transition"><Shield size={14} /> Verify Suspensions</button>
                     <button onClick={() => runBulkOp('unsuspend')} className="flex items-center gap-2 px-3 py-1.5 bg-zinc-800 hover:bg-emerald-900/30 hover:text-emerald-400 rounded text-xs text-zinc-300 font-medium transition"><UserCheck size={14} /> Unsuspend</button>
@@ -509,7 +521,7 @@ const UserManagement = () => {
                         <table className="w-full text-left text-sm">
                             <thead className="bg-zinc-950/80 backdrop-blur text-zinc-400 font-semibold text-xs uppercase tracking-wider sticky top-0 z-10">
                                 <tr>
-                                    <th className="p-3 w-10">
+                                    <th className="px-2 py-2 w-8">
                                         <div className="flex items-center justify-center">
                                             <input
                                                 type="checkbox"

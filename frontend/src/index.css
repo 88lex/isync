@@ -2,6 +2,255 @@
 @tailwind components;
 @tailwind utilities;
 
+/* === DESIGN TOKENS === */
+:root {
+  /* Spacing - Compact */
+  --space-xs: 0.25rem;   /* 4px */
+  --space-sm: 0.5rem;    /* 8px */
+  --space-md: 0.75rem;   /* 12px */
+  --space-lg: 1rem;      /* 16px */
+  --space-xl: 1.5rem;    /* 24px */
+
+  /* Typography */
+  --text-xs: 0.6875rem;  /* 11px - smallest labels */
+  --text-sm: 0.75rem;    /* 12px - labels, small text */
+  --text-base: 0.8125rem;/* 13px - body text */
+  --text-md: 0.875rem;   /* 14px - default */
+  --text-lg: 1rem;       /* 16px - headings */
+  --text-xl: 1.125rem;   /* 18px - page titles */
+
+  /* Colors - High contrast, readable */
+  --text-primary: #f4f4f5;    /* zinc-100 */
+  --text-secondary: #d4d4d8;  /* zinc-300 - NOT grey */
+  --text-muted: #a1a1aa;      /* zinc-400 - use sparingly */
+  --text-accent: #22d3ee;     /* cyan-400 */
+  --text-success: #4ade80;    /* green-400 */
+  --text-warning: #fbbf24;    /* amber-400 */
+  --text-danger: #f87171;     /* red-400 */
+
+  /* Backgrounds */
+  --bg-base: #09090b;         /* zinc-950 */
+  --bg-card: #18181b;         /* zinc-900 */
+  --bg-elevated: #27272a;     /* zinc-800 */
+  --bg-input: #18181b;        /* zinc-900 */
+
+  /* Borders */
+  --border-default: #27272a;  /* zinc-800 */
+  --border-focus: #3b82f6;    /* blue-500 */
+
+  /* Component sizing */
+  --btn-height: 2rem;         /* 32px */
+  --input-height: 2rem;       /* 32px */
+  --table-row-height: 2.25rem;/* 36px */
+}
+
 body {
   @apply bg-zinc-950 text-zinc-100 font-sans antialiased;
+  font-size: var(--text-base);
+  line-height: 1.5;
+}
+
+/* === UTILITY CLASSES === */
+
+/* Compact page container */
+.page-container {
+  @apply p-4 max-w-7xl mx-auto;
+}
+
+/* Page header - compact */
+.page-header {
+  @apply flex items-center justify-between mb-4 pb-3 border-b border-zinc-800;
+}
+
+.page-title {
+  @apply text-lg font-bold text-zinc-100;
+}
+
+.page-subtitle {
+  @apply text-sm text-zinc-400;
+}
+
+/* Cards - compact */
+.card {
+  @apply bg-zinc-900 border border-zinc-800 rounded-lg p-3;
+}
+
+.card-header {
+  @apply flex items-center justify-between pb-2 mb-2 border-b border-zinc-800;
+}
+
+.card-title {
+  @apply text-sm font-semibold text-zinc-200;
+}
+
+/* Section spacing */
+.section-gap {
+  @apply space-y-3;
+}
+
+/* Grid layouts */
+.grid-compact {
+  @apply grid gap-3;
+}
+
+/* === FORM ELEMENTS === */
+
+/* Consistent button base */
+.btn {
+  @apply inline-flex items-center justify-center gap-1.5 px-3 font-medium rounded-md transition-colors text-sm;
+  height: var(--btn-height);
+}
+
+.btn-primary {
+  @apply bg-blue-600 hover:bg-blue-500 text-white;
+}
+
+.btn-secondary {
+  @apply bg-zinc-700 hover:bg-zinc-600 text-zinc-100;
+}
+
+.btn-danger {
+  @apply bg-red-600 hover:bg-red-500 text-white;
+}
+
+.btn-success {
+  @apply bg-emerald-600 hover:bg-emerald-500 text-white;
+}
+
+.btn-ghost {
+  @apply bg-transparent hover:bg-zinc-800 text-zinc-300;
+}
+
+.btn-sm {
+  @apply px-2 text-xs;
+  height: 1.75rem;
+}
+
+.btn-xs {
+  @apply px-1.5 text-xs;
+  height: 1.5rem;
+}
+
+/* Consistent input base */
+.input {
+  @apply w-full px-2.5 bg-zinc-900 border border-zinc-700 rounded-md text-zinc-100 text-sm focus:border-blue-500 focus:ring-1 focus:ring-blue-500/50 outline-none transition;
+  height: var(--input-height);
+}
+
+.input-sm {
+  height: 1.75rem;
+  @apply text-xs px-2;
+}
+
+/* Select dropdown */
+.select {
+  @apply w-full px-2.5 bg-zinc-900 border border-zinc-700 rounded-md text-zinc-100 text-sm focus:border-blue-500 focus:ring-1 focus:ring-blue-500/50 outline-none transition appearance-none cursor-pointer;
+  height: var(--input-height);
+  background-image: url("data:image/svg+xml,%3csvg xmlns='http://www.w3.org/2000/svg' fill='none' viewBox='0 0 20 20'%3e%3cpath stroke='%236b7280' stroke-linecap='round' stroke-linejoin='round' stroke-width='1.5' d='M6 8l4 4 4-4'/%3e%3c/svg%3e");
+  background-position: right 0.5rem center;
+  background-repeat: no-repeat;
+  background-size: 1.25em 1.25em;
+  padding-right: 2rem;
+}
+
+/* Checkbox */
+.checkbox {
+  @apply w-4 h-4 rounded border-zinc-600 bg-zinc-800 text-blue-500 focus:ring-blue-500/50 focus:ring-offset-0 cursor-pointer;
+}
+
+/* === TABLE STYLES === */
+
+.data-table {
+  @apply w-full text-sm;
+}
+
+.data-table th {
+  @apply text-left text-xs font-semibold text-zinc-400 uppercase tracking-wide px-2 py-2 bg-zinc-900 border-b border-zinc-700 cursor-pointer select-none hover:bg-zinc-800 transition-colors;
+}
+
+.data-table th.sorted {
+  @apply text-cyan-400;
+}
+
+.data-table td {
+  @apply px-2 py-1.5 border-b border-zinc-800 text-zinc-200;
+}
+
+.data-table tr:hover td {
+  @apply bg-zinc-800/50;
+}
+
+.data-table tr.selected td {
+  @apply bg-blue-900/20;
+}
+
+/* Expandable row */
+.data-table tr.expandable {
+  @apply cursor-pointer;
+}
+
+.data-table tr.expanded {
+  @apply bg-zinc-800/30;
+}
+
+.data-table .expand-content {
+  @apply px-4 py-2 bg-zinc-900/50;
+}
+
+/* === BADGES === */
+
+.badge {
+  @apply inline-flex items-center px-1.5 py-0.5 rounded text-xs font-medium;
+}
+
+.badge-success {
+  @apply bg-emerald-500/20 text-emerald-400;
+}
+
+.badge-warning {
+  @apply bg-amber-500/20 text-amber-400;
+}
+
+.badge-danger {
+  @apply bg-red-500/20 text-red-400;
+}
+
+.badge-info {
+  @apply bg-blue-500/20 text-blue-400;
+}
+
+.badge-neutral {
+  @apply bg-zinc-700 text-zinc-300;
+}
+
+/* === SCROLLBAR === */
+
+.scrollbar-thin {
+  scrollbar-width: thin;
+  scrollbar-color: #3f3f46 transparent;
+}
+
+.scrollbar-thin::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+.scrollbar-thin::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.scrollbar-thin::-webkit-scrollbar-thumb {
+  background-color: #3f3f46;
+  border-radius: 3px;
+}
+
+/* === ANIMATIONS === */
+
+@keyframes shimmer {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(100%); }
+}
+
+.animate-shimmer {
+  animation: shimmer 2s infinite;
 }

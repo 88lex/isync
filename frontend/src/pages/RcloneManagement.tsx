@@ -62,7 +62,7 @@ const RcloneManagement: React.FC = () => {
     useEffect(() => { sessionStorage.setItem(SESSION_KEYS.RCLONE_SEARCH_FILTER, searchFilter); }, [searchFilter]);
 
     // Manage Tab State
-    const [activeTab, setActiveTab] = useState<'browse' | 'manage'>('browse');
+
     const [remotesWithFlags, setRemotesWithFlags] = useState<RemoteWithFlags[]>([]);
     const [selectedForAction, setSelectedForAction] = useState<Set<string>>(new Set());
     const [statusFilter, setStatusFilter] = useState<'all' | 'normal' | 'ignored' | 'protected'>(() =>
@@ -82,10 +82,8 @@ const RcloneManagement: React.FC = () => {
     }, [source, selectedServer]);
 
     useEffect(() => {
-        if (activeTab === 'manage') {
-            loadRemotesWithFlagsData();
-        }
-    }, [activeTab, source, selectedServer]);
+        loadRemotesWithFlagsData();
+    }, [source, selectedServer]);
 
     const loadServers = async () => {
         try {
@@ -464,7 +462,7 @@ const RcloneManagement: React.FC = () => {
                     )}
 
                     <button
-                        onClick={() => activeTab === 'browse' ? loadRemotes() : loadRemotesWithFlagsData()}
+                        onClick={() => loadRemotesWithFlagsData()}
                         disabled={loading}
                         className="flex items-center gap-2 px-3 py-2 bg-zinc-700 hover:bg-zinc-600 rounded-lg text-sm text-white transition disabled:opacity-50"
                     >
@@ -472,7 +470,7 @@ const RcloneManagement: React.FC = () => {
                         Refresh
                     </button>
 
-                    {source === 'local' && activeTab === 'browse' && (
+                    {source === 'local' && (
                         <button
                             onClick={() => setShowAddModal(true)}
                             className="flex items-center gap-2 px-3 py-2 bg-emerald-600 hover:bg-emerald-500 rounded-lg text-sm text-white transition"
@@ -527,780 +525,775 @@ const RcloneManagement: React.FC = () => {
                 </div>
             </Card>
 
-            {/* Tab Navigation */}
-            <div className="flex border-b border-zinc-800">
-                <button
-                    onClick={() => setActiveTab('browse')}
-                    className={`px-6 py-3 text-sm font-medium border-b-2 transition ${activeTab === 'browse' ? 'border-cyan-500 text-cyan-400' : 'border-transparent text-zinc-500 hover:text-zinc-300'}`}
-                >
-                    <div className="flex items-center gap-2">
-                        <HardDrive size={16} />
-                        Browse Remotes
-                    </div>
-                </button>
-                <button
-                    onClick={() => setActiveTab('manage')}
-                    className={`px-6 py-3 text-sm font-medium border-b-2 transition ${activeTab === 'manage' ? 'border-purple-500 text-purple-400' : 'border-transparent text-zinc-500 hover:text-zinc-300'}`}
-                >
-                    <div className="flex items-center gap-2">
-                        <Shield size={16} />
-                        Manage & Test
-                    </div>
-                </button>
-            </div>
 
-            {activeTab === 'browse' && (
-                <>
-                    {/* Copy Actions (when viewing remote) */}
-                    {source === 'remote' && selectedForCopy.size > 0 && (
-                        <Card>
-                            <div className="flex items-center gap-4">
-                                <span className="text-sm text-zinc-400">{selectedForCopy.size} selected</span>
-                                <button
-                                    onClick={handleCopyToLocal}
-                                    className="flex items-center gap-2 px-3 py-2 bg-emerald-600 hover:bg-emerald-500 rounded-lg text-sm text-white transition"
-                                >
-                                    <Copy size={14} />
-                                    Copy to Local
-                                </button>
-                            </div>
-                        </Card>
-                    )}
-
-                    {/* Push to Remote (when viewing local) */}
-                    {source === 'local' && selectedForCopy.size > 0 && (
-                        <Card>
-                            <div className="flex items-center gap-4">
-                                <span className="text-sm text-zinc-400">{selectedForCopy.size} Rclone Remotes selected</span>
-                                <button
-                                    onClick={handlePushToRemote}
-                                    className="flex items-center gap-2 px-3 py-2 bg-cyan-600 hover:bg-cyan-500 rounded-lg text-sm text-white transition"
-                                >
-                                    <Server size={14} />
-                                    Push to SSH Server(s)
-                                </button>
-                            </div>
-                        </Card>
-                    )}
-
-                    {/* Remotes List */}
+            {/* Unified Remotes View */}
+            <>
+                {/* Copy Actions (when viewing remote) */}
+                {source === 'remote' && selectedForCopy.size > 0 && (
                     <Card>
-                        <div className="flex items-center justify-between mb-4">
-                            <h3 className="text-lg font-medium text-white flex items-center gap-2">
-                                <HardDrive size={18} className="text-purple-400" />
-                                Remotes ({remotes.length})
-                            </h3>
+                        <div className="flex items-center gap-4">
+                            <span className="text-sm text-zinc-400">{selectedForCopy.size} selected</span>
                             <button
-                                onClick={() => {
-                                    const filteredNames = remotes.filter(r => r.name.toLowerCase().includes(searchFilter.toLowerCase())).map(r => r.name);
-                                    if (selectedForCopy.size === filteredNames.length && filteredNames.length > 0) {
-                                        setSelectedForCopy(new Set());
-                                    } else {
-                                        setSelectedForCopy(new Set(filteredNames));
-                                    }
-                                }}
-                                className="text-xs text-zinc-500 hover:text-zinc-300 font-medium"
+                                onClick={handleCopyToLocal}
+                                className="flex items-center gap-2 px-3 py-2 bg-emerald-600 hover:bg-emerald-500 rounded-lg text-sm text-white transition"
                             >
-                                {(() => {
-                                    const filteredNames = remotes.filter(r => r.name.toLowerCase().includes(searchFilter.toLowerCase())).map(r => r.name);
-                                    return selectedForCopy.size === filteredNames.length && filteredNames.length > 0 ? 'Deselect All' : 'Select All';
-                                })()}
+                                <Copy size={14} />
+                                Copy to Local
                             </button>
                         </div>
+                    </Card>
+                )}
 
-                        {/* Search Filter */}
-                        <div className="mb-4 relative">
+                {/* Push to Remote (when viewing local) */}
+                {source === 'local' && selectedForCopy.size > 0 && (
+                    <Card>
+                        <div className="flex items-center gap-4">
+                            <span className="text-sm text-zinc-400">{selectedForCopy.size} Rclone Remotes selected</span>
+                            <button
+                                onClick={handlePushToRemote}
+                                className="flex items-center gap-2 px-3 py-2 bg-cyan-600 hover:bg-cyan-500 rounded-lg text-sm text-white transition"
+                            >
+                                <Server size={14} />
+                                Push to SSH Server(s)
+                            </button>
+                        </div>
+                    </Card>
+                )}
+
+                {/* Remotes List */}
+                <Card>
+                    <div className="flex items-center justify-between mb-4">
+                        <h3 className="text-lg font-medium text-white flex items-center gap-2">
+                            <HardDrive size={18} className="text-purple-400" />
+                            Remotes ({remotes.length})
+                        </h3>
+                        <button
+                            onClick={() => {
+                                const filteredNames = remotes.filter(r => r.name.toLowerCase().includes(searchFilter.toLowerCase())).map(r => r.name);
+                                if (selectedForCopy.size === filteredNames.length && filteredNames.length > 0) {
+                                    setSelectedForCopy(new Set());
+                                } else {
+                                    setSelectedForCopy(new Set(filteredNames));
+                                }
+                            }}
+                            className="text-xs text-zinc-500 hover:text-zinc-300 font-medium"
+                        >
+                            {(() => {
+                                const filteredNames = remotes.filter(r => r.name.toLowerCase().includes(searchFilter.toLowerCase())).map(r => r.name);
+                                return selectedForCopy.size === filteredNames.length && filteredNames.length > 0 ? 'Deselect All' : 'Select All';
+                            })()}
+                        </button>
+                        <button
+                            onClick={() => {
+                                const filteredNames = remotes.filter(r => r.name.toLowerCase().includes(searchFilter.toLowerCase())).map(r => r.name);
+                                const inverted = new Set(filteredNames.filter(name => !selectedForCopy.has(name)));
+                                setSelectedForCopy(inverted);
+                            }}
+                            className="text-xs text-zinc-500 hover:text-zinc-300 font-medium"
+                        >
+                            Invert
+                        </button>
+                    </div>
+
+                    {/* Search Filter */}
+                    <div className="mb-4 relative">
+                        <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-500" />
+                        <input
+                            type="text"
+                            value={searchFilter}
+                            onChange={(e) => setSearchFilter(e.target.value)}
+                            placeholder="Filter remotes..."
+                            className="w-full bg-zinc-800 border border-zinc-700 rounded-lg pl-10 pr-3 py-2 text-white placeholder-zinc-500 focus:outline-none focus:border-purple-500"
+                        />
+                        {searchFilter && (
+                            <button
+                                onClick={() => setSearchFilter('')}
+                                className="absolute right-3 top-1/2 -translate-y-1/2 text-zinc-500 hover:text-white"
+                            >
+                                <X size={14} />
+                            </button>
+                        )}
+                    </div>
+
+                    {loading ? (
+                        <div className="text-center py-8 text-zinc-500">Loading...</div>
+                    ) : remotes.filter(r => r.name.toLowerCase().includes(searchFilter.toLowerCase())).length === 0 ? (
+                        <div className="text-center py-8 text-zinc-500">{searchFilter ? `No remotes matching "${searchFilter}"` : 'No remotes found'}</div>
+                    ) : (
+                        <div className="space-y-2">
+                            <div className="space-y-1">
+                                {remotes
+                                    .filter(r => r.name.toLowerCase().includes(searchFilter.toLowerCase()))
+                                    .map(remote => {
+                                        const isSelected = selectedForCopy.has(remote.name);
+                                        return (
+                                            <div
+                                                key={remote.name}
+                                                onClick={(e) => {
+                                                    // Stop propagation if clicking on edit/delete/checkbox directly (handled separately), 
+                                                    // but here we are handling the row click.
+                                                    if (e.target instanceof HTMLInputElement || (e.target as HTMLElement).closest('button')) return;
+
+                                                    handleCopySelectClick(
+                                                        remote.name,
+                                                        e,
+                                                        remotes.filter(r => r.name.toLowerCase().includes(searchFilter.toLowerCase())).map(r => r.name)
+                                                    );
+                                                }}
+                                                className={`group relative rounded border transition-colors cursor-pointer ${isSelected
+                                                    ? 'bg-purple-900/20 border-purple-500/50'
+                                                    : 'bg-zinc-900/50 border-zinc-800 hover:bg-zinc-800'
+                                                    } ${editingRemote === remote.name ? 'border-purple-500 ring-1 ring-purple-500' : ''} p-2`}
+                                            >
+                                                <div className="flex items-center justify-between gap-3">
+                                                    <div className="flex items-center gap-3 overflow-hidden">
+                                                        <div
+                                                            className={`w-4 h-4 rounded border flex items-center justify-center shrink-0 transition-colors ${isSelected ? 'bg-purple-600 border-purple-600' : 'border-zinc-600 bg-zinc-800'
+                                                                }`}
+                                                            onClick={(e) => {
+                                                                e.stopPropagation();
+                                                                toggleCopySelect(remote.name);
+                                                            }}
+                                                        >
+                                                            {isSelected && <CheckCircle size={10} className="text-white" />}
+                                                        </div>
+
+                                                        <div className="min-w-0 flex flex-col">
+                                                            <div className="flex items-center gap-2">
+                                                                <span className={`text-xs font-semibold truncate ${isSelected ? 'text-purple-200' : 'text-zinc-300'}`}>
+                                                                    {remote.name}
+                                                                </span>
+                                                                <span className="text-[10px] px-1.5 py-0.5 bg-zinc-800 border border-zinc-700 rounded text-zinc-500 uppercase tracking-wider">
+                                                                    {remote.type}
+                                                                </span>
+                                                            </div>
+                                                            {editingRemote !== remote.name && (
+                                                                <div className="text-[10px] text-zinc-500 font-mono truncate hidden group-hover:block transition-all">
+                                                                    {Object.entries(remote.config).map(([k, v]) => `${k}=${v}`).join(' ')}
+                                                                </div>
+                                                            )}
+                                                        </div>
+                                                    </div>
+
+                                                    {source === 'local' && (
+                                                        <div className="flex items-center gap-1" onClick={e => e.stopPropagation()}>
+                                                            <button
+                                                                onClick={(e) => { e.stopPropagation(); handleEdit(remote); }}
+                                                                className="p-1.5 text-zinc-400 hover:text-white hover:bg-zinc-700 rounded transition"
+                                                                title="Edit Config"
+                                                            >
+                                                                <Edit2 size={14} />
+                                                            </button>
+                                                            <button
+                                                                onClick={(e) => { e.stopPropagation(); handleDelete(remote.name); }}
+                                                                className="p-1.5 text-zinc-500 hover:text-red-400 hover:bg-red-900/30 rounded transition"
+                                                                title="Delete Remote"
+                                                            >
+                                                                <Trash2 size={12} />
+                                                            </button>
+                                                        </div>
+                                                    )}
+
+                                                </div>
+
+                                                {editingRemote === remote.name && (
+                                                    <div className="mt-3 space-y-2 border-t border-zinc-700/50 pt-3" onClick={e => e.stopPropagation()}>
+                                                        <textarea
+                                                            value={editConfig}
+                                                            onChange={(e) => setEditConfig(e.target.value)}
+                                                            className="w-full h-32 bg-zinc-950 border border-zinc-700 rounded p-2 text-xs font-mono text-zinc-300 focus:border-purple-500 outline-none"
+                                                        />
+                                                        <div className="flex justify-end gap-2">
+                                                            <button
+                                                                onClick={(e) => { e.stopPropagation(); setEditingRemote(null); }}
+                                                                className="flex items-center gap-1 px-3 py-1.5 bg-zinc-800 hover:bg-zinc-700 text-white rounded text-xs transition"
+                                                            >
+                                                                <X size={12} /> Cancel
+                                                            </button>
+                                                            <button
+                                                                onClick={(e) => { e.stopPropagation(); handleSaveEdit(); }}
+                                                                className="flex items-center gap-1 px-3 py-1.5 bg-purple-600 hover:bg-purple-500 text-white rounded text-xs transition font-medium"
+                                                            >
+                                                                <Save size={12} /> Save Changes
+                                                            </button>
+                                                        </div>
+                                                    </div>
+                                                )
+                                                }
+                                            </div>
+                                        );
+                                    })
+                                }
+                            </div>
+                        </div>
+                    )}
+                </Card>
+
+                {/* Add Remote Modal */}
+                {showAddModal && (
+                    <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
+                        <div className="bg-zinc-900 border border-zinc-700 rounded-xl p-6 w-full max-w-lg">
+                            <h3 className="text-lg font-bold text-white mb-4">Add New Remote</h3>
+
+                            <div className="space-y-4">
+                                <div>
+                                    <label className="block text-xs text-zinc-500 mb-1">Name</label>
+                                    <input
+                                        type="text"
+                                        value={newName}
+                                        onChange={(e) => setNewName(e.target.value)}
+                                        placeholder="my-remote"
+                                        className="w-full bg-zinc-800 border border-zinc-700 rounded px-3 py-2 text-white"
+                                    />
+                                </div>
+
+                                <div>
+                                    <label className="block text-xs text-zinc-500 mb-1">Type</label>
+                                    <select
+                                        value={newType}
+                                        onChange={(e) => setNewType(e.target.value)}
+                                        className="w-full bg-zinc-800 border border-zinc-700 rounded px-3 py-2 text-white"
+                                    >
+                                        <option value="drive">Google Drive</option>
+                                        <option value="s3">S3</option>
+                                        <option value="b2">Backblaze B2</option>
+                                        <option value="sftp">SFTP</option>
+                                        <option value="local">Local</option>
+                                        <option value="union">Union</option>
+                                    </select>
+                                </div>
+
+                                <div>
+                                    <label className="block text-xs text-zinc-500 mb-1">Config (JSON)</label>
+                                    <textarea
+                                        value={newConfig}
+                                        onChange={(e) => setNewConfig(e.target.value)}
+                                        placeholder='{"scope": "drive", "team_drive": "..."}'
+                                        className="w-full h-24 bg-zinc-800 border border-zinc-700 rounded px-3 py-2 text-white font-mono text-sm"
+                                    />
+                                </div>
+                            </div>
+
+                            <div className="flex gap-2 mt-6">
+                                <button
+                                    onClick={handleAdd}
+                                    className="flex-1 px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg font-medium"
+                                >
+                                    Create
+                                </button>
+                                <button
+                                    onClick={() => setShowAddModal(false)}
+                                    className="px-4 py-2 bg-zinc-700 hover:bg-zinc-600 text-white rounded-lg"
+                                >
+                                    Cancel
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                )}
+
+                {/* Copy Config Modal */}
+                {showCopyModal && (
+                    <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-4">
+                        <div className="bg-zinc-900 border border-zinc-700 rounded-xl p-6 w-full max-w-lg shadow-2xl">
+                            <h3 className="text-lg font-bold text-white mb-4 flex items-center gap-2">
+                                <Copy size={18} /> Copy Config
+                            </h3>
+                            {copyStep === 'config' ? (
+                                <>
+                                    <div className="text-sm text-zinc-400 mb-4">
+                                        Copy <strong>rclone.conf</strong> from
+                                        <span className="text-cyan-400 mx-1">{source === 'local' ? 'Local' : (servers.find(s => s.id === selectedServer)?.name || 'Unknown')}</span>
+                                        to another machine.
+                                    </div>
+
+                                    <div className="space-y-4 mb-6">
+                                        <div className="grid grid-cols-2 gap-4">
+                                            <div>
+                                                <label className="block text-xs text-zinc-500 mb-1">Source Path (Optional)</label>
+                                                <input type="text" value={sourcePath} onChange={e => setSourcePath(e.target.value)}
+                                                    placeholder="Auto-detect"
+                                                    className="w-full bg-zinc-800 border border-zinc-700 rounded px-3 py-2 text-white text-xs font-mono" />
+                                            </div>
+                                            <div>
+                                                <label className="block text-xs text-zinc-500 mb-1">Destination Server</label>
+                                                <select value={copyDest} onChange={e => setCopyDest(e.target.value)}
+                                                    className="w-full bg-zinc-800 border border-zinc-700 rounded px-3 py-2 text-white text-xs">
+                                                    <option value="local">Local Machine</option>
+                                                    {servers.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
+                                                </select>
+                                            </div>
+                                        </div>
+
+                                        <div className="grid grid-cols-2 gap-4">
+                                            <div>
+                                                <label className="block text-xs text-zinc-500 mb-1">Dest Path (Optional Folder)</label>
+                                                <input type="text" value={destPath} onChange={e => setDestPath(e.target.value)}
+                                                    placeholder="Auto-detect"
+                                                    className="w-full bg-zinc-800 border border-zinc-700 rounded px-3 py-2 text-white text-xs font-mono" />
+                                            </div>
+                                            <div>
+                                                <label className="block text-xs text-zinc-500 mb-1">Target Filename (Optional)</label>
+                                                <input type="text" value={customName} onChange={e => setCustomName(e.target.value)}
+                                                    placeholder={copyMode === 'replace' ? 'rclone.conf' : 'Auto-generated'}
+                                                    className="w-full bg-zinc-800 border border-zinc-700 rounded px-3 py-2 text-white text-xs font-mono" />
+                                            </div>
+                                        </div>
+
+                                        <div>
+                                            <label className="block text-xs text-zinc-500 mb-1">Copy Mode</label>
+                                            <div className="flex flex-col gap-2">
+                                                <label className={`flex items-center gap-2 p-3 rounded border cursor-pointer ${copyMode === 'backup' ? 'bg-emerald-900/20 border-emerald-600' : 'bg-zinc-800 border-zinc-700'}`}>
+                                                    <input type="radio" name="copyMode" value="backup" checked={copyMode === 'backup'} onChange={() => setCopyMode('backup')} />
+                                                    <div className="flex flex-col">
+                                                        <span className="text-sm font-medium text-white">Back Up (Safe)</span>
+                                                        <span className="text-xs text-zinc-500">Save as a new file (e.g. .bak) - No Overwrite</span>
+                                                    </div>
+                                                </label>
+                                                <label className={`flex items-center gap-2 p-3 rounded border cursor-pointer ${copyMode === 'replace' ? 'bg-red-900/20 border-red-600' : 'bg-zinc-800 border-zinc-700'}`}>
+                                                    <input type="radio" name="copyMode" value="replace" checked={copyMode === 'replace'} onChange={() => setCopyMode('replace')} />
+                                                    <div className="flex flex-col">
+                                                        <span className="text-sm font-medium text-white">Replace Active Config</span>
+                                                        <span className="text-xs text-zinc-500">Overwrites target file (Automatic backup created first)</span>
+                                                    </div>
+                                                </label>
+                                            </div>
+                                        </div>
+                                    </div>
+
+                                    {copyLoading ? (
+                                        <div className="text-center py-4 bg-zinc-950 rounded border border-zinc-800 mb-4 animate-pulse">
+                                            <RefreshCw size={24} className="animate-spin mx-auto mb-2 text-cyan-400" />
+                                            <div className="text-zinc-400 text-sm">Validating paths... please wait</div>
+                                        </div>
+                                    ) : (
+                                        <div className="flex gap-2">
+                                            <button onClick={async () => {
+                                                setCopyLoading(true);
+                                                setMessage(null);
+                                                try {
+                                                    const src = source === 'local' ? 'local' : selectedServer;
+                                                    const res = await copyRcloneConfig(src, copyDest, copyMode, {
+                                                        sourcePath: sourcePath || undefined,
+                                                        destPath: destPath || undefined,
+                                                        customName: customName || undefined,
+                                                        dryRun: true
+                                                    });
+                                                    setPreviewData(res);
+                                                    setCopyStep('confirm');
+                                                } catch (e: any) {
+                                                    setMessage(`Error: ${e.message}`);
+                                                }
+                                                finally { setCopyLoading(false); }
+                                            }} className="flex-1 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded font-medium flex items-center justify-center gap-2">
+                                                Preview & Confirm
+                                            </button>
+                                            <button onClick={() => setShowCopyModal(false)} className="px-4 py-2 bg-zinc-700 hover:bg-zinc-600 text-white rounded">
+                                                Cancel
+                                            </button>
+                                        </div>
+                                    )}
+                                </>
+                            ) : (
+                                <>
+                                    <div className="space-y-4 mb-6 bg-zinc-950 p-4 rounded border border-zinc-800">
+                                        <h4 className="text-white font-medium flex gap-2 items-center">
+                                            <FileCheck size={18} className="text-emerald-400" /> Confirm Copy Details
+                                        </h4>
+
+                                        <div className="grid gap-4 text-sm">
+                                            <div>
+                                                <label className="block text-xs text-zinc-500 mb-1 uppercase tracking-wider">Source Configuration</label>
+                                                <div className="font-mono text-zinc-300 break-all bg-zinc-900/50 p-2 rounded border border-zinc-800">
+                                                    {previewData?.source}
+                                                </div>
+                                            </div>
+                                            <div className="flex justify-center text-zinc-600">
+                                                <ArrowDown size={20} />
+                                            </div>
+                                            <div>
+                                                <label className="block text-xs text-zinc-500 mb-1 uppercase tracking-wider">Destination Configuration</label>
+                                                <div className="font-mono text-cyan-300 break-all font-bold bg-cyan-900/20 p-2 rounded border border-cyan-800/50">
+                                                    {previewData?.destination}
+                                                </div>
+                                            </div>
+
+                                            {copyMode === 'replace' && (
+                                                <div className="p-3 bg-red-900/10 border border-red-900/30 rounded text-red-400 text-xs flex gap-2 items-start mt-2">
+                                                    <AlertTriangle size={16} className="shrink-0 mt-0.5" />
+                                                    <div>
+                                                        <strong className="block mb-1">Warning: Overwrite Mode</strong>
+                                                        This will overwrite the active configuration at the destination.
+                                                        An automatic backup of the existing file will be created before writing.
+                                                    </div>
+                                                </div>
+                                            )}
+                                        </div>
+                                    </div>
+
+                                    {copyLoading ? (
+                                        <div className="text-center py-4 bg-zinc-950 rounded border border-zinc-800 mb-4 animate-pulse">
+                                            <RefreshCw size={24} className="animate-spin mx-auto mb-2 text-cyan-400" />
+                                            <div className="text-zinc-400 text-sm">Copying config... please wait</div>
+                                        </div>
+                                    ) : (
+                                        <div className="flex gap-2">
+                                            <button onClick={async () => {
+                                                setCopyLoading(true);
+                                                setMessage(null);
+                                                try {
+                                                    const src = source === 'local' ? 'local' : selectedServer;
+                                                    const res = await copyRcloneConfig(src, copyDest, copyMode, {
+                                                        sourcePath: sourcePath || undefined,
+                                                        destPath: destPath || undefined,
+                                                        customName: customName || undefined,
+                                                        dryRun: false
+                                                    });
+                                                    setMessage(`✓ ${res.message}`);
+                                                    setShowCopyModal(false);
+                                                    setCopyStep('config');
+                                                    setSourcePath(''); setDestPath(''); setCustomName('');
+                                                } catch (e: any) {
+                                                    setMessage(`Error: ${e.message}`);
+                                                }
+                                                finally { setCopyLoading(false); }
+                                            }} className="flex-1 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded font-medium flex items-center justify-center gap-2">
+                                                Confirm Copy
+                                            </button>
+                                            <button onClick={() => setCopyStep('config')} className="px-4 py-2 bg-zinc-700 hover:bg-zinc-600 text-white rounded">
+                                                Back
+                                            </button>
+                                        </div>
+                                    )}
+                                </>
+                            )}
+                        </div>
+                    </div>
+                )}
+
+
+                {/* Push Modal */}
+                {
+                    showPushModal && (
+                        <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-4">
+                            <div className="bg-zinc-900 border border-zinc-700 rounded-xl p-6 w-full max-w-md shadow-2xl">
+                                <h3 className="text-lg font-bold text-white mb-4 flex items-center gap-2">
+                                    <Server size={20} className="text-cyan-400" />
+                                    Push Configs to SSH Servers
+                                </h3>
+
+                                <div className="mb-4">
+                                    <div className="text-sm text-zinc-400 mb-2">
+                                        Pushing <span className="text-white font-bold">{selectedForCopy.size}</span> selected Rclone details to:
+                                    </div>
+                                    <div className="max-h-60 overflow-y-auto bg-zinc-950 border border-zinc-800 rounded p-2 space-y-1">
+                                        {servers.map(server => (
+                                            <div
+                                                key={server.id}
+                                                onClick={() => {
+                                                    if (pushStatus === 'pushing') return;
+                                                    const next = new Set(targetSshServers);
+                                                    if (next.has(server.id)) next.delete(server.id);
+                                                    else next.add(server.id);
+                                                    setTargetSshServers(next);
+                                                }}
+                                                className={`flex items-center gap-3 p-2 rounded cursor-pointer transition ${targetSshServers.has(server.id) ? 'bg-cyan-900/30 border border-cyan-500/50' : 'bg-zinc-900 border border-transparent hover:bg-zinc-800'
+                                                    } ${pushStatus === 'pushing' ? 'opacity-50 cursor-not-allowed' : ''}`}
+                                            >
+                                                <div className={`w-4 h-4 rounded border flex items-center justify-center shrink-0 ${targetSshServers.has(server.id) ? 'bg-cyan-600 border-cyan-600' : 'border-zinc-600'
+                                                    }`}>
+                                                    {targetSshServers.has(server.id) && <CheckCircle size={10} className="text-white" />}
+                                                </div>
+                                                <div className="text-sm text-zinc-200">{server.name}</div>
+                                                <div className="text-xs text-zinc-500 ml-auto font-mono">{server.host}</div>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+
+                                {pushProgress.length > 0 && (
+                                    <div className="mb-4 p-3 bg-black/40 rounded border border-zinc-800 text-xs font-mono text-zinc-300 max-h-32 overflow-y-auto">
+                                        {pushProgress.map((line, i) => (
+                                            <div key={i} className={line.includes('✓') ? 'text-emerald-400' : line.includes('✗') ? 'text-red-400' : 'text-zinc-400'}>{line}</div>
+                                        ))}
+                                    </div>
+                                )}
+
+                                <div className="flex items-center justify-between mt-6">
+                                    <button
+                                        onClick={() => setShowPushModal(false)}
+                                        disabled={pushStatus === 'pushing'}
+                                        className="px-4 py-2 bg-zinc-700 hover:bg-zinc-600 text-white rounded disabled:opacity-50"
+                                    >
+                                        {pushStatus === 'complete' ? 'Close' : 'Cancel'}
+                                    </button>
+                                    {pushStatus !== 'complete' && (
+                                        <button
+                                            onClick={handleConfirmPush}
+                                            disabled={targetSshServers.size === 0 || pushStatus === 'pushing'}
+                                            className="px-4 py-2 bg-cyan-600 hover:bg-cyan-500 text-white rounded font-medium disabled:opacity-50 flex items-center gap-2"
+                                        >
+                                            {pushStatus === 'pushing' ? <RefreshCw size={14} className="animate-spin" /> : <Server size={14} />}
+                                            Push Configs
+                                        </button>
+                                    )}
+                                </div>
+                            </div>
+                        </div>
+                    )
+                }
+                {/* Duplicates Modal */}
+                {showDupModal && (
+                    <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-4">
+                        <div className="bg-zinc-900 border border-zinc-700 rounded-xl p-6 w-full max-w-md shadow-2xl">
+                            <h3 className="text-lg font-bold text-white mb-4 flex items-center gap-2">
+                                <div className="text-amber-500"><AlertTriangle size={20} /></div>
+                                Duplicate Sections Found
+                            </h3>
+                            <div className="text-sm text-zinc-400 mb-4">
+                                The following remote names appear multiple times in the config file. This usually indicates corruption or append errors.
+                            </div>
+
+                            <div className="bg-zinc-950 p-3 rounded border border-zinc-800 mb-6 max-h-48 overflow-y-auto">
+                                {duplicateResults.map(d => (
+                                    <div key={d} className="text-red-400 font-mono text-sm py-1 border-b border-zinc-800 last:border-0">
+                                        [{d}]
+                                    </div>
+                                ))}
+                            </div>
+
+                            <div className="text-xs text-zinc-500 mb-4">
+                                Please edit the config file manually on the server to resolve these duplicates.
+                            </div>
+
+                            <div className="flex justify-end">
+                                <button onClick={() => setShowDupModal(false)} className="px-4 py-2 bg-zinc-700 hover:bg-zinc-600 text-white rounded">
+                                    Close
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                )}
+            </>
+
+            {/* Search, Filter & Bulk Actions */}
+            <div className="space-y-4">
+                {/* Search & Filter Bar */}
+                <Card>
+                    <div className="flex items-center gap-4 flex-wrap">
+                        <div className="flex-1 min-w-[200px] relative">
                             <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-500" />
                             <input
                                 type="text"
                                 value={searchFilter}
                                 onChange={(e) => setSearchFilter(e.target.value)}
-                                placeholder="Filter remotes..."
-                                className="w-full bg-zinc-800 border border-zinc-700 rounded-lg pl-10 pr-3 py-2 text-white placeholder-zinc-500 focus:outline-none focus:border-purple-500"
+                                placeholder="Fuzzy search remotes..."
+                                className="w-full bg-zinc-800 border border-zinc-700 rounded-lg pl-10 pr-3 py-2 text-white text-sm"
                             />
-                            {searchFilter && (
+                        </div>
+                        <div className="flex gap-1">
+                            {(['all', 'normal', 'ignored', 'protected'] as const).map(filter => (
                                 <button
-                                    onClick={() => setSearchFilter('')}
-                                    className="absolute right-3 top-1/2 -translate-y-1/2 text-zinc-500 hover:text-white"
+                                    key={filter}
+                                    onClick={() => setStatusFilter(filter)}
+                                    className={`px-3 py-1.5 rounded text-xs font-medium transition ${statusFilter === filter
+                                        ? filter === 'ignored' ? 'bg-zinc-600 text-white'
+                                            : filter === 'protected' ? 'bg-amber-600 text-white'
+                                                : 'bg-purple-600 text-white'
+                                        : 'bg-zinc-800 text-zinc-400 hover:text-white'
+                                        }`}
                                 >
-                                    <X size={14} />
+                                    {filter.charAt(0).toUpperCase() + filter.slice(1)}
                                 </button>
-                            )}
+                            ))}
                         </div>
+                    </div>
+                </Card>
 
-                        {loading ? (
-                            <div className="text-center py-8 text-zinc-500">Loading...</div>
-                        ) : remotes.filter(r => r.name.toLowerCase().includes(searchFilter.toLowerCase())).length === 0 ? (
-                            <div className="text-center py-8 text-zinc-500">{searchFilter ? `No remotes matching "${searchFilter}"` : 'No remotes found'}</div>
-                        ) : (
-                            <div className="space-y-2">
-                                <div className="space-y-1">
-                                    {remotes
-                                        .filter(r => r.name.toLowerCase().includes(searchFilter.toLowerCase()))
-                                        .map(remote => {
-                                            const isSelected = selectedForCopy.has(remote.name);
-                                            return (
-                                                <div
-                                                    key={remote.name}
-                                                    onClick={(e) => {
-                                                        // Stop propagation if clicking on edit/delete/checkbox directly (handled separately), 
-                                                        // but here we are handling the row click.
-                                                        if (e.target instanceof HTMLInputElement || (e.target as HTMLElement).closest('button')) return;
-
-                                                        handleCopySelectClick(
-                                                            remote.name,
-                                                            e,
-                                                            remotes.filter(r => r.name.toLowerCase().includes(searchFilter.toLowerCase())).map(r => r.name)
-                                                        );
-                                                    }}
-                                                    className={`group relative rounded border transition-colors cursor-pointer ${isSelected
-                                                        ? 'bg-purple-900/20 border-purple-500/50'
-                                                        : 'bg-zinc-900/50 border-zinc-800 hover:bg-zinc-800'
-                                                        } ${editingRemote === remote.name ? 'border-purple-500 ring-1 ring-purple-500' : ''} p-2`}
-                                                >
-                                                    <div className="flex items-center justify-between gap-3">
-                                                        <div className="flex items-center gap-3 overflow-hidden">
-                                                            <div
-                                                                className={`w-4 h-4 rounded border flex items-center justify-center shrink-0 transition-colors ${isSelected ? 'bg-purple-600 border-purple-600' : 'border-zinc-600 bg-zinc-800'
-                                                                    }`}
-                                                                onClick={(e) => {
-                                                                    e.stopPropagation();
-                                                                    toggleCopySelect(remote.name);
-                                                                }}
-                                                            >
-                                                                {isSelected && <CheckCircle size={10} className="text-white" />}
-                                                            </div>
-
-                                                            <div className="min-w-0 flex flex-col">
-                                                                <div className="flex items-center gap-2">
-                                                                    <span className={`text-xs font-semibold truncate ${isSelected ? 'text-purple-200' : 'text-zinc-300'}`}>
-                                                                        {remote.name}
-                                                                    </span>
-                                                                    <span className="text-[10px] px-1.5 py-0.5 bg-zinc-800 border border-zinc-700 rounded text-zinc-500 uppercase tracking-wider">
-                                                                        {remote.type}
-                                                                    </span>
-                                                                </div>
-                                                                {editingRemote !== remote.name && (
-                                                                    <div className="text-[10px] text-zinc-500 font-mono truncate hidden group-hover:block transition-all">
-                                                                        {Object.entries(remote.config).map(([k, v]) => `${k}=${v}`).join(' ')}
-                                                                    </div>
-                                                                )}
-                                                            </div>
-                                                        </div>
-
-                                                        {source === 'local' && (
-                                                            <div className="flex items-center gap-1" onClick={e => e.stopPropagation()}>
-                                                                <button
-                                                                    onClick={(e) => { e.stopPropagation(); handleEdit(remote); }}
-                                                                    className="p-1.5 text-zinc-400 hover:text-white hover:bg-zinc-700 rounded transition"
-                                                                    title="Edit Config"
-                                                                >
-                                                                    <Edit2 size={14} />
-                                                                </button>
-                                                                <button
-                                                                    onClick={(e) => { e.stopPropagation(); handleDelete(remote.name); }}
-                                                                    className="p-1.5 text-zinc-500 hover:text-red-400 hover:bg-red-900/30 rounded transition"
-                                                                    title="Delete Remote"
-                                                                >
-                                                                    <Trash2 size={12} />
-                                                                </button>
-                                                            </div>
-                                                        )}
-
-                                                    </div>
-
-                                                    {editingRemote === remote.name && (
-                                                        <div className="mt-3 space-y-2 border-t border-zinc-700/50 pt-3" onClick={e => e.stopPropagation()}>
-                                                            <textarea
-                                                                value={editConfig}
-                                                                onChange={(e) => setEditConfig(e.target.value)}
-                                                                className="w-full h-32 bg-zinc-950 border border-zinc-700 rounded p-2 text-xs font-mono text-zinc-300 focus:border-purple-500 outline-none"
-                                                            />
-                                                            <div className="flex justify-end gap-2">
-                                                                <button
-                                                                    onClick={(e) => { e.stopPropagation(); setEditingRemote(null); }}
-                                                                    className="flex items-center gap-1 px-3 py-1.5 bg-zinc-800 hover:bg-zinc-700 text-white rounded text-xs transition"
-                                                                >
-                                                                    <X size={12} /> Cancel
-                                                                </button>
-                                                                <button
-                                                                    onClick={(e) => { e.stopPropagation(); handleSaveEdit(); }}
-                                                                    className="flex items-center gap-1 px-3 py-1.5 bg-purple-600 hover:bg-purple-500 text-white rounded text-xs transition font-medium"
-                                                                >
-                                                                    <Save size={12} /> Save Changes
-                                                                </button>
-                                                            </div>
-                                                        </div>
-                                                    )
-                                                    }
-                                                </div>
-                                            );
-                                        })
-                                    }
-                                </div>
-                            </div>
-                        )}
+                {/* Bulk Actions */}
+                {selectedForAction.size > 0 && (
+                    <Card>
+                        <div className="flex items-center gap-3 flex-wrap">
+                            <span className="text-sm text-zinc-400">{selectedForAction.size} selected</span>
+                            <button
+                                onClick={() => handleBulkSetFlag('ignored')}
+                                className="flex items-center gap-1.5 px-3 py-1.5 bg-zinc-700 hover:bg-zinc-600 rounded text-sm text-white"
+                            >
+                                <EyeOff size={14} /> Ignore
+                            </button>
+                            <button
+                                onClick={() => handleBulkSetFlag('protected')}
+                                className="flex items-center gap-1.5 px-3 py-1.5 bg-amber-600 hover:bg-amber-500 rounded text-sm text-white"
+                            >
+                                <Shield size={14} /> Protect
+                            </button>
+                            <button
+                                onClick={handleTestSelected}
+                                disabled={testing}
+                                className="flex items-center gap-1.5 px-3 py-1.5 bg-cyan-600 hover:bg-cyan-500 disabled:bg-zinc-700 rounded text-sm text-white"
+                            >
+                                <Zap size={14} className={testing ? 'animate-pulse' : ''} /> Test
+                            </button>
+                            <button
+                                onClick={() => setSelectedForAction(new Set())}
+                                className="px-3 py-1.5 text-zinc-500 hover:text-zinc-300 text-sm"
+                            >
+                                Clear
+                            </button>
+                        </div>
                     </Card>
+                )}
 
-                    {/* Add Remote Modal */}
-                    {showAddModal && (
-                        <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
-                            <div className="bg-zinc-900 border border-zinc-700 rounded-xl p-6 w-full max-w-lg">
-                                <h3 className="text-lg font-bold text-white mb-4">Add New Remote</h3>
-
-                                <div className="space-y-4">
-                                    <div>
-                                        <label className="block text-xs text-zinc-500 mb-1">Name</label>
-                                        <input
-                                            type="text"
-                                            value={newName}
-                                            onChange={(e) => setNewName(e.target.value)}
-                                            placeholder="my-remote"
-                                            className="w-full bg-zinc-800 border border-zinc-700 rounded px-3 py-2 text-white"
-                                        />
-                                    </div>
-
-                                    <div>
-                                        <label className="block text-xs text-zinc-500 mb-1">Type</label>
-                                        <select
-                                            value={newType}
-                                            onChange={(e) => setNewType(e.target.value)}
-                                            className="w-full bg-zinc-800 border border-zinc-700 rounded px-3 py-2 text-white"
-                                        >
-                                            <option value="drive">Google Drive</option>
-                                            <option value="s3">S3</option>
-                                            <option value="b2">Backblaze B2</option>
-                                            <option value="sftp">SFTP</option>
-                                            <option value="local">Local</option>
-                                            <option value="union">Union</option>
-                                        </select>
-                                    </div>
-
-                                    <div>
-                                        <label className="block text-xs text-zinc-500 mb-1">Config (JSON)</label>
-                                        <textarea
-                                            value={newConfig}
-                                            onChange={(e) => setNewConfig(e.target.value)}
-                                            placeholder='{"scope": "drive", "team_drive": "..."}'
-                                            className="w-full h-24 bg-zinc-800 border border-zinc-700 rounded px-3 py-2 text-white font-mono text-sm"
-                                        />
-                                    </div>
-                                </div>
-
-                                <div className="flex gap-2 mt-6">
-                                    <button
-                                        onClick={handleAdd}
-                                        className="flex-1 px-4 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded-lg font-medium"
-                                    >
-                                        Create
-                                    </button>
-                                    <button
-                                        onClick={() => setShowAddModal(false)}
-                                        className="px-4 py-2 bg-zinc-700 hover:bg-zinc-600 text-white rounded-lg"
-                                    >
-                                        Cancel
-                                    </button>
-                                </div>
-                            </div>
-                        </div>
-                    )}
-
-                    {/* Copy Config Modal */}
-                    {showCopyModal && (
-                        <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-4">
-                            <div className="bg-zinc-900 border border-zinc-700 rounded-xl p-6 w-full max-w-lg shadow-2xl">
-                                <h3 className="text-lg font-bold text-white mb-4 flex items-center gap-2">
-                                    <Copy size={18} /> Copy Config
-                                </h3>
-                                {copyStep === 'config' ? (
-                                    <>
-                                        <div className="text-sm text-zinc-400 mb-4">
-                                            Copy <strong>rclone.conf</strong> from
-                                            <span className="text-cyan-400 mx-1">{source === 'local' ? 'Local' : (servers.find(s => s.id === selectedServer)?.name || 'Unknown')}</span>
-                                            to another machine.
-                                        </div>
-
-                                        <div className="space-y-4 mb-6">
-                                            <div className="grid grid-cols-2 gap-4">
-                                                <div>
-                                                    <label className="block text-xs text-zinc-500 mb-1">Source Path (Optional)</label>
-                                                    <input type="text" value={sourcePath} onChange={e => setSourcePath(e.target.value)}
-                                                        placeholder="Auto-detect"
-                                                        className="w-full bg-zinc-800 border border-zinc-700 rounded px-3 py-2 text-white text-xs font-mono" />
-                                                </div>
-                                                <div>
-                                                    <label className="block text-xs text-zinc-500 mb-1">Destination Server</label>
-                                                    <select value={copyDest} onChange={e => setCopyDest(e.target.value)}
-                                                        className="w-full bg-zinc-800 border border-zinc-700 rounded px-3 py-2 text-white text-xs">
-                                                        <option value="local">Local Machine</option>
-                                                        {servers.map(s => <option key={s.id} value={s.id}>{s.name}</option>)}
-                                                    </select>
-                                                </div>
-                                            </div>
-
-                                            <div className="grid grid-cols-2 gap-4">
-                                                <div>
-                                                    <label className="block text-xs text-zinc-500 mb-1">Dest Path (Optional Folder)</label>
-                                                    <input type="text" value={destPath} onChange={e => setDestPath(e.target.value)}
-                                                        placeholder="Auto-detect"
-                                                        className="w-full bg-zinc-800 border border-zinc-700 rounded px-3 py-2 text-white text-xs font-mono" />
-                                                </div>
-                                                <div>
-                                                    <label className="block text-xs text-zinc-500 mb-1">Target Filename (Optional)</label>
-                                                    <input type="text" value={customName} onChange={e => setCustomName(e.target.value)}
-                                                        placeholder={copyMode === 'replace' ? 'rclone.conf' : 'Auto-generated'}
-                                                        className="w-full bg-zinc-800 border border-zinc-700 rounded px-3 py-2 text-white text-xs font-mono" />
-                                                </div>
-                                            </div>
-
-                                            <div>
-                                                <label className="block text-xs text-zinc-500 mb-1">Copy Mode</label>
-                                                <div className="flex flex-col gap-2">
-                                                    <label className={`flex items-center gap-2 p-3 rounded border cursor-pointer ${copyMode === 'backup' ? 'bg-emerald-900/20 border-emerald-600' : 'bg-zinc-800 border-zinc-700'}`}>
-                                                        <input type="radio" name="copyMode" value="backup" checked={copyMode === 'backup'} onChange={() => setCopyMode('backup')} />
-                                                        <div className="flex flex-col">
-                                                            <span className="text-sm font-medium text-white">Back Up (Safe)</span>
-                                                            <span className="text-xs text-zinc-500">Save as a new file (e.g. .bak) - No Overwrite</span>
-                                                        </div>
-                                                    </label>
-                                                    <label className={`flex items-center gap-2 p-3 rounded border cursor-pointer ${copyMode === 'replace' ? 'bg-red-900/20 border-red-600' : 'bg-zinc-800 border-zinc-700'}`}>
-                                                        <input type="radio" name="copyMode" value="replace" checked={copyMode === 'replace'} onChange={() => setCopyMode('replace')} />
-                                                        <div className="flex flex-col">
-                                                            <span className="text-sm font-medium text-white">Replace Active Config</span>
-                                                            <span className="text-xs text-zinc-500">Overwrites target file (Automatic backup created first)</span>
-                                                        </div>
-                                                    </label>
-                                                </div>
-                                            </div>
-                                        </div>
-
-                                        {copyLoading ? (
-                                            <div className="text-center py-4 bg-zinc-950 rounded border border-zinc-800 mb-4 animate-pulse">
-                                                <RefreshCw size={24} className="animate-spin mx-auto mb-2 text-cyan-400" />
-                                                <div className="text-zinc-400 text-sm">Validating paths... please wait</div>
-                                            </div>
-                                        ) : (
-                                            <div className="flex gap-2">
-                                                <button onClick={async () => {
-                                                    setCopyLoading(true);
-                                                    setMessage(null);
-                                                    try {
-                                                        const src = source === 'local' ? 'local' : selectedServer;
-                                                        const res = await copyRcloneConfig(src, copyDest, copyMode, {
-                                                            sourcePath: sourcePath || undefined,
-                                                            destPath: destPath || undefined,
-                                                            customName: customName || undefined,
-                                                            dryRun: true
-                                                        });
-                                                        setPreviewData(res);
-                                                        setCopyStep('confirm');
-                                                    } catch (e: any) {
-                                                        setMessage(`Error: ${e.message}`);
-                                                    }
-                                                    finally { setCopyLoading(false); }
-                                                }} className="flex-1 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded font-medium flex items-center justify-center gap-2">
-                                                    Preview & Confirm
-                                                </button>
-                                                <button onClick={() => setShowCopyModal(false)} className="px-4 py-2 bg-zinc-700 hover:bg-zinc-600 text-white rounded">
-                                                    Cancel
-                                                </button>
-                                            </div>
-                                        )}
-                                    </>
-                                ) : (
-                                    <>
-                                        <div className="space-y-4 mb-6 bg-zinc-950 p-4 rounded border border-zinc-800">
-                                            <h4 className="text-white font-medium flex gap-2 items-center">
-                                                <FileCheck size={18} className="text-emerald-400" /> Confirm Copy Details
-                                            </h4>
-
-                                            <div className="grid gap-4 text-sm">
-                                                <div>
-                                                    <label className="block text-xs text-zinc-500 mb-1 uppercase tracking-wider">Source Configuration</label>
-                                                    <div className="font-mono text-zinc-300 break-all bg-zinc-900/50 p-2 rounded border border-zinc-800">
-                                                        {previewData?.source}
-                                                    </div>
-                                                </div>
-                                                <div className="flex justify-center text-zinc-600">
-                                                    <ArrowDown size={20} />
-                                                </div>
-                                                <div>
-                                                    <label className="block text-xs text-zinc-500 mb-1 uppercase tracking-wider">Destination Configuration</label>
-                                                    <div className="font-mono text-cyan-300 break-all font-bold bg-cyan-900/20 p-2 rounded border border-cyan-800/50">
-                                                        {previewData?.destination}
-                                                    </div>
-                                                </div>
-
-                                                {copyMode === 'replace' && (
-                                                    <div className="p-3 bg-red-900/10 border border-red-900/30 rounded text-red-400 text-xs flex gap-2 items-start mt-2">
-                                                        <AlertTriangle size={16} className="shrink-0 mt-0.5" />
-                                                        <div>
-                                                            <strong className="block mb-1">Warning: Overwrite Mode</strong>
-                                                            This will overwrite the active configuration at the destination.
-                                                            An automatic backup of the existing file will be created before writing.
-                                                        </div>
-                                                    </div>
-                                                )}
-                                            </div>
-                                        </div>
-
-                                        {copyLoading ? (
-                                            <div className="text-center py-4 bg-zinc-950 rounded border border-zinc-800 mb-4 animate-pulse">
-                                                <RefreshCw size={24} className="animate-spin mx-auto mb-2 text-cyan-400" />
-                                                <div className="text-zinc-400 text-sm">Copying config... please wait</div>
-                                            </div>
-                                        ) : (
-                                            <div className="flex gap-2">
-                                                <button onClick={async () => {
-                                                    setCopyLoading(true);
-                                                    setMessage(null);
-                                                    try {
-                                                        const src = source === 'local' ? 'local' : selectedServer;
-                                                        const res = await copyRcloneConfig(src, copyDest, copyMode, {
-                                                            sourcePath: sourcePath || undefined,
-                                                            destPath: destPath || undefined,
-                                                            customName: customName || undefined,
-                                                            dryRun: false
-                                                        });
-                                                        setMessage(`✓ ${res.message}`);
-                                                        setShowCopyModal(false);
-                                                        setCopyStep('config');
-                                                        setSourcePath(''); setDestPath(''); setCustomName('');
-                                                    } catch (e: any) {
-                                                        setMessage(`Error: ${e.message}`);
-                                                    }
-                                                    finally { setCopyLoading(false); }
-                                                }} className="flex-1 py-2 bg-emerald-600 hover:bg-emerald-500 text-white rounded font-medium flex items-center justify-center gap-2">
-                                                    Confirm Copy
-                                                </button>
-                                                <button onClick={() => setCopyStep('config')} className="px-4 py-2 bg-zinc-700 hover:bg-zinc-600 text-white rounded">
-                                                    Back
-                                                </button>
-                                            </div>
-                                        )}
-                                    </>
-                                )}
-                            </div>
-                        </div>
-                    )}
-
-
-                    {/* Push Modal */}
-                    {
-                        showPushModal && (
-                            <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-4">
-                                <div className="bg-zinc-900 border border-zinc-700 rounded-xl p-6 w-full max-w-md shadow-2xl">
-                                    <h3 className="text-lg font-bold text-white mb-4 flex items-center gap-2">
-                                        <Server size={20} className="text-cyan-400" />
-                                        Push Configs to SSH Servers
-                                    </h3>
-
-                                    <div className="mb-4">
-                                        <div className="text-sm text-zinc-400 mb-2">
-                                            Pushing <span className="text-white font-bold">{selectedForCopy.size}</span> selected Rclone details to:
-                                        </div>
-                                        <div className="max-h-60 overflow-y-auto bg-zinc-950 border border-zinc-800 rounded p-2 space-y-1">
-                                            {servers.map(server => (
-                                                <div
-                                                    key={server.id}
-                                                    onClick={() => {
-                                                        if (pushStatus === 'pushing') return;
-                                                        const next = new Set(targetSshServers);
-                                                        if (next.has(server.id)) next.delete(server.id);
-                                                        else next.add(server.id);
-                                                        setTargetSshServers(next);
-                                                    }}
-                                                    className={`flex items-center gap-3 p-2 rounded cursor-pointer transition ${targetSshServers.has(server.id) ? 'bg-cyan-900/30 border border-cyan-500/50' : 'bg-zinc-900 border border-transparent hover:bg-zinc-800'
-                                                        } ${pushStatus === 'pushing' ? 'opacity-50 cursor-not-allowed' : ''}`}
-                                                >
-                                                    <div className={`w-4 h-4 rounded border flex items-center justify-center shrink-0 ${targetSshServers.has(server.id) ? 'bg-cyan-600 border-cyan-600' : 'border-zinc-600'
-                                                        }`}>
-                                                        {targetSshServers.has(server.id) && <CheckCircle size={10} className="text-white" />}
-                                                    </div>
-                                                    <div className="text-sm text-zinc-200">{server.name}</div>
-                                                    <div className="text-xs text-zinc-500 ml-auto font-mono">{server.host}</div>
-                                                </div>
-                                            ))}
-                                        </div>
-                                    </div>
-
-                                    {pushProgress.length > 0 && (
-                                        <div className="mb-4 p-3 bg-black/40 rounded border border-zinc-800 text-xs font-mono text-zinc-300 max-h-32 overflow-y-auto">
-                                            {pushProgress.map((line, i) => (
-                                                <div key={i} className={line.includes('✓') ? 'text-emerald-400' : line.includes('✗') ? 'text-red-400' : 'text-zinc-400'}>{line}</div>
-                                            ))}
+                {/* Test Results */}
+                {testResults.length > 0 && (
+                    <Card>
+                        <h4 className="text-sm font-medium text-white mb-3">Test Results</h4>
+                        <div className="space-y-2 max-h-48 overflow-y-auto">
+                            {testResults.map(r => (
+                                <div key={r.name} className={`flex items-center gap-3 p-2 rounded ${r.status === 'ok' ? 'bg-emerald-900/20' : 'bg-red-900/20'}`}>
+                                    {r.status === 'ok' ? <CheckCircle size={16} className="text-emerald-400" /> : <XCircle size={16} className="text-red-400" />}
+                                    <span className="font-mono text-sm text-white">{r.name}</span>
+                                    <span className="text-xs text-zinc-500 truncate flex-1">{r.message}</span>
+                                    {r.status === 'error' && (
+                                        <div className="flex gap-1">
+                                            <button
+                                                onClick={() => handleSetFlag(r.name, 'ignored')}
+                                                className="px-2 py-1 bg-zinc-700 hover:bg-zinc-600 rounded text-xs text-white"
+                                            >
+                                                Ignore
+                                            </button>
+                                            <button
+                                                onClick={() => handleDeleteRemote(r.name)}
+                                                className="px-2 py-1 bg-red-600 hover:bg-red-500 rounded text-xs text-white"
+                                            >
+                                                Delete
+                                            </button>
                                         </div>
                                     )}
-
-                                    <div className="flex items-center justify-between mt-6">
-                                        <button
-                                            onClick={() => setShowPushModal(false)}
-                                            disabled={pushStatus === 'pushing'}
-                                            className="px-4 py-2 bg-zinc-700 hover:bg-zinc-600 text-white rounded disabled:opacity-50"
-                                        >
-                                            {pushStatus === 'complete' ? 'Close' : 'Cancel'}
-                                        </button>
-                                        {pushStatus !== 'complete' && (
-                                            <button
-                                                onClick={handleConfirmPush}
-                                                disabled={targetSshServers.size === 0 || pushStatus === 'pushing'}
-                                                className="px-4 py-2 bg-cyan-600 hover:bg-cyan-500 text-white rounded font-medium disabled:opacity-50 flex items-center gap-2"
-                                            >
-                                                {pushStatus === 'pushing' ? <RefreshCw size={14} className="animate-spin" /> : <Server size={14} />}
-                                                Push Configs
-                                            </button>
-                                        )}
-                                    </div>
                                 </div>
-                            </div>
-                        )
-                    }
-                    {/* Duplicates Modal */}
-                    {showDupModal && (
-                        <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50 p-4">
-                            <div className="bg-zinc-900 border border-zinc-700 rounded-xl p-6 w-full max-w-md shadow-2xl">
-                                <h3 className="text-lg font-bold text-white mb-4 flex items-center gap-2">
-                                    <div className="text-amber-500"><AlertTriangle size={20} /></div>
-                                    Duplicate Sections Found
-                                </h3>
-                                <div className="text-sm text-zinc-400 mb-4">
-                                    The following remote names appear multiple times in the config file. This usually indicates corruption or append errors.
-                                </div>
-
-                                <div className="bg-zinc-950 p-3 rounded border border-zinc-800 mb-6 max-h-48 overflow-y-auto">
-                                    {duplicateResults.map(d => (
-                                        <div key={d} className="text-red-400 font-mono text-sm py-1 border-b border-zinc-800 last:border-0">
-                                            [{d}]
-                                        </div>
-                                    ))}
-                                </div>
-
-                                <div className="text-xs text-zinc-500 mb-4">
-                                    Please edit the config file manually on the server to resolve these duplicates.
-                                </div>
-
-                                <div className="flex justify-end">
-                                    <button onClick={() => setShowDupModal(false)} className="px-4 py-2 bg-zinc-700 hover:bg-zinc-600 text-white rounded">
-                                        Close
-                                    </button>
-                                </div>
-                            </div>
+                            ))}
                         </div>
-                    )}
-                </>
-            )
-            }
+                    </Card>
+                )}
 
-            {/* MANAGE TAB */}
-            {
-                activeTab === 'manage' && (
-                    <div className="space-y-4">
-                        {/* Search & Filter Bar */}
-                        <Card>
-                            <div className="flex items-center gap-4 flex-wrap">
-                                <div className="flex-1 min-w-[200px] relative">
-                                    <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-500" />
-                                    <input
-                                        type="text"
-                                        value={searchFilter}
-                                        onChange={(e) => setSearchFilter(e.target.value)}
-                                        placeholder="Fuzzy search remotes..."
-                                        className="w-full bg-zinc-800 border border-zinc-700 rounded-lg pl-10 pr-3 py-2 text-white text-sm"
-                                    />
-                                </div>
-                                <div className="flex gap-1">
-                                    {(['all', 'normal', 'ignored', 'protected'] as const).map(filter => (
-                                        <button
-                                            key={filter}
-                                            onClick={() => setStatusFilter(filter)}
-                                            className={`px-3 py-1.5 rounded text-xs font-medium transition ${statusFilter === filter
-                                                ? filter === 'ignored' ? 'bg-zinc-600 text-white'
-                                                    : filter === 'protected' ? 'bg-amber-600 text-white'
-                                                        : 'bg-purple-600 text-white'
-                                                : 'bg-zinc-800 text-zinc-400 hover:text-white'
+                {/* Remotes List with Flags */}
+                <Card>
+                    <div className="flex items-center justify-between mb-4">
+                        <h3 className="text-sm font-medium text-white">
+                            Remotes ({filteredRemotesWithFlags.length})
+                        </h3>
+                        <div className="flex items-center gap-2">
+                            <button
+                                onClick={() => {
+                                    const allNames = filteredRemotesWithFlags.map(r => r.name);
+                                    setSelectedForAction(prev => prev.size === allNames.length ? new Set() : new Set(allNames));
+                                }}
+                                className="text-xs text-zinc-500 hover:text-zinc-300 transition"
+                            >
+                                {selectedForAction.size === filteredRemotesWithFlags.length ? 'Deselect All' : 'Select All'}
+                            </button>
+                            <button
+                                onClick={() => {
+                                    const allNames = filteredRemotesWithFlags.map(r => r.name);
+                                    const inverted = new Set(allNames.filter(name => !selectedForAction.has(name)));
+                                    setSelectedForAction(inverted);
+                                }}
+                                className="text-xs text-zinc-500 hover:text-zinc-300 transition"
+                            >
+                                Invert
+                            </button>
+                        </div>
+                    </div>
+
+                    {loading ? (
+                        <div className="text-center py-8 text-zinc-500">Loading...</div>
+                    ) : filteredRemotesWithFlags.length === 0 ? (
+                        <div className="text-center py-8 text-zinc-500">No remotes found</div>
+                    ) : (
+                        <div className="space-y-1 max-h-96 overflow-y-auto pr-1">
+                            {filteredRemotesWithFlags.map(remote => {
+                                const isSelected = selectedForAction.has(remote.name);
+                                return (
+                                    <div
+                                        key={remote.name}
+                                        className={`flex items-center gap-3 p-2 rounded border transition cursor-pointer group ${isSelected
+                                            ? 'border-purple-500/50 bg-purple-900/20'
+                                            : remote.status === 'ignored' ? 'border-zinc-800 bg-zinc-800/40 opacity-70'
+                                                : remote.status === 'protected' ? 'border-amber-900/40 bg-amber-900/10'
+                                                    : 'border-zinc-800 bg-zinc-900/50 hover:bg-zinc-800'
+                                            }`}
+                                        onClick={(e) => {
+                                            if (e.target instanceof HTMLInputElement || (e.target as HTMLElement).closest('button')) return;
+                                            handleManageSelectClick(
+                                                remote.name,
+                                                e,
+                                                filteredRemotesWithFlags.map(r => r.name)
+                                            );
+                                        }}
+                                    >
+                                        <div
+                                            className={`w-4 h-4 rounded border flex items-center justify-center shrink-0 transition-colors ${isSelected ? 'bg-purple-600 border-purple-600' : 'border-zinc-600 bg-zinc-800'
                                                 }`}
+                                            onClick={(e) => {
+                                                e.stopPropagation();
+                                                handleManageSelectClick(remote.name, { shiftKey: false } as any, filteredRemotesWithFlags.map(r => r.name));
+
+                                            }}
                                         >
-                                            {filter.charAt(0).toUpperCase() + filter.slice(1)}
-                                        </button>
-                                    ))}
-                                </div>
-                            </div>
-                        </Card>
+                                            {isSelected && <CheckCircle size={10} className="text-white" />}
+                                        </div>
 
-                        {/* Bulk Actions */}
-                        {selectedForAction.size > 0 && (
-                            <Card>
-                                <div className="flex items-center gap-3 flex-wrap">
-                                    <span className="text-sm text-zinc-400">{selectedForAction.size} selected</span>
-                                    <button
-                                        onClick={() => handleBulkSetFlag('ignored')}
-                                        className="flex items-center gap-1.5 px-3 py-1.5 bg-zinc-700 hover:bg-zinc-600 rounded text-sm text-white"
-                                    >
-                                        <EyeOff size={14} /> Ignore
-                                    </button>
-                                    <button
-                                        onClick={() => handleBulkSetFlag('protected')}
-                                        className="flex items-center gap-1.5 px-3 py-1.5 bg-amber-600 hover:bg-amber-500 rounded text-sm text-white"
-                                    >
-                                        <Shield size={14} /> Protect
-                                    </button>
-                                    <button
-                                        onClick={handleTestSelected}
-                                        disabled={testing}
-                                        className="flex items-center gap-1.5 px-3 py-1.5 bg-cyan-600 hover:bg-cyan-500 disabled:bg-zinc-700 rounded text-sm text-white"
-                                    >
-                                        <Zap size={14} className={testing ? 'animate-pulse' : ''} /> Test
-                                    </button>
-                                    <button
-                                        onClick={() => setSelectedForAction(new Set())}
-                                        className="px-3 py-1.5 text-zinc-500 hover:text-zinc-300 text-sm"
-                                    >
-                                        Clear
-                                    </button>
-                                </div>
-                            </Card>
-                        )}
-
-                        {/* Test Results */}
-                        {testResults.length > 0 && (
-                            <Card>
-                                <h4 className="text-sm font-medium text-white mb-3">Test Results</h4>
-                                <div className="space-y-2 max-h-48 overflow-y-auto">
-                                    {testResults.map(r => (
-                                        <div key={r.name} className={`flex items-center gap-3 p-2 rounded ${r.status === 'ok' ? 'bg-emerald-900/20' : 'bg-red-900/20'}`}>
-                                            {r.status === 'ok' ? <CheckCircle size={16} className="text-emerald-400" /> : <XCircle size={16} className="text-red-400" />}
-                                            <span className="font-mono text-sm text-white">{r.name}</span>
-                                            <span className="text-xs text-zinc-500 truncate flex-1">{r.message}</span>
-                                            {r.status === 'error' && (
-                                                <div className="flex gap-1">
-                                                    <button
-                                                        onClick={() => handleSetFlag(r.name, 'ignored')}
-                                                        className="px-2 py-1 bg-zinc-700 hover:bg-zinc-600 rounded text-xs text-white"
-                                                    >
-                                                        Ignore
-                                                    </button>
-                                                    <button
-                                                        onClick={() => handleDeleteRemote(r.name)}
-                                                        className="px-2 py-1 bg-red-600 hover:bg-red-500 rounded text-xs text-white"
-                                                    >
-                                                        Delete
-                                                    </button>
-                                                </div>
+                                        <div className="flex-1 min-w-0">
+                                            <div className="flex items-center gap-2">
+                                                <span className={`text-xs font-semibold truncate ${isSelected ? 'text-purple-200' : 'text-zinc-300'}`}>{remote.name}</span>
+                                                <span className="text-[10px] px-1.5 py-0.5 bg-zinc-800 border border-zinc-700 rounded text-zinc-500 uppercase tracking-wider">{remote.type}</span>
+                                                {remote.status === 'ignored' && <span className="text-[10px] px-1.5 py-0.5 bg-zinc-800 border border-zinc-700 rounded text-zinc-500">IGNORED</span>}
+                                                {remote.status === 'protected' && <span className="text-[10px] px-1.5 py-0.5 bg-amber-900/20 border border-amber-900/40 text-amber-500 rounded">PROTECTED</span>}
+                                            </div>
+                                        </div>
+                                        <div className="flex gap-1" onClick={e => e.stopPropagation()}>
+                                            <button
+                                                onClick={() => handleEdit(remote)}
+                                                className="p-1.5 text-zinc-500 hover:text-white hover:bg-zinc-700 rounded transition"
+                                                title="Edit Config"
+                                            >
+                                                <Edit2 size={14} />
+                                            </button>
+                                            {remote.status !== 'ignored' && (
+                                                <button
+                                                    onClick={() => handleSetFlag(remote.name, 'ignored')}
+                                                    className="p-1.5 text-zinc-500 hover:text-zinc-300 hover:bg-zinc-700 rounded transition"
+                                                    title="Ignore"
+                                                >
+                                                    <EyeOff size={14} />
+                                                </button>
+                                            )}
+                                            {remote.status !== 'protected' && (
+                                                <button
+                                                    onClick={() => handleSetFlag(remote.name, 'protected')}
+                                                    className="p-1.5 text-zinc-500 hover:text-amber-400 hover:bg-zinc-700 rounded transition"
+                                                    title="Protect"
+                                                >
+                                                    <Shield size={14} />
+                                                </button>
+                                            )}
+                                            {remote.status !== 'normal' && (
+                                                <button
+                                                    onClick={() => handleClearFlag(remote.name)}
+                                                    className="p-1.5 text-zinc-500 hover:text-emerald-400 hover:bg-zinc-700 rounded transition"
+                                                    title="Clear Flag"
+                                                >
+                                                    <X size={14} />
+                                                </button>
                                             )}
                                         </div>
-                                    ))}
-                                </div>
-                            </Card>
-                        )}
-
-                        {/* Remotes List with Flags */}
-                        <Card>
-                            <div className="flex items-center justify-between mb-4">
-                                <h3 className="text-sm font-medium text-white">
-                                    Remotes ({filteredRemotesWithFlags.length})
-                                </h3>
-                                <button
-                                    onClick={() => {
-                                        const allNames = filteredRemotesWithFlags.map(r => r.name);
-                                        setSelectedForAction(prev => prev.size === allNames.length ? new Set() : new Set(allNames));
-                                    }}
-                                    className="text-xs text-zinc-500 hover:text-zinc-300 transition"
-                                >
-                                    {selectedForAction.size === filteredRemotesWithFlags.length ? 'Deselect All' : 'Select All'}
-                                </button>
-                            </div>
-
-                            {loading ? (
-                                <div className="text-center py-8 text-zinc-500">Loading...</div>
-                            ) : filteredRemotesWithFlags.length === 0 ? (
-                                <div className="text-center py-8 text-zinc-500">No remotes found</div>
-                            ) : (
-                                <div className="space-y-1 max-h-96 overflow-y-auto pr-1">
-                                    {filteredRemotesWithFlags.map(remote => {
-                                        const isSelected = selectedForAction.has(remote.name);
-                                        return (
-                                            <div
-                                                key={remote.name}
-                                                className={`flex items-center gap-3 p-2 rounded border transition cursor-pointer group ${isSelected
-                                                    ? 'border-purple-500/50 bg-purple-900/20'
-                                                    : remote.status === 'ignored' ? 'border-zinc-800 bg-zinc-800/40 opacity-70'
-                                                        : remote.status === 'protected' ? 'border-amber-900/40 bg-amber-900/10'
-                                                            : 'border-zinc-800 bg-zinc-900/50 hover:bg-zinc-800'
-                                                    }`}
-                                                onClick={(e) => {
-                                                    if (e.target instanceof HTMLInputElement || (e.target as HTMLElement).closest('button')) return;
-                                                    handleManageSelectClick(
-                                                        remote.name,
-                                                        e,
-                                                        filteredRemotesWithFlags.map(r => r.name)
-                                                    );
-                                                }}
-                                            >
-                                                <div
-                                                    className={`w-4 h-4 rounded border flex items-center justify-center shrink-0 transition-colors ${isSelected ? 'bg-purple-600 border-purple-600' : 'border-zinc-600 bg-zinc-800'
-                                                        }`}
-                                                    onClick={(e) => {
-                                                        e.stopPropagation();
-                                                        handleManageSelectClick(remote.name, { shiftKey: false } as any, filteredRemotesWithFlags.map(r => r.name));
-
-                                                    }}
-                                                >
-                                                    {isSelected && <CheckCircle size={10} className="text-white" />}
-                                                </div>
-
-                                                <div className="flex-1 min-w-0">
-                                                    <div className="flex items-center gap-2">
-                                                        <span className={`text-xs font-semibold truncate ${isSelected ? 'text-purple-200' : 'text-zinc-300'}`}>{remote.name}</span>
-                                                        <span className="text-[10px] px-1.5 py-0.5 bg-zinc-800 border border-zinc-700 rounded text-zinc-500 uppercase tracking-wider">{remote.type}</span>
-                                                        {remote.status === 'ignored' && <span className="text-[10px] px-1.5 py-0.5 bg-zinc-800 border border-zinc-700 rounded text-zinc-500">IGNORED</span>}
-                                                        {remote.status === 'protected' && <span className="text-[10px] px-1.5 py-0.5 bg-amber-900/20 border border-amber-900/40 text-amber-500 rounded">PROTECTED</span>}
-                                                    </div>
-                                                </div>
-                                                <div className="flex gap-1" onClick={e => e.stopPropagation()}>
-                                                    <button
-                                                        onClick={() => handleEdit(remote)}
-                                                        className="p-1.5 text-zinc-500 hover:text-white hover:bg-zinc-700 rounded transition"
-                                                        title="Edit Config"
-                                                    >
-                                                        <Edit2 size={14} />
-                                                    </button>
-                                                    {remote.status !== 'ignored' && (
-                                                        <button
-                                                            onClick={() => handleSetFlag(remote.name, 'ignored')}
-                                                            className="p-1.5 text-zinc-500 hover:text-zinc-300 hover:bg-zinc-700 rounded transition"
-                                                            title="Ignore"
-                                                        >
-                                                            <EyeOff size={14} />
-                                                        </button>
-                                                    )}
-                                                    {remote.status !== 'protected' && (
-                                                        <button
-                                                            onClick={() => handleSetFlag(remote.name, 'protected')}
-                                                            className="p-1.5 text-zinc-500 hover:text-amber-400 hover:bg-zinc-700 rounded transition"
-                                                            title="Protect"
-                                                        >
-                                                            <Shield size={14} />
-                                                        </button>
-                                                    )}
-                                                    {remote.status !== 'normal' && (
-                                                        <button
-                                                            onClick={() => handleClearFlag(remote.name)}
-                                                            className="p-1.5 text-zinc-500 hover:text-emerald-400 hover:bg-zinc-700 rounded transition"
-                                                            title="Clear Flag"
-                                                        >
-                                                            <X size={14} />
-                                                        </button>
-                                                    )}
-                                                </div>
-                                            </div>
-                                        );
-                                    })}
-                                </div>
-                            )}
-                        </Card>
-                    </div>
-                )
-            }
+                                    </div>
+                                );
+                            })}
+                        </div>
+                    )}
+                </Card>
+            </div>
 
             {/* Status Message */}
             {

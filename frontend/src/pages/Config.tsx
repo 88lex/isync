@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react';
-import { Save, RefreshCw, Server, Shield, Globe, Terminal, Upload, Download, Trash2, Plus, Activity, CheckCircle, Settings, Key } from 'lucide-react';
+import { Save, RefreshCw, Server, Shield, Globe, Terminal, Upload, Download, Trash2, Plus, Activity, CheckCircle, Settings } from 'lucide-react';
 import { approveSSH, fetchConfig, updateConfig, Config, DomainConfig, listProfiles, loadProfile, saveProfile, resetProfile, testSSH, testDomainAuth } from '../api';
+import { Button, Input as UIInput, Select as UISelect, Textarea } from '../components/ui';
 
 type ConfigTab = 'general' | 'rclone' | 'domains' | 'advanced';
 
@@ -15,7 +16,6 @@ const ConfigPage = () => {
     const [authStatus, setAuthStatus] = useState<string[]>([]);
     const [activeTab, setActiveTab] = useState<ConfigTab>('general');
 
-    // Initial Load
     useEffect(() => {
         loadData();
     }, []);
@@ -38,23 +38,21 @@ const ConfigPage = () => {
         try {
             await updateConfig(config);
             setDirty(false);
-            alert("✅ Configuration Saved Successfully!");
+            alert("Configuration saved!");
         } catch (e: any) {
-            alert(`❌ Save Failed: ${e.message}`);
+            alert(`Save failed: ${e.message}`);
         } finally {
             setSaving(false);
         }
     };
 
-    // Profiles
     const handleLoadProfile = async () => {
         if (!selectedProfile) return;
-        if (!confirm(`Load profile '${selectedProfile}'? Unsaved changes will be lost.`)) return;
+        if (!confirm(`Load profile '${selectedProfile}'?`)) return;
         try {
             const newCfg = await loadProfile(selectedProfile);
             setConfig(newCfg);
             setDirty(false);
-            alert("Profile Loaded!");
         } catch (e) { alert("Failed to load profile"); }
     };
 
@@ -63,18 +61,17 @@ const ConfigPage = () => {
         if (!name) return alert("Enter a name for the profile");
         try {
             await saveProfile(name);
-            await loadData(); // refresh list
+            await loadData();
             alert(`Saved to ${name}`);
         } catch (e) { alert("Failed to save profile"); }
     };
 
     const handleReset = async () => {
-        if (!confirm("Reset to DEFAULTS? This cannot be undone.")) return;
+        if (!confirm("Reset to defaults?")) return;
         await resetProfile();
         await loadData();
     };
 
-    // Domain Helpers
     const updateDomain = (idx: number, field: keyof DomainConfig, val: string) => {
         const domains = [...(config.domains || [])];
         if (!domains[idx]) domains[idx] = { domain_name: '', admin_email: '', sa_json_path: '', group_email: '' };
@@ -94,7 +91,6 @@ const ConfigPage = () => {
         handleChange('domains', domains);
     };
 
-    // SSH Test
     const handleTestSSH = async () => {
         setSshStatus("Testing...");
         const sshReq = {
@@ -103,135 +99,130 @@ const ConfigPage = () => {
             key_path: config.ssh_key_path,
             timeout: config.ssh_connect_timeout
         };
-
         try {
             const res = await testSSH(sshReq);
             if (res.status === 'success') {
-                setSshStatus("✅ Connected!");
+                setSshStatus("✓ Connected");
             } else if (res.status === 'verification_required') {
-                setSshStatus("⚠️ Waiting for approval...");
-                if (confirm(`The authenticity of host '${config.ssh_host}' cannot be established.\nFingerprint: ${res.details}\n\nAre you sure you want to continue connecting?`)) {
+                setSshStatus("⚠ Verify host");
+                if (confirm(`Verify host fingerprint?\n${res.details}`)) {
                     await handleApproveSSH(sshReq);
                 } else {
-                    setSshStatus("❌ Connection aborted by user.");
+                    setSshStatus("✗ Cancelled");
                 }
             } else {
-                setSshStatus(`❌ ${res.message}`);
+                setSshStatus(`✗ ${res.message}`);
             }
         } catch (e: any) {
-            setSshStatus(`❌ Error: ${e.message}`);
+            setSshStatus(`✗ ${e.message}`);
         }
     };
 
     const handleApproveSSH = async (req: any) => {
-        setSshStatus("Approving host key...");
         try {
             const res = await approveSSH(req);
             if (res.status === 'success') {
-                alert("Host key added! Retrying connection...");
-                // Retry test immediately
                 await handleTestSSH();
             } else {
-                setSshStatus(`❌ Key add failed: ${res.message}`);
+                setSshStatus(`✗ ${res.message}`);
             }
         } catch (e: any) {
-            setSshStatus(`❌ Error approving key: ${e.message}`);
+            setSshStatus(`✗ ${e.message}`);
         }
     };
 
-    // Auth Test
     const handleTestAuth = async () => {
-        setAuthStatus(["Testing APIs..."]);
+        setAuthStatus(["Testing..."]);
         try {
             const res = await testDomainAuth();
             if (Array.isArray(res)) setAuthStatus(res);
-            else setAuthStatus(["✅ All checks passed"]);
+            else setAuthStatus(["✓ All checks passed"]);
         } catch (e: any) {
-            setAuthStatus([`❌ Error: ${e.message}`]);
+            setAuthStatus([`✗ ${e.message}`]);
         }
     };
 
-    // Users List Parsing
     const protectedUsersText = (config.protected_users || []).join('\n');
     const handleProtectedUsersChange = (text: string) => {
         handleChange('protected_users', text.split('\n').map(s => s.trim()).filter(Boolean));
     };
 
     const tabs: { id: ConfigTab; label: string; icon: React.ReactNode }[] = [
-        { id: 'general', label: 'General', icon: <Activity size={16} /> },
-        { id: 'rclone', label: 'Rclone', icon: <Terminal size={16} /> },
-        { id: 'domains', label: 'Domains', icon: <Globe size={16} /> },
-        { id: 'advanced', label: 'Advanced', icon: <Settings size={16} /> },
+        { id: 'general', label: 'General', icon: <Activity size={14} /> },
+        { id: 'rclone', label: 'Rclone', icon: <Terminal size={14} /> },
+        { id: 'domains', label: 'Domains', icon: <Globe size={14} /> },
+        { id: 'advanced', label: 'Advanced', icon: <Settings size={14} /> },
     ];
 
     return (
-        <div className="p-8 max-w-6xl mx-auto space-y-6 text-zinc-100 pb-20">
+        <div className="page-container pb-16">
             {/* Header */}
-            <header className="sticky top-0 bg-zinc-950/80 backdrop-blur-md pt-4 pb-4 border-b border-zinc-800 z-10 flex justify-between items-center -mx-8 px-8">
-                <div>
-                    <h1 className="text-3xl font-bold bg-gradient-to-r from-orange-400 to-red-400 bg-clip-text text-transparent">Configuration</h1>
-                    <p className="text-zinc-500 text-sm">Global settings, profiles, and integrations.</p>
+            <header className="page-header">
+                <div className="flex items-center gap-2">
+                    <div className="w-8 h-8 rounded-lg bg-gradient-to-tr from-orange-600 to-red-600 flex items-center justify-center">
+                        <Settings size={16} className="text-white" />
+                    </div>
+                    <div>
+                        <h1 className="page-title">Configuration</h1>
+                        <p className="text-xs text-zinc-400">Settings & profiles</p>
+                    </div>
                 </div>
                 <div className="flex gap-2">
-                    <button onClick={() => loadData()} className="p-2 text-zinc-400 hover:text-white transition"><RefreshCw size={20} /></button>
-                    <button
+                    <Button variant="ghost" size="sm" onClick={() => loadData()} icon={<RefreshCw size={12} />} />
+                    <Button
+                        variant={dirty ? 'success' : 'secondary'}
+                        size="sm"
                         onClick={handleSave}
-                        disabled={!dirty || saving}
-                        className={`px-6 py-2 rounded-lg font-bold transition flex items-center gap-2 shadow-lg ${dirty ? 'bg-orange-500 hover:bg-orange-600 text-white' : 'bg-zinc-800 text-zinc-500 opacity-50'}`}
+                        disabled={!dirty}
+                        loading={saving}
+                        icon={<Save size={12} />}
                     >
-                        <Save size={18} />
-                        {saving ? 'Saving...' : 'Save Changes'}
-                    </button>
+                        Save
+                    </Button>
                 </div>
             </header>
 
-            {/* Profile Manager - Always Visible */}
-            <section className="bg-zinc-900 border border-zinc-800 rounded-xl p-6">
-                <h2 className="text-sm font-bold text-zinc-400 uppercase tracking-wider mb-4 border-b border-zinc-800 pb-2">Profile Manager</h2>
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                    <div className="space-y-2">
-                        <label className="text-xs font-semibold text-zinc-500">Load Profile</label>
-                        <div className="flex gap-2">
-                            <select
-                                value={selectedProfile}
-                                onChange={e => setSelectedProfile(e.target.value)}
-                                className="bg-zinc-950 border border-zinc-800 rounded px-3 py-2 text-sm w-full outline-none focus:border-orange-500"
-                            >
-                                <option value="">Select Profile...</option>
-                                {profiles.map(p => <option key={p} value={p}>{p}</option>)}
-                            </select>
-                            <button onClick={handleLoadProfile} className="bg-zinc-800 hover:bg-zinc-700 px-3 py-2 rounded text-zinc-300"><Upload size={16} /></button>
-                        </div>
+            {/* Profile Manager */}
+            <section className="card mb-4">
+                <div className="card-header">
+                    <h2 className="card-title">Profile Manager</h2>
+                </div>
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                    <div className="flex gap-2">
+                        <select
+                            value={selectedProfile}
+                            onChange={e => setSelectedProfile(e.target.value)}
+                            className="select flex-1"
+                        >
+                            <option value="">Select Profile...</option>
+                            {profiles.map(p => <option key={p} value={p}>{p}</option>)}
+                        </select>
+                        <Button variant="secondary" size="sm" onClick={handleLoadProfile} icon={<Upload size={12} />} />
                     </div>
-                    <div className="space-y-2">
-                        <label className="text-xs font-semibold text-zinc-500">Save As</label>
-                        <div className="flex gap-2">
-                            <input
-                                placeholder="New Profile Name"
-                                value={newProfileName}
-                                onChange={e => setNewProfileName(e.target.value)}
-                                className="bg-zinc-950 border border-zinc-800 rounded px-3 py-2 text-sm w-full outline-none focus:border-orange-500"
-                            />
-                            <button onClick={handleSaveProfile} className="bg-zinc-800 hover:bg-zinc-700 px-3 py-2 rounded text-zinc-300"><Download size={16} /></button>
-                        </div>
+                    <div className="flex gap-2">
+                        <input
+                            placeholder="New profile name"
+                            value={newProfileName}
+                            onChange={e => setNewProfileName(e.target.value)}
+                            className="input flex-1"
+                        />
+                        <Button variant="secondary" size="sm" onClick={handleSaveProfile} icon={<Download size={12} />} />
                     </div>
-                    <div className="flex items-end justify-end">
-                        <button onClick={handleReset} className="text-red-400 hover:text-red-300 text-sm flex items-center gap-2">
-                            <Trash2 size={14} /> Reset to Defaults
+                    <div className="flex items-center justify-end">
+                        <button onClick={handleReset} className="text-red-400 hover:text-red-300 text-xs flex items-center gap-1">
+                            <Trash2 size={12} /> Reset
                         </button>
                     </div>
                 </div>
             </section>
 
             {/* Tab Navigation */}
-            <div className="flex gap-1 bg-zinc-900 border border-zinc-800 rounded-xl p-1">
+            <div className="flex gap-1 bg-zinc-900 border border-zinc-800 rounded-lg p-1 mb-4">
                 {tabs.map(tab => (
                     <button
                         key={tab.id}
                         onClick={() => setActiveTab(tab.id)}
-                        className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition flex-1 justify-center ${activeTab === tab.id
-                                ? 'bg-orange-500 text-white'
-                                : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800'
+                        className={`flex items-center gap-1.5 px-3 py-1.5 rounded text-xs font-medium transition flex-1 justify-center ${activeTab === tab.id ? 'bg-blue-600 text-white' : 'text-zinc-400 hover:text-zinc-200 hover:bg-zinc-800'
                             }`}
                     >
                         {tab.icon}
@@ -241,68 +232,82 @@ const ConfigPage = () => {
             </div>
 
             {/* Tab Content */}
-            <div className="animate-in fade-in duration-200">
+            <div>
                 {/* General Tab */}
                 {activeTab === 'general' && (
-                    <div className="space-y-6">
-                        <section className="bg-zinc-900 border border-zinc-800 rounded-xl p-6 space-y-4">
-                            <h2 className="text-lg font-bold text-zinc-200 flex items-center gap-2"><Activity size={18} className="text-blue-400" /> Limits & Core</h2>
-                            <div className="grid grid-cols-2 gap-4">
-                                <Input label="Upload Limit" value={config.upload_limit} onChange={(v: string) => handleChange('upload_limit', v)} placeholder="700G" />
-                                <Input label="Rclone Transfers" type="number" value={config.transfers} onChange={(v: any) => handleChange('transfers', parseInt(v))} />
-                                <Input label="Max Users / Cycle" type="number" value={config.max_users_per_cycle} onChange={(v: any) => handleChange('max_users_per_cycle', parseInt(v))} />
-                                <Select label="Rotation Strategy" value={config.rotation_strategy} onChange={(v: string) => handleChange('rotation_strategy', v)}>
-                                    <option value="standard">Temp Users (Create/Delete)</option>
-                                    <option value="existing">Existing Users (Rotate)</option>
-                                </Select>
-                                <Input label="Company Name" value={config.company_name} onChange={(v: string) => handleChange('company_name', v)} />
-                                <Input label="Users File" value={config.existing_users_file} onChange={(v: string) => handleChange('existing_users_file', v)} />
+                    <div className="space-y-4">
+                        <section className="card">
+                            <div className="card-header">
+                                <h2 className="card-title flex items-center gap-1.5"><Activity size={14} className="text-blue-400" /> Limits & Core</h2>
                             </div>
-                            <div className="pt-2">
+                            <div className="grid grid-cols-2 gap-3">
+                                <UIInput label="Upload Limit" value={config.upload_limit || ''} onChange={e => handleChange('upload_limit', e.target.value)} placeholder="700G" />
+                                <UIInput label="Transfers" type="number" value={config.transfers || ''} onChange={e => handleChange('transfers', parseInt(e.target.value))} />
+                                <UIInput label="Max Users/Cycle" type="number" value={config.max_users_per_cycle || ''} onChange={e => handleChange('max_users_per_cycle', parseInt(e.target.value))} />
+                                <UISelect
+                                    label="Rotation Strategy"
+                                    value={config.rotation_strategy || 'standard'}
+                                    onChange={e => handleChange('rotation_strategy', e.target.value)}
+                                    options={[
+                                        { value: 'standard', label: 'Temp Users' },
+                                        { value: 'existing', label: 'Existing Users' }
+                                    ]}
+                                />
+                                <UIInput label="Company Name" value={config.company_name || ''} onChange={e => handleChange('company_name', e.target.value)} />
+                                <UIInput label="Users File" value={config.existing_users_file || ''} onChange={e => handleChange('existing_users_file', e.target.value)} />
+                            </div>
+                            <div className="mt-3">
                                 <label className="flex items-center gap-2 cursor-pointer">
-                                    <input type="checkbox" checked={config.step_check} onChange={e => handleChange('step_check', e.target.checked)} className="rounded bg-zinc-800 border-zinc-700 text-orange-500 focus:ring-0" />
-                                    <span className="text-sm font-medium text-zinc-300">Enable Step Check (Pause before actions)</span>
+                                    <input type="checkbox" checked={config.step_check || false} onChange={e => handleChange('step_check', e.target.checked)} className="checkbox" />
+                                    <span className="text-xs text-zinc-300">Enable Step Check</span>
                                 </label>
                             </div>
                         </section>
 
-                        {/* Safety */}
-                        <section className="bg-zinc-900 border border-zinc-800 rounded-xl p-6 space-y-4">
-                            <h2 className="text-lg font-bold text-zinc-200 flex items-center gap-2"><Shield size={18} className="text-purple-400" /> Safety</h2>
-                            <label className="flex items-center gap-2 cursor-pointer mb-2">
-                                <input type="checkbox" checked={config.include_protected_users} onChange={e => handleChange('include_protected_users', e.target.checked)} />
-                                <span className="text-sm font-medium text-zinc-300">Include Protected Users in Rotation</span>
-                            </label>
-                            <div className="space-y-1">
-                                <label className="block text-xs font-bold text-zinc-500 uppercase">Protected Users (One per line)</label>
-                                <textarea
-                                    value={protectedUsersText}
-                                    onChange={e => handleProtectedUsersChange(e.target.value)}
-                                    className="w-full h-32 bg-zinc-950 border border-zinc-800 rounded p-2 text-sm focus:border-orange-500 outline-none font-mono"
-                                />
+                        <section className="card">
+                            <div className="card-header">
+                                <h2 className="card-title flex items-center gap-1.5"><Shield size={14} className="text-purple-400" /> Safety</h2>
                             </div>
+                            <label className="flex items-center gap-2 cursor-pointer mb-2">
+                                <input type="checkbox" checked={config.include_protected_users || false} onChange={e => handleChange('include_protected_users', e.target.checked)} className="checkbox" />
+                                <span className="text-xs text-zinc-300">Include Protected Users</span>
+                            </label>
+                            <Textarea
+                                label="Protected Users (one per line)"
+                                value={protectedUsersText}
+                                onChange={e => handleProtectedUsersChange(e.target.value)}
+                                rows={4}
+                                className="font-mono"
+                            />
                         </section>
                     </div>
                 )}
 
                 {/* Rclone Tab */}
                 {activeTab === 'rclone' && (
-                    <section className="bg-zinc-900 border border-zinc-800 rounded-xl p-6 space-y-4">
-                        <h2 className="text-lg font-bold text-zinc-200 flex items-center gap-2"><Terminal size={18} className="text-yellow-400" /> Rclone Settings</h2>
-                        <div className="grid grid-cols-2 gap-4">
-                            <Select label="Command Type" value={config.rclone_command} onChange={(v: string) => handleChange('rclone_command', v)}>
-                                <option value="copy">Copy (Add Missing)</option>
-                                <option value="sync">Sync (Mirror Source)</option>
-                                <option value="move">Move (Delete Source)</option>
-                            </Select>
-                            <Input label="Stall Timeout (mins)" type="number" value={config.stall_timeout_minutes} onChange={(v: any) => handleChange('stall_timeout_minutes', parseInt(v))} />
-                            <Input label="Chunk Size" value={config.rclone_chunk_size} onChange={(v: string) => handleChange('rclone_chunk_size', v)} />
-                            <Input label="Stats Interval" value={config.rclone_stats_interval} onChange={(v: string) => handleChange('rclone_stats_interval', v)} />
+                    <section className="card">
+                        <div className="card-header">
+                            <h2 className="card-title flex items-center gap-1.5"><Terminal size={14} className="text-yellow-400" /> Rclone Settings</h2>
+                        </div>
+                        <div className="grid grid-cols-2 gap-3">
+                            <UISelect
+                                label="Command"
+                                value={config.rclone_command || 'copy'}
+                                onChange={e => handleChange('rclone_command', e.target.value)}
+                                options={[
+                                    { value: 'copy', label: 'Copy' },
+                                    { value: 'sync', label: 'Sync' },
+                                    { value: 'move', label: 'Move' }
+                                ]}
+                            />
+                            <UIInput label="Stall Timeout (min)" type="number" value={config.stall_timeout_minutes || ''} onChange={e => handleChange('stall_timeout_minutes', parseInt(e.target.value))} />
+                            <UIInput label="Chunk Size" value={config.rclone_chunk_size || ''} onChange={e => handleChange('rclone_chunk_size', e.target.value)} />
+                            <UIInput label="Stats Interval" value={config.rclone_stats_interval || ''} onChange={e => handleChange('rclone_stats_interval', e.target.value)} />
                             <div className="col-span-2">
-                                <Input label="Global Flags" value={config.global_rclone_flags} onChange={(v: string) => handleChange('global_rclone_flags', v)} placeholder="--s3-chunk-size=128M" />
+                                <UIInput label="Global Flags" value={config.global_rclone_flags || ''} onChange={e => handleChange('global_rclone_flags', e.target.value)} />
                             </div>
                             <div className="col-span-2">
-                                <Input label="Webhook URL" value={config.webhook_url} onChange={(v: string) => handleChange('webhook_url', v)} />
+                                <UIInput label="Webhook URL" value={config.webhook_url || ''} onChange={e => handleChange('webhook_url', e.target.value)} />
                             </div>
                         </div>
                     </section>
@@ -310,43 +315,36 @@ const ConfigPage = () => {
 
                 {/* Domains Tab */}
                 {activeTab === 'domains' && (
-                    <section className="bg-zinc-900 border border-zinc-800 rounded-xl p-6 space-y-4">
-                        <div className="flex justify-between items-center border-b border-zinc-800 pb-2">
-                            <div className="flex items-center gap-4">
-                                <h2 className="text-lg font-bold text-zinc-200 flex items-center gap-2"><Globe size={18} className="text-cyan-400" /> Workspace Domains</h2>
-                                <button
-                                    onClick={handleTestAuth}
-                                    className="text-xs bg-zinc-800 hover:bg-zinc-700 px-3 py-1 rounded text-zinc-300 flex items-center gap-2 transition"
-                                >
-                                    <CheckCircle size={14} className="text-green-500" /> Test API Permissions
-                                </button>
+                    <section className="card">
+                        <div className="card-header">
+                            <div className="flex items-center gap-2">
+                                <h2 className="card-title flex items-center gap-1.5"><Globe size={14} className="text-cyan-400" /> Domains</h2>
+                                <Button variant="ghost" size="xs" onClick={handleTestAuth} icon={<CheckCircle size={10} />}>Test API</Button>
                             </div>
-                            <button onClick={addDomain} className="text-orange-500 hover:text-orange-400 text-sm flex items-center gap-1 font-bold"><Plus size={16} /> Add Domain</button>
+                            <Button variant="ghost" size="xs" onClick={addDomain} icon={<Plus size={10} />}>Add</Button>
                         </div>
 
                         {authStatus.length > 0 && (
-                            <div className="bg-zinc-950 p-3 rounded border border-zinc-800 text-xs font-mono mb-4 text-zinc-400">
+                            <div className="bg-zinc-950 p-2 rounded border border-zinc-800 text-xs font-mono mb-3 text-zinc-400">
                                 {authStatus.map((s, i) => <div key={i}>{s}</div>)}
                             </div>
                         )}
 
-                        <div className="space-y-4">
-                            {(!config.domains || config.domains.length === 0) && <p className="text-zinc-600 text-sm italic">No domains configured. Click "Add Domain" to get started.</p>}
+                        <div className="space-y-3">
+                            {(!config.domains || config.domains.length === 0) && <p className="text-zinc-600 text-xs italic">No domains configured.</p>}
                             {config.domains?.map((d, i) => (
-                                <div key={i} className="bg-zinc-950 p-4 rounded-lg border border-zinc-800 space-y-3">
-                                    <div className="flex items-center justify-between">
-                                        <h3 className="text-sm font-bold text-zinc-300">Domain #{i + 1}: {d.domain_name || 'New Domain'}</h3>
-                                        <button onClick={() => removeDomain(i)} className="text-zinc-500 hover:text-red-500 text-xs flex items-center gap-1">
-                                            <Trash2 size={12} /> Remove
-                                        </button>
+                                <div key={i} className="bg-zinc-800/50 p-3 rounded border border-zinc-700">
+                                    <div className="flex items-center justify-between mb-2">
+                                        <span className="text-xs font-bold text-zinc-300">#{i + 1}: {d.domain_name || 'New'}</span>
+                                        <button onClick={() => removeDomain(i)} className="text-zinc-500 hover:text-red-400 text-xs"><Trash2 size={12} /></button>
                                     </div>
-                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                                        <Input label="Domain Name" value={d.domain_name} onChange={(v: string) => updateDomain(i, 'domain_name', v)} placeholder="example.com" />
-                                        <Input label="Admin Email" value={d.admin_email} onChange={(v: string) => updateDomain(i, 'admin_email', v)} />
-                                        <Input label="Group Email" value={d.group_email} onChange={(v: string) => updateDomain(i, 'group_email', v)} />
-                                        <Input label="Local JSON Key" value={d.sa_json_path} onChange={(v: string) => updateDomain(i, 'sa_json_path', v)} />
-                                        <div className="md:col-span-2">
-                                            <Input label="Remote JSON Key Path" value={d.remote_sa_json_path} onChange={(v: string) => updateDomain(i, 'remote_sa_json_path', v)} />
+                                    <div className="grid grid-cols-2 gap-2">
+                                        <UIInput inputSize="sm" placeholder="Domain" value={d.domain_name} onChange={e => updateDomain(i, 'domain_name', e.target.value)} />
+                                        <UIInput inputSize="sm" placeholder="Admin Email" value={d.admin_email} onChange={e => updateDomain(i, 'admin_email', e.target.value)} />
+                                        <UIInput inputSize="sm" placeholder="Group Email" value={d.group_email} onChange={e => updateDomain(i, 'group_email', e.target.value)} />
+                                        <UIInput inputSize="sm" placeholder="JSON Key Path" value={d.sa_json_path} onChange={e => updateDomain(i, 'sa_json_path', e.target.value)} />
+                                        <div className="col-span-2">
+                                            <UIInput inputSize="sm" placeholder="Remote JSON Path" value={d.remote_sa_json_path || ''} onChange={e => updateDomain(i, 'remote_sa_json_path', e.target.value)} />
                                         </div>
                                     </div>
                                 </div>
@@ -357,73 +355,44 @@ const ConfigPage = () => {
 
                 {/* Advanced Tab */}
                 {activeTab === 'advanced' && (
-                    <section className="bg-zinc-900 border border-zinc-800 rounded-xl p-6 space-y-4">
-                        <div className="flex justify-between items-center">
-                            <h2 className="text-lg font-bold text-zinc-200 flex items-center gap-2"><Server size={18} className="text-green-400" /> SSH / Remote</h2>
+                    <section className="card">
+                        <div className="card-header">
+                            <h2 className="card-title flex items-center gap-1.5"><Server size={14} className="text-green-400" /> SSH / Remote</h2>
                             <label className="flex items-center gap-2 cursor-pointer">
-                                <input type="checkbox" checked={config.ssh_enabled} onChange={e => handleChange('ssh_enabled', e.target.checked)} />
-                                <span className="text-xs uppercase font-bold text-zinc-500">Enable</span>
+                                <input type="checkbox" checked={config.ssh_enabled || false} onChange={e => handleChange('ssh_enabled', e.target.checked)} className="checkbox" />
+                                <span className="text-xs text-zinc-400">Enable</span>
                             </label>
                         </div>
-
-                        <div className={`grid grid-cols-2 gap-4 ${!config.ssh_enabled ? 'opacity-50 pointer-events-none' : ''}`}>
-                            <div className="col-span-2"><Input label="SSH Host" value={config.ssh_host} onChange={(v: string) => handleChange('ssh_host', v)} /></div>
-                            <Input label="SSH User" value={config.ssh_user} onChange={(v: string) => handleChange('ssh_user', v)} />
-                            <Input label="SSH Key Path" value={config.ssh_key_path} onChange={(v: string) => handleChange('ssh_key_path', v)} />
-                            <div className="col-span-2"><Input label="Remote ISync Path" value={config.ssh_remote_path} onChange={(v: string) => handleChange('ssh_remote_path', v)} /></div>
-                            <Input label="Timeout (s)" type="number" value={config.ssh_connect_timeout} onChange={(v: any) => handleChange('ssh_connect_timeout', parseInt(v))} />
-                            <div className="col-span-2 pt-2 flex items-center justify-between">
-                                <button onClick={handleTestSSH} className="bg-zinc-800 hover:bg-zinc-700 px-4 py-2 rounded text-zinc-200 text-sm font-bold flex items-center gap-2">
-                                    <Terminal size={14} /> Test Connection
-                                </button>
-                                {sshStatus && <span className="text-sm font-mono">{sshStatus}</span>}
+                        <div className={`grid grid-cols-2 gap-3 ${!config.ssh_enabled ? 'opacity-50 pointer-events-none' : ''}`}>
+                            <div className="col-span-2">
+                                <UIInput label="SSH Host" value={config.ssh_host || ''} onChange={e => handleChange('ssh_host', e.target.value)} />
+                            </div>
+                            <UIInput label="SSH User" value={config.ssh_user || ''} onChange={e => handleChange('ssh_user', e.target.value)} />
+                            <UIInput label="Key Path" value={config.ssh_key_path || ''} onChange={e => handleChange('ssh_key_path', e.target.value)} />
+                            <div className="col-span-2">
+                                <UIInput label="Remote Path" value={config.ssh_remote_path || ''} onChange={e => handleChange('ssh_remote_path', e.target.value)} />
+                            </div>
+                            <UIInput label="Timeout (s)" type="number" value={config.ssh_connect_timeout || ''} onChange={e => handleChange('ssh_connect_timeout', parseInt(e.target.value))} />
+                            <div className="flex items-end gap-2">
+                                <Button variant="secondary" size="sm" onClick={handleTestSSH} icon={<Terminal size={12} />}>Test</Button>
+                                {sshStatus && <span className="text-xs font-mono text-zinc-400">{sshStatus}</span>}
                             </div>
                         </div>
                     </section>
                 )}
             </div>
 
-            {/* Floating Bottom Bar for Visibility */}
-            <div className={`fixed bottom-0 left-64 right-0 p-4 bg-zinc-950/90 border-t border-zinc-800 backdrop-blur flex justify-end gap-4 transition-transform duration-300 z-50 ${dirty ? 'translate-y-0' : 'translate-y-full'}`}>
-                <span className="self-center text-sm font-bold text-orange-500 mr-4 animate-pulse">⚠️ Unsaved Changes</span>
-                <button
-                    onClick={handleSave}
-                    disabled={saving}
-                    className="px-8 py-2 rounded-lg font-bold bg-orange-500 hover:bg-orange-600 text-white shadow-lg transition flex items-center gap-2"
-                >
-                    <Save size={18} />
-                    {saving ? 'Saving...' : 'Save Changes'}
-                </button>
-            </div>
+            {/* Floating Save Bar */}
+            {dirty && (
+                <div className="fixed bottom-0 left-64 right-0 p-3 bg-zinc-900/95 border-t border-zinc-800 backdrop-blur flex justify-end gap-3 z-50">
+                    <span className="self-center text-xs font-bold text-amber-400">Unsaved changes</span>
+                    <Button variant="success" size="sm" onClick={handleSave} loading={saving} icon={<Save size={12} />}>
+                        Save Changes
+                    </Button>
+                </div>
+            )}
         </div>
     );
 };
-
-// UI Components for cleaner code
-const Input = ({ label, value, onChange, type = "text", placeholder = "" }: any) => (
-    <div>
-        <label className="block text-xs font-bold text-zinc-500 uppercase mb-1">{label}</label>
-        <input
-            type={type}
-            value={value || ''}
-            onChange={e => onChange(e.target.value)}
-            placeholder={placeholder}
-            className="w-full bg-zinc-950 border border-zinc-800 rounded p-2 text-sm focus:border-orange-500 outline-none placeholder:text-zinc-700"
-        />
-    </div>
-);
-
-const Select = ({ label, value, onChange, children }: any) => (
-    <div>
-        <label className="block text-xs font-bold text-zinc-500 uppercase mb-1">{label}</label>
-        <select
-            value={value || ''}
-            onChange={e => onChange(e.target.value)}
-            className="w-full bg-zinc-950 border border-zinc-800 rounded p-2 text-sm focus:border-orange-500 outline-none"
-        >
-            {children}
-        </select>
-    </div>
-);
 
 export default ConfigPage;

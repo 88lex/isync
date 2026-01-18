@@ -1654,3 +1654,89 @@ export const browseRcloneContent = async (remoteName: string, path: string, serv
     });
     return res.data;
 };
+
+// --- MONITOR API ---
+export interface CapacityCheckResult {
+    status: string;
+    drives_scanned: number;
+    alerts_created: number;
+    errors: string[];
+    details: {
+        name: string;
+        drive_id: string;
+        file_count: number;
+        alert_level: string | null;
+    }[];
+}
+
+export interface CapacityAlert {
+    id: number;
+    drive_name: string;
+    drive_id: string | null;
+    alert_type: string;
+    message: string;
+    created_at: string | null;
+}
+
+export interface UnionGroupInfo {
+    id: number;
+    name: string;
+    remote_name: string | null;
+    drives: {
+        id: number;
+        drive_id: string;
+        name: string;
+        file_count: number;
+        is_full: boolean;
+        last_scanned: string | null;
+    }[];
+    drive_count: number;
+}
+
+export const runCapacityCheck = async (): Promise<CapacityCheckResult> => {
+    const res = await axios.post(`${API_BASE}/monitor/run`);
+    return res.data;
+};
+
+export const getActiveAlerts = async (): Promise<{ status: string; alerts: CapacityAlert[]; count: number }> => {
+    const res = await axios.get(`${API_BASE}/monitor/alerts`);
+    return res.data;
+};
+
+export const resolveAlert = async (alertId: number): Promise<{ status: string; message: string }> => {
+    const res = await axios.put(`${API_BASE}/alerts/${alertId}/resolve`);
+    return res.data;
+};
+
+export const listUnionGroups = async (): Promise<{ status: string; groups: UnionGroupInfo[]; count: number }> => {
+    const res = await axios.get(`${API_BASE}/unions`);
+    return res.data;
+};
+
+export const expandUnionGroup = async (unionId: number, groupEmails?: string[]): Promise<{
+    status: string;
+    new_drive?: { id: string; name: string };
+    permissions_added?: string[];
+    rclone_status?: string;
+    message?: string;
+}> => {
+    const res = await axios.post(`${API_BASE}/unions/${unionId}/expand`, {
+        group_emails: groupEmails
+    });
+    return res.data;
+};
+
+export const createUnionGroup = async (name: string, remoteName?: string): Promise<{ status: string; id: number; name: string }> => {
+    const res = await axios.post(`${API_BASE}/unions`, null, {
+        params: { name, remote_name: remoteName }
+    });
+    return res.data;
+};
+
+export const addDriveToDb = async (driveId: string, name: string, unionGroupId?: number): Promise<{ status: string; id: number; name: string }> => {
+    const res = await axios.post(`${API_BASE}/drives`, null, {
+        params: { drive_id: driveId, name, union_group_id: unionGroupId }
+    });
+    return res.data;
+};
+

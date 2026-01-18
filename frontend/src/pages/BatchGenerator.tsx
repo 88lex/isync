@@ -526,7 +526,7 @@ const BatchGenerator: React.FC<BatchGeneratorProps> = ({ activeSection }) => {
     };
 
     return (
-        <div className="p-6 max-w-7xl mx-auto space-y-8 pb-32">
+        <div className="page-container space-y-6 pb-32">
             <PageHeader
                 title="Batch Generator"
                 subtitle="Generate and execute rclone commands"

@@ -17,10 +17,11 @@ import DriveManager from './pages/DriveManager';
 import PrepCheck from './pages/PrepCheck';
 import RemoteSync from './pages/RemoteSync';
 import RcloneManagement from './pages/RcloneManagement';
+import MonitorPage from './pages/MonitorPage';
 import ErrorBoundary from './components/ErrorBoundary';
 import { ConfigStatusIndicator } from './components/ConfigStatusIndicator';
 
-type ViewType = 'dashboard' | 'users' | 'batch' | 'config' | 'sync' | 'history' | 'schedules' | 'servers' | 'drives' | 'prep' | 'remotesync' | 'rclone';
+type ViewType = 'dashboard' | 'users' | 'batch' | 'config' | 'sync' | 'history' | 'schedules' | 'servers' | 'drives' | 'prep' | 'remotesync' | 'rclone' | 'monitor';
 
 // Define navigation groups
 interface SubItem {
@@ -74,6 +75,7 @@ const navGroups: NavGroup[] = [
     defaultOpen: true,
     items: [
       { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
+      { id: 'monitor', label: 'Capacity Monitor', icon: Activity },
       {
         id: 'schedules',
         label: 'Schedules',
@@ -101,7 +103,7 @@ function App() {
   const [view, setView] = useState<ViewType>(() => {
     const saved = localStorage.getItem(STORAGE_KEYS.VIEW);
     if (saved === 'manual') return 'users';
-    const validViews: ViewType[] = ['dashboard', 'users', 'batch', 'config', 'sync', 'history', 'schedules', 'servers', 'drives', 'prep', 'remotesync', 'rclone'];
+    const validViews: ViewType[] = ['dashboard', 'users', 'batch', 'config', 'sync', 'history', 'schedules', 'servers', 'drives', 'prep', 'remotesync', 'rclone', 'monitor'];
     return validViews.includes(saved as ViewType) ? (saved as ViewType) : 'dashboard';
   });
 
@@ -230,6 +232,7 @@ function App() {
             {view === 'prep' && <PrepCheck />}
             {view === 'remotesync' && <RemoteSync />}
             {view === 'rclone' && <RcloneManagement />}
+            {view === 'monitor' && <MonitorPage />}
           </ErrorBoundary>
         </main>
       </div>

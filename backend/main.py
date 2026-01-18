@@ -31,6 +31,7 @@ from backend.routers import (
     batch_groups_router,
     crontab_router,
     rclone_router,
+    monitor_router,
 )
 
 logger = get_logger("isync.api")
@@ -73,6 +74,7 @@ app.include_router(admin_router)
 app.include_router(batch_groups_router)
 app.include_router(crontab_router)
 app.include_router(rclone_router)
+app.include_router(monitor_router)
 
 
 # --- Lifecycle Events ---

@@ -566,3 +566,134 @@ async def get_drive_details_unified(
             return {"status": "error", "message": "Import error"}
     
     return {"status": "error", "message": "Not supported for method: " + method}
+
+
+# --- Expansion Wizard ---
+
+async def expand_union_group(
+    union_group_id: int,
+    service_account_file: str,
+    impersonate_email: str,
+    group_emails: Optional[List[str]] = None
+) -> Dict[str, Any]:
+    """
+    Expand a UnionGroup by creating a new Shared Drive.
+    
+    Logic:
+    1. Look up the highest existing index in the group (e.g., '-04').
+    2. Create new Shared Drive with next suffix (e.g., '-05').
+    3. Add permissions (managers/groups).
+    4. Add the new drive to the UnionGroup in the DB.
+    5. Trigger rclone config regeneration.
+    
+    Args:
+        union_group_id: ID of the UnionGroup to expand.
+        service_account_file: Path to service account JSON.
+        impersonate_email: Admin email for impersonation.
+        group_emails: Optional list of group/user emails to add as managers.
+    
+    Returns:
+        Dict with result.
+    """
+    from backend.database import SessionLocal
+    from backend.models.models import UnionGroup, SharedDrive
+    from backend.google_drive_api import create_shared_drive_api, add_drive_member_api
+    from backend.rclone_manager import regenerate_config
+    from backend.monitor_service import resolve_alert
+    
+    db = SessionLocal()
+    
+    try:
+        # 1. Get UnionGroup
+        ug = db.query(UnionGroup).filter(UnionGroup.id == union_group_id).first()
+        if not ug:
+            return {"status": "error", "message": f"UnionGroup {union_group_id} not found"}
+        
+        # 2. Find existing drives and determine next suffix
+        existing_drives = db.query(SharedDrive).filter(
+            SharedDrive.union_group_id == union_group_id,
+            SharedDrive.status == 'ACTIVE'
+        ).all()
+        
+        # Parse suffixes to find max
+        max_index = 0
+        for d in existing_drives:
+            # Try to extract numeric suffix (e.g., "fcl-ebooks-04" -> 4)
+            import re
+            match = re.search(r'-(\d+)$', d.name)
+            if match:
+                idx = int(match.group(1))
+                if idx > max_index:
+                    max_index = idx
+        
+        # Next index
+        next_index = max_index + 1
+        next_suffix = f"-{str(next_index).zfill(2)}"
+        new_drive_name = f"{ug.name}{next_suffix}"
+        
+        # 3. Create new Shared Drive via Google API
+        create_result = await create_shared_drive_api(
+            service_account_file=service_account_file,
+            impersonate_email=impersonate_email,
+            drive_name=new_drive_name
+        )
+        
+        if create_result["status"] != "ok":
+            return {"status": "error", "message": f"Failed to create drive: {create_result.get('message')}"}
+        
+        new_drive_id = create_result["drive"]["id"]
+        
+        # 4. Add permissions
+        permissions_added = []
+        if group_emails:
+            for email in group_emails:
+                perm_result = await add_drive_member_api(
+                    service_account_file=service_account_file,
+                    impersonate_email=impersonate_email,
+                    drive_id=new_drive_id,
+                    member_email=email,
+                    role="organizer"
+                )
+                if perm_result["status"] == "ok":
+                    permissions_added.append(email)
+        
+        # 5. Add to database
+        new_drive = SharedDrive(
+            drive_id=new_drive_id,
+            name=new_drive_name,
+            union_group_id=union_group_id,
+            status='ACTIVE'
+        )
+        db.add(new_drive)
+        db.commit()
+        
+        # 6. Regenerate rclone config
+        rclone_result = regenerate_config(db)
+        
+        # 7. Resolve any related alerts
+        from backend.models.models import CapacityAlert
+        alerts = db.query(CapacityAlert).filter(
+            CapacityAlert.is_resolved == False
+        ).all()
+        
+        for alert in alerts:
+            drive = db.query(SharedDrive).filter(SharedDrive.id == alert.drive_id).first()
+            if drive and drive.union_group_id == union_group_id:
+                resolve_alert(alert.id, db)
+        
+        return {
+            "status": "ok",
+            "new_drive": {
+                "id": new_drive_id,
+                "name": new_drive_name
+            },
+            "permissions_added": permissions_added,
+            "rclone_status": rclone_result["status"]
+        }
+        
+    except Exception as e:
+        db.rollback()
+        return {"status": "error", "message": str(e)}
+    finally:
+        db.close()
+

@@ -363,6 +363,12 @@ const RemoteServers = () => {
         }
     };
 
+    const invertSelection = () => {
+        const visibleIds = filteredServers.map(s => s.id);
+        const inverted = new Set(visibleIds.filter(id => !selectedServers.has(id)));
+        setSelectedServers(inverted);
+    };
+
     const openCronModal = async (serverId: string) => {
         setCronServerId(serverId);
         setCronLoading(true);
@@ -484,7 +490,7 @@ const RemoteServers = () => {
     };
 
     return (
-        <div className="p-6 max-w-7xl mx-auto space-y-6">
+        <div className="page-container space-y-4">
             <PageHeader
                 icon={Server}
                 title="Remote Servers"
@@ -525,6 +531,12 @@ const RemoteServers = () => {
                                     {filteredServers.length > 0 && filteredServers.every(s => selectedServers.has(s.id)) && <CheckCircle size={10} className="text-white" />}
                                 </div>
                                 Select All ({selectedServers.size})
+                            </button>
+                            <button
+                                onClick={invertSelection}
+                                className="text-sm text-zinc-400 hover:text-white transition"
+                            >
+                                Invert
                             </button>
                             {selectedServers.size > 0 && (
                                 <>

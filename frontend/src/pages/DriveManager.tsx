@@ -838,7 +838,7 @@ const DriveManager = () => {
     };
 
     return (
-        <div className="p-6 max-w-6xl mx-auto space-y-6">
+        <div className="page-container space-y-4">
             <PageHeader
                 icon={HardDrive}
                 title="Drive Manager"

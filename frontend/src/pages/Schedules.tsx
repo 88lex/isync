@@ -279,7 +279,7 @@ const SchedulesPage: React.FC<SchedulesPageProps> = ({ activeSection }) => {
     }
 
     return (
-        <div className="p-8">
+        <div className="page-container pb-8">
             <PageHeader
                 icon={Calendar}
                 title="Scheduled Jobs"

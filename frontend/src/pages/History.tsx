@@ -1,12 +1,10 @@
 import React, { useState, useEffect } from 'react';
-import { History, ChevronDown, ChevronRight } from 'lucide-react';
+import { History, ChevronDown, ChevronRight, RefreshCw } from 'lucide-react';
 import { LoadingSpinner } from '../components/LoadingSpinner';
-import { PageHeader } from '../components/PageHeader';
-import { EmptyState } from '../components/EmptyState';
 import { StatusBadge } from '../components/StatusBadge';
-import { Card } from '../components/Card';
 import { formatDate, formatBytes, formatDuration } from '../utils/formatters';
 import { fetchJobHistory, fetchJobLogs, JobRun, JobLog } from '../api';
+import { Button } from '../components/ui';
 
 const HistoryPage: React.FC = () => {
     const [runs, setRuns] = useState<JobRun[]>([]);
@@ -28,8 +26,7 @@ const HistoryPage: React.FC = () => {
     };
 
     const loadLogs = async (runId: number) => {
-        if (logs[runId]) return; // Already loaded
-        
+        if (logs[runId]) return;
         setLogsLoading(runId);
         try {
             const data = await fetchJobLogs(runId);
@@ -56,127 +53,124 @@ const HistoryPage: React.FC = () => {
 
     if (loading) {
         return (
-            <div className="p-8 flex items-center justify-center min-h-[400px]">
-                <LoadingSpinner size="lg" message="Loading job history..." />
+            <div className="page-container flex items-center justify-center min-h-[300px]">
+                <LoadingSpinner size="lg" message="Loading history..." />
             </div>
         );
     }
 
     return (
-        <div className="p-8">
-            <PageHeader
-                icon={History}
-                title="Job History"
-                subtitle="View past sync operations and logs"
-                gradient="from-purple-600 to-indigo-600"
-            >
-                <button
-                    onClick={loadHistory}
-                    className="px-4 py-2 bg-zinc-800 hover:bg-zinc-700 text-white rounded-lg transition text-sm"
-                >
+        <div className="page-container">
+            {/* Header */}
+            <header className="page-header">
+                <div className="flex items-center gap-2">
+                    <div className="w-8 h-8 rounded-lg bg-gradient-to-tr from-purple-600 to-indigo-600 flex items-center justify-center">
+                        <History size={16} className="text-white" />
+                    </div>
+                    <div>
+                        <h1 className="page-title">Job History</h1>
+                        <p className="text-xs text-zinc-400">{runs.length} jobs</p>
+                    </div>
+                </div>
+                <Button variant="secondary" size="sm" onClick={loadHistory} icon={<RefreshCw size={12} />}>
                     Refresh
-                </button>
-            </PageHeader>
+                </Button>
+            </header>
 
             {/* Empty State */}
             {runs.length === 0 && (
-                <EmptyState
-                    icon={History}
-                    title="No job history yet"
-                    description="Run a sync job to see it appear here."
-                />
+                <div className="card text-center py-8">
+                    <History size={32} className="mx-auto text-zinc-600 mb-2" />
+                    <div className="text-zinc-400 text-sm">No job history yet</div>
+                </div>
             )}
 
-            {/* Job List */}
-            <div className="space-y-3">
-                {runs.map(run => {
-                    const isExpanded = expandedId === run.id;
-                    
-                    return (
-                        <Card key={run.id} padding="none" className="overflow-hidden">
-                            {/* Row Header */}
-                            <div
-                                onClick={() => toggleExpand(run.id)}
-                                className="p-4 cursor-pointer hover:bg-zinc-800/50 transition flex items-center gap-4"
-                            >
-                                <button className="text-zinc-400">
-                                    {isExpanded ? <ChevronDown size={18} /> : <ChevronRight size={18} />}
-                                </button>
-                                
-                                {/* Status Badge */}
-                                <StatusBadge status={run.status} />
-                                
-                                {/* Source/Dest */}
-                                <div className="flex-1 min-w-0">
-                                    <div className="font-mono text-sm truncate text-blue-400" title={run.source}>
-                                        {run.source}
-                                    </div>
-                                    <div className="font-mono text-sm truncate text-emerald-400" title={run.dest}>
-                                        → {run.dest}
-                                    </div>
-                                </div>
-                                
-                                {/* Stats */}
-                                <div className="text-right text-sm">
-                                    <div className="text-zinc-300">{formatBytes(run.total_bytes_transferred)}</div>
-                                    <div className="text-zinc-500 text-xs">{run.users_processed} users</div>
-                                </div>
-                                
-                                {/* Duration */}
-                                <div className="text-right text-sm w-24">
-                                    <div className="text-zinc-400">{formatDuration(run.started_at, run.ended_at)}</div>
-                                    <div className="text-zinc-500 text-xs">{formatDate(run.started_at)}</div>
-                                </div>
-                                
-                                {run.dry_run && (
-                                    <span className="px-2 py-0.5 bg-yellow-500/10 text-yellow-400 text-xs rounded">
-                                        DRY RUN
-                                    </span>
-                                )}
-                            </div>
-                            
-                            {/* Expanded Content */}
-                            {isExpanded && (
-                                <div className="border-t border-zinc-800 p-4 bg-zinc-950">
-                                    {run.error_message && (
-                                        <div className="mb-4 p-3 bg-red-500/10 border border-red-900/50 rounded-lg">
-                                            <div className="text-red-400 text-sm font-medium mb-1">Error</div>
-                                            <div className="text-red-300 text-sm">{run.error_message}</div>
-                                        </div>
-                                    )}
-                                    
-                                    <div className="text-xs text-zinc-500 uppercase tracking-wider mb-2">Logs</div>
-                                    
-                                    {logsLoading === run.id ? (
-                                        <LoadingSpinner size="sm" message="Loading logs..." />
-                                    ) : (
-                                        <div className="max-h-64 overflow-y-auto bg-zinc-900 rounded-lg p-3 font-mono text-xs space-y-1">
-                                            {(logs[run.id] || []).length === 0 ? (
-                                                <div className="text-zinc-500">No logs available</div>
-                                            ) : (
-                                                (logs[run.id] || []).map(log => (
-                                                    <div key={log.id} className="flex gap-2">
-                                                        <span className="text-zinc-600 w-20 flex-shrink-0">
-                                                            {new Date(log.timestamp).toLocaleTimeString()}
-                                                        </span>
-                                                        <span className={
-                                                            log.level === 'ERROR' ? 'text-red-400' :
-                                                            log.level === 'WARNING' ? 'text-yellow-400' :
-                                                            'text-zinc-300'
-                                                        }>
-                                                            {log.message}
-                                                        </span>
-                                                    </div>
-                                                ))
-                                            )}
-                                        </div>
-                                    )}
-                                </div>
-                            )}
-                        </Card>
-                    );
-                })}
-            </div>
+            {/* Job Table */}
+            {runs.length > 0 && (
+                <div className="card p-0 overflow-hidden">
+                    <table className="data-table">
+                        <thead>
+                            <tr>
+                                <th className="w-8"></th>
+                                <th>Status</th>
+                                <th>Source → Dest</th>
+                                <th className="text-right">Transferred</th>
+                                <th className="text-right">Users</th>
+                                <th className="text-right">Duration</th>
+                                <th className="text-right">Started</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {runs.map(run => {
+                                const isExpanded = expandedId === run.id;
+                                return (
+                                    <React.Fragment key={run.id}>
+                                        <tr
+                                            onClick={() => toggleExpand(run.id)}
+                                            className={`cursor-pointer ${isExpanded ? 'bg-zinc-800/30' : ''}`}
+                                        >
+                                            <td className="w-8">
+                                                {isExpanded ? <ChevronDown size={14} className="text-zinc-400" /> : <ChevronRight size={14} className="text-zinc-400" />}
+                                            </td>
+                                            <td>
+                                                <StatusBadge status={run.status} />
+                                            </td>
+                                            <td>
+                                                <div className="font-mono text-xs truncate max-w-xs">
+                                                    <span className="text-blue-400">{run.source}</span>
+                                                    <span className="text-zinc-600 mx-1">→</span>
+                                                    <span className="text-emerald-400">{run.dest}</span>
+                                                </div>
+                                            </td>
+                                            <td className="text-right font-mono text-xs">{formatBytes(run.total_bytes_transferred)}</td>
+                                            <td className="text-right">{run.users_processed}</td>
+                                            <td className="text-right text-xs text-zinc-400">{formatDuration(run.started_at, run.ended_at)}</td>
+                                            <td className="text-right text-xs text-zinc-500">{formatDate(run.started_at)}</td>
+                                        </tr>
+                                        {isExpanded && (
+                                            <tr>
+                                                <td colSpan={7} className="bg-zinc-900/50 p-3">
+                                                    {run.error_message && (
+                                                        <div className="mb-3 p-2 bg-red-500/10 border border-red-900/50 rounded text-xs">
+                                                            <span className="text-red-400 font-medium">Error: </span>
+                                                            <span className="text-red-300">{run.error_message}</span>
+                                                        </div>
+                                                    )}
+                                                    <div className="text-xs text-zinc-500 uppercase mb-1">Logs</div>
+                                                    {logsLoading === run.id ? (
+                                                        <LoadingSpinner size="sm" message="Loading logs..." />
+                                                    ) : (
+                                                        <div className="max-h-48 overflow-y-auto bg-zinc-950 rounded p-2 font-mono text-xs space-y-0.5 scrollbar-thin">
+                                                            {(logs[run.id] || []).length === 0 ? (
+                                                                <div className="text-zinc-500">No logs available</div>
+                                                            ) : (
+                                                                (logs[run.id] || []).map(log => (
+                                                                    <div key={log.id} className="flex gap-2">
+                                                                        <span className="text-zinc-600 w-16 flex-shrink-0">
+                                                                            {new Date(log.timestamp).toLocaleTimeString()}
+                                                                        </span>
+                                                                        <span className={
+                                                                            log.level === 'ERROR' ? 'text-red-400' :
+                                                                                log.level === 'WARNING' ? 'text-yellow-400' :
+                                                                                    'text-zinc-300'
+                                                                        }>
+                                                                            {log.message}
+                                                                        </span>
+                                                                    </div>
+                                                                ))
+                                                            )}
+                                                        </div>
+                                                    )}
+                                                </td>
+                                            </tr>
+                                        )}
+                                    </React.Fragment>
+                                );
+                            })}
+                        </tbody>
+                    </table>
+                </div>
+            )}
         </div>
     );
 };
