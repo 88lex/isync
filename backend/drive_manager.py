@@ -10,6 +10,7 @@ import asyncio
 import logging
 import re
 from typing import Dict, Any, List, Optional, Literal
+from backend.rclone_utils import add_or_update_remote
 
 logger = logging.getLogger("uvicorn")
 
@@ -185,15 +186,19 @@ async def create_rclone_remotes(
         
         sa_file = f"{sa_dir}/{count}.json"
         
-        cmd = [
-            "rclone", "config", "create", name, "drive",
-            "scope", "drive",
-            "team_drive", team_drive_id,
-            "service_account_file", sa_file
-        ]
+        config = {
+            "type": "drive",
+            "scope": "drive",
+            "team_drive": team_drive_id,
+            "service_account_file": sa_file
+        }
         
         results["logs"].append(f"Creating remote: {name} -> {team_drive_id}")
-        result = run_command(cmd, timeout=30)
+        try:
+            add_or_update_remote(name, config)
+            result = {"status": "ok"}
+        except Exception as e:
+            result = {"status": "error", "message": str(e)}
         
         if result["status"] == "ok":
             results["created"].append(name)
@@ -237,17 +242,21 @@ async def create_union_remote(
     # Build upstreams string: "remote1: remote2: remote3: "
     upstreams_str = " ".join(f"{u.rstrip(':')}:" for u in upstreams) + " "
     
-    cmd = [
-        "fclone", "config", "create", name, "union",
-        "upstreams", upstreams_str,
-        "action_policy", action_policy,
-        "create_policy", create_policy
-    ]
+    config = {
+        "type": "union",
+        "upstreams": upstreams_str,
+        "action_policy": action_policy,
+        "create_policy": create_policy
+    }
     
     if sa_file_path:
-        cmd.extend(["service_account_file_path", sa_file_path])
-    
-    result = run_command(cmd, timeout=30)
+        config["service_account_file_path"] = sa_file_path
+        
+    try:
+        add_or_update_remote(name, config)
+        result = {"status": "ok"}
+    except Exception as e:
+        result = {"status": "error", "message": str(e)}
     
     if result["status"] == "ok":
         return {
@@ -303,7 +312,8 @@ async def create_drives_unified(
     member_template: Optional[str] = None,
     # google_api-specific
     service_account_file: Optional[str] = None,
-    impersonate_email: Optional[str] = None
+    impersonate_email: Optional[str] = None,
+    default_managers: Optional[List[Dict[str, str]]] = None # New
 ) -> Dict[str, Any]:
     """
     Unified function to create Shared Drives using either fclone or Google API.
@@ -336,6 +346,19 @@ async def create_drives_unified(
             suffixes=suffixes,
             delay_seconds=delay_seconds
         )
+        
+        # Add default managers if successful and method is fclone
+        # Note: fclone method doesn't natively support adding managers with specific roles via backend add-drive easily
+        # beyond copy-members. If we have explicit default_managers, we'll use the API method after creation.
+        
+        if result["status"] in ["ok", "partial"] and default_managers:
+             from backend.config_manager import config_manager
+             from backend.google_drive_api import list_shared_drives_api
+             
+             # We need drive IDs to add managers via API
+             # This is a bit complex for fclone-created drives unless we relist them
+             pass # fclone users usually rely on member_template
+             
         result["method"] = "fclone"
         return result
     
@@ -352,13 +375,31 @@ async def create_drives_unified(
                     "message": "Google API libraries not installed. Run: pip install google-api-python-client google-auth"
                 }
             
-            return await create_shared_drives_api(
+            res = await create_shared_drives_api(
                 service_account_file=service_account_file,
                 impersonate_email=impersonate_email,
                 base_name=base_name,
                 suffixes=suffixes,
                 delay_seconds=delay_seconds
             )
+            
+            # Add default managers if successful
+            from backend.store import store
+            defaults = default_managers if default_managers is not None else store.config.get('always_included_managers', [])
+            
+            if res["status"] in ["ok", "partial"] and defaults:
+                for drive in res.get("created", []):
+                    drive_id = drive if isinstance(drive, str) else drive.get("id")
+                    if drive_id:
+                        for mgr in defaults:
+                            await add_drive_managers(
+                                drive_id=drive_id,
+                                service_account_file=service_account_file,
+                                impersonate_email=impersonate_email,
+                                group_emails=[mgr["email"]],
+                                role=mgr.get("role", "organizer")
+                            )
+            return res
         except ImportError as e:
             return {"status": "error", "message": f"Failed to import google_drive_api: {e}"}
     
@@ -379,13 +420,20 @@ async def list_drives_unified(
     """
     Unified function to list Shared Drives using either fclone or Google API.
     """
+    from backend.store import store
+    excluded = set(store.config.get('excluded_drives', []))
+
     if method == "fclone":
         if not gdrive_remote:
             return {"status": "error", "message": "gdrive_remote required for fclone method", "drives": []}
         
         result = await list_drives(gdrive_remote, prefix)
-        if limit and result.get("drives"):
-            result["drives"] = result["drives"][:limit]
+        if result.get("drives"):
+            # Filter excluded
+            result["drives"] = [d for d in result["drives"] if d["name"] not in excluded and d.get("id") not in excluded]
+            
+            if limit:
+                result["drives"] = result["drives"][:limit]
             result["count"] = len(result["drives"])
             
         result["method"] = "fclone"
@@ -401,12 +449,15 @@ async def list_drives_unified(
             if not GOOGLE_API_AVAILABLE:
                 return {"status": "error", "message": "Google API libraries not installed", "drives": []}
             
-            return await list_shared_drives_api(
+            res = await list_shared_drives_api(
                 service_account_file=service_account_file,
                 impersonate_email=impersonate_email,
                 prefix=prefix,
-                limit=limit
+                limit=limit,
+                excluded_items=excluded
             )
+            
+            return res
         except ImportError as e:
             return {"status": "error", "message": str(e), "drives": []}
     
@@ -487,15 +538,18 @@ async def create_single_drive_remote(
     # Remove trailing colon if present
     name = name.rstrip(":")
     
-    cmd = [
-        "rclone", "config", "create", name, "drive",
-        "scope", "drive",
-        "team_drive", team_drive_id,
-        "service_account_file", sa_file
-    ]
+    config = {
+        "type": "drive",
+        "scope": "drive",
+        "team_drive": team_drive_id,
+        "service_account_file": sa_file
+    }
     
-    # We use run_command logic from this module
-    result = run_command(cmd, timeout=30)
+    try:
+        add_or_update_remote(name, config)
+        return {"status": "ok", "name": name}
+    except Exception as e:
+        return {"status": "error", "message": str(e)}
     
     if result["status"] == "ok":
         return {"status": "ok", "name": name}
@@ -574,7 +628,8 @@ async def expand_union_group(
     union_group_id: int,
     service_account_file: str,
     impersonate_email: str,
-    group_emails: Optional[List[str]] = None
+    group_emails: Optional[List[str]] = None,
+    manager_roles: Optional[Dict[str, str]] = None # New: email -> role
 ) -> Dict[str, Any]:
     """
     Expand a UnionGroup by creating a new Shared Drive.
@@ -647,15 +702,29 @@ async def expand_union_group(
         permissions_added = []
         if group_emails:
             for email in group_emails:
-                perm_result = await add_drive_member_api(
+                res = await add_drive_member_api(
                     service_account_file=service_account_file,
                     impersonate_email=impersonate_email,
                     drive_id=new_drive_id,
                     member_email=email,
-                    role="organizer"
+                    role=manager_roles.get(email, "organizer") if manager_roles else "organizer"
                 )
-                if perm_result["status"] == "ok":
+                if res["status"] == "ok":
                     permissions_added.append(email)
+        
+        # 4.5 Add default managers from config
+        from backend.store import store
+        defaults = store.config.get('always_included_managers', [])
+        for mgr in defaults:
+             if mgr["email"] not in (group_emails or []):
+                await add_drive_member_api(
+                    service_account_file=service_account_file,
+                    impersonate_email=impersonate_email,
+                    drive_id=new_drive_id,
+                    member_email=mgr["email"],
+                    role=mgr.get("role", "organizer")
+                )
+                permissions_added.append(f"{mgr['email']} (default)")
         
         # 5. Add to database
         new_drive = SharedDrive(

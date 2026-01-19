@@ -1,15 +1,25 @@
+
 import { useState, useEffect, useMemo } from 'react';
-import { RefreshCw, Server, HardDrive, Plus, Edit2, Trash2, Copy, Save, X, ChevronDown, Search, Shield, EyeOff, Zap, CheckCircle, XCircle, AlertTriangle, FileCheck, ArrowDown } from 'lucide-react';
+import {
+    RefreshCw, HardDrive, Plus, Trash2, Edit2, CheckCircle,
+    X, Save, Copy, Server, Shield, ShieldAlert, ArrowRight,
+    AlertTriangle, Info, XCircle, Search, Filter, MoreHorizontal, EyeOff, Zap,
+    FileText, ArrowDown, ArrowUpDown, ChevronDown
+} from 'lucide-react';
 import axios from 'axios';
 import {
     fetchSSHServers, SSHServer,
     listRemotesWithFlags, RemoteWithFlags, RemoteFlags,
     addRemoteFlag, removeRemoteFlag, testBatchConnections, deleteRemoteWithConfirm,
-    BatchTestResult, backupRcloneConfig, copyRcloneConfig, checkRcloneDuplicates
+    BatchTestResult, backupRcloneConfig, copyRcloneConfig, checkRcloneDuplicates, fetchConfig, updateConfig, updateLocalRemote
 } from '../api';
 import { SESSION_KEYS } from '../constants/storageKeys';
 import { PageHeader } from '../components/PageHeader';
 import { Card } from '../components/Card';
+import { DataTable, ColumnConfig } from '../components/ui/DataTable';
+import { useSortableData } from '../hooks/useSortableData';
+import { useIsyncData } from '../contexts/IsyncDataContext';
+// Consolidated lucide-react imports above
 
 const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:8000/api';
 
@@ -20,28 +30,44 @@ interface RcloneRemote {
 }
 
 const RcloneManagement: React.FC = () => {
-    const [source, setSource] = useState<'local' | 'remote'>('local');
-    const [servers, setServers] = useState<SSHServer[]>([]);
-    const [selectedServer, setSelectedServer] = useState<string>('');
+    const { rcloneManager, setRcloneManager } = useIsyncData();
+    const { source, servers, selectedServer, remotes, searchFilter, statusFilter } = rcloneManager;
 
-    const [remotes, setRemotes] = useState<RcloneRemote[]>([]);
-    const [loading, setLoading] = useState(false);
-    const [message, setMessage] = useState<string | null>(null);
+    const [loading, setLoading] = useState(remotes.length === 0);
+    const [message, setMessage] = useState('');
+    const [error, setError] = useState('');
 
-    const [editingRemote, setEditingRemote] = useState<string | null>(null);
-    const [editConfig, setEditConfig] = useState<string>('');
+    // Unified Selection state
+    const [selectedItems, setSelectedItems] = useState<Set<string>>(new Set());
 
+    const [testing, setTesting] = useState(false);
+
+    // Filter Updaters
+    const setSource = (val: 'local' | 'remote') => setRcloneManager(prev => ({ ...prev, source: val }));
+    const setServers = (val: any[]) => setRcloneManager(prev => ({ ...prev, servers: val }));
+    const setSelectedServer = (val: string) => setRcloneManager(prev => ({ ...prev, selectedServer: val }));
+    const setRemotes = (val: any[]) => setRcloneManager(prev => ({ ...prev, remotes: val, lastUpdated: Date.now() }));
+    const setSearchFilter = (val: string) => setRcloneManager(prev => ({ ...prev, searchFilter: val }));
+    const setStatusFilter = (val: any) => setRcloneManager(prev => ({ ...prev, statusFilter: val }));
+
+    // Other state
     const [showAddModal, setShowAddModal] = useState(false);
-    const [newName, setNewName] = useState('');
-    const [newType, setNewType] = useState('drive');
-    const [newConfig, setNewConfig] = useState('');
-
-    const [selectedForCopy, setSelectedForCopy] = useState<Set<string>>(new Set());
-    const [searchFilter, setSearchFilter] = useState(() => sessionStorage.getItem(SESSION_KEYS.RCLONE_SEARCH_FILTER) || '');
-
     const [showCopyModal, setShowCopyModal] = useState(false);
     const [showDupModal, setShowDupModal] = useState(false);
-    const [duplicateResults, setDuplicateResults] = useState<string[]>([]);
+
+    const [newRemoteName, setNewRemoteName] = useState('');
+    const [newRemoteType, setNewRemoteType] = useState('drive');
+    const [newRemoteConfig, setNewRemoteConfig] = useState('');
+    const [editingRemote, setEditingRemote] = useState<string | null>(null);
+    const [editConfig, setEditConfig] = useState('');
+
+    const [duplicateResults, setDuplicateResults] = useState<any[]>([]);
+
+    const [testResults, setTestResults] = useState<any[]>([]);
+
+    // Sorting
+    const { sortedData: sortedRemotes, handleSort: requestSort, SortIcon } = useSortableData({ data: remotes });
+    const [excludedRemotes, setExcludedRemotes] = useState<string[]>([]);
 
     // Push Modal State
     const [showPushModal, setShowPushModal] = useState(false);
@@ -59,30 +85,14 @@ const RcloneManagement: React.FC = () => {
     const [copyStep, setCopyStep] = useState<'config' | 'confirm'>('config');
     const [previewData, setPreviewData] = useState<any>(null);
 
-    useEffect(() => { sessionStorage.setItem(SESSION_KEYS.RCLONE_SEARCH_FILTER, searchFilter); }, [searchFilter]);
-
-    // Manage Tab State
-
-    const [remotesWithFlags, setRemotesWithFlags] = useState<RemoteWithFlags[]>([]);
-    const [selectedForAction, setSelectedForAction] = useState<Set<string>>(new Set());
-    const [statusFilter, setStatusFilter] = useState<'all' | 'normal' | 'ignored' | 'protected'>(() =>
-        (sessionStorage.getItem(SESSION_KEYS.RCLONE_STATUS_FILTER) as any) || 'all'
-    );
-
-    useEffect(() => { sessionStorage.setItem(SESSION_KEYS.RCLONE_STATUS_FILTER, statusFilter); }, [statusFilter]);
-    const [testResults, setTestResults] = useState<BatchTestResult[]>([]);
-    const [testing, setTesting] = useState(false);
-
     useEffect(() => {
         loadServers();
     }, []);
 
     useEffect(() => {
+        // Load remotes if missing or source changes
         loadRemotes();
-    }, [source, selectedServer]);
-
-    useEffect(() => {
-        loadRemotesWithFlagsData();
+        fetchConfig().then(c => setExcludedRemotes(c.excluded_remotes || [])).catch(console.error);
     }, [source, selectedServer]);
 
     const loadServers = async () => {
@@ -97,36 +107,25 @@ const RcloneManagement: React.FC = () => {
         }
     };
 
-    const loadRemotes = async () => {
+    const loadRemotes = async (force: boolean = false) => {
+        if (!force && rcloneManager.lastUpdated > 0 && remotes.length > 0) return;
+
         setLoading(true);
-        setSelectedForCopy(new Set());
+        setSelectedItems(new Set());
 
         try {
             if (source === 'local') {
-                const res = await axios.get(`${API_BASE}/rclone/remotes`);
-                setRemotes(res.data.remotes || []);
+                const res = await listRemotesWithFlags();
+                setRemotes(res.remotes);
             } else if (selectedServer) {
-                const res = await axios.post(`${API_BASE}/rclone/remote/list`, null, { params: { server_id: selectedServer } });
-                setRemotes(res.data.remotes || []);
+                const res = await listRemotesWithFlags(selectedServer);
+                setRemotes(res.remotes);
+            } else {
+                setRemotes([]);
             }
         } catch (e: any) {
             console.error(e);
-            setMessage(`Error: ${e.message}`);
-        } finally {
-            setLoading(false);
-        }
-    };
-
-    const loadRemotesWithFlagsData = async () => {
-        setLoading(true);
-        setSelectedForAction(new Set());
-        try {
-            const serverId = source === 'remote' ? selectedServer : undefined;
-            const res = await listRemotesWithFlags(serverId);
-            setRemotesWithFlags(res.remotes);
-        } catch (e: any) {
-            console.error(e);
-            setMessage(`Error: ${e.message}`);
+            setMessage(`Error: ${e.message} `);
         } finally {
             setLoading(false);
         }
@@ -135,10 +134,57 @@ const RcloneManagement: React.FC = () => {
     const handleSetFlag = async (remoteName: string, flagType: 'ignored' | 'protected') => {
         try {
             await addRemoteFlag(remoteName, flagType);
-            await loadRemotesWithFlagsData();
-            setMessage(`Marked ${remoteName} as ${flagType}`);
+            await loadRemotes(true);
+            setMessage(`Marked ${remoteName} as ${flagType} `);
         } catch (e: any) {
-            setMessage(`Error: ${e.message}`);
+            setMessage(`Error: ${e.message} `);
+        }
+    };
+
+    const handleExclude = async (remoteName: string) => {
+        if (!confirm(`Exclude remote "${remoteName}" ? It will be hidden from all lists.`)) return;
+        try {
+            const config = await fetchConfig();
+            const current = config.excluded_remotes || [];
+            if (!current.includes(remoteName)) {
+                const next = [...current, remoteName];
+                await updateConfig({ excluded_remotes: next });
+                setExcludedRemotes(next);
+                // Refresh list
+                loadRemotes(true);
+            }
+        } catch (e: any) {
+            setMessage(`Failed to exclude: ${e.message} `);
+        }
+    };
+
+    const handleBulkExclude = async () => {
+        const selected = Array.from(selectedItems);
+        if (selected.length === 0) return;
+        if (!confirm(`Exclude ${selected.length} selected remote(s) ? `)) return;
+
+        try {
+            const config = await fetchConfig();
+            const current = config.excluded_remotes || [];
+            const next = [...current];
+            let added = 0;
+
+            selected.forEach(name => {
+                if (!next.includes(name)) {
+                    next.push(name);
+                    added++;
+                }
+            });
+
+            if (added > 0) {
+                await updateConfig({ excluded_remotes: next });
+                setExcludedRemotes(next);
+                await loadRemotes(true);
+                setSelectedItems(new Set());
+                setMessage(`Excluded ${added} remotes.`);
+            }
+        } catch (e: any) {
+            setMessage(`Failed to exclude: ${e.message} `);
         }
     };
 
@@ -146,15 +192,15 @@ const RcloneManagement: React.FC = () => {
         try {
             await removeRemoteFlag(remoteName, 'ignored');
             await removeRemoteFlag(remoteName, 'protected');
-            await loadRemotesWithFlagsData();
+            await loadRemotes(true);
             setMessage(`Cleared flag for ${remoteName}`);
         } catch (e: any) {
-            setMessage(`Error: ${e.message}`);
+            setMessage(`Error: ${e.message} `);
         }
     };
 
     const handleBulkSetFlag = async (flagType: 'ignored' | 'protected') => {
-        const selected = Array.from(selectedForAction);
+        const selected = Array.from(selectedItems);
         if (selected.length === 0) return;
 
         setLoading(true);
@@ -165,13 +211,13 @@ const RcloneManagement: React.FC = () => {
                 console.error(e);
             }
         }
-        await loadRemotesWithFlagsData();
-        setSelectedForAction(new Set());
-        setMessage(`Marked ${selected.length} remotes as ${flagType}`);
+        await loadRemotes(true);
+        setSelectedItems(new Set());
+        setMessage(`Marked ${selected.length} remotes as ${flagType} `);
     };
 
     const handleTestSelected = async () => {
-        const selected = Array.from(selectedForAction);
+        const selected = Array.from(selectedItems);
         if (selected.length === 0) return;
 
         setTesting(true);
@@ -182,7 +228,7 @@ const RcloneManagement: React.FC = () => {
             setTestResults(res.results);
             setMessage(`Tested ${res.total}: ${res.ok} OK, ${res.failed} failed`);
         } catch (e: any) {
-            setMessage(`Error: ${e.message}`);
+            setMessage(`Error: ${e.message} `);
         } finally {
             setTesting(false);
         }
@@ -192,27 +238,19 @@ const RcloneManagement: React.FC = () => {
         try {
             const serverId = source === 'remote' ? selectedServer : undefined;
             await deleteRemoteWithConfirm(name, confirm, serverId);
-            await loadRemotesWithFlagsData();
-            setMessage(`Deleted ${name}`);
+            await loadRemotes(true);
+            setMessage(`Deleted${name}`);
         } catch (e: any) {
             if (e.response?.status === 403) {
                 // Protected remote, ask for confirmation
-                if (window.confirm(`Remote "${name}" is protected. Delete anyway?`)) {
+                if (window.confirm(`Remote "${name}" is protected.Delete anyway ? `)) {
                     await handleDeleteRemote(name, true);
                 }
             } else {
-                setMessage(`Error: ${e.message}`);
+                setMessage(`Error: ${e.message} `);
             }
         }
     };
-
-    const filteredRemotesWithFlags = useMemo(() => {
-        return remotesWithFlags.filter(r => {
-            const matchesSearch = r.name.toLowerCase().includes(searchFilter.toLowerCase());
-            const matchesStatus = statusFilter === 'all' || r.status === statusFilter;
-            return matchesSearch && matchesStatus;
-        });
-    }, [remotesWithFlags, searchFilter, statusFilter]);
 
     const handleEdit = (remote: RcloneRemote) => {
         setEditingRemote(remote.name);
@@ -221,141 +259,67 @@ const RcloneManagement: React.FC = () => {
 
     const handleSaveEdit = async () => {
         if (!editingRemote) return;
-
         try {
             const config = JSON.parse(editConfig);
-            await axios.put(`${API_BASE}/rclone/remotes/${editingRemote}`, { config });
+            await updateLocalRemote(editingRemote, config);
             setMessage('✓ Remote updated');
             setEditingRemote(null);
-            await loadRemotes();
+            await loadRemotes(true);
         } catch (e: any) {
             setMessage(`Error: ${e.message}`);
         }
     };
 
     const handleDelete = async (name: string) => {
-        if (!confirm(`Delete remote "${name}"?`)) return;
+        if (!confirm(`Delete remote "${name}" ? `)) return;
 
         try {
             await axios.delete(`${API_BASE}/rclone/remotes/${name}`);
             setMessage('✓ Remote deleted');
-            await loadRemotes();
+            await loadRemotes(true);
         } catch (e: any) {
-            setMessage(`Error: ${e.message}`);
+            setMessage(`Error: ${e.message} `);
         }
     };
 
     const handleAdd = async () => {
-        if (!newName || !newType) return;
+        if (!newRemoteName || !newRemoteType) return;
 
         try {
-            const config = newConfig ? JSON.parse(newConfig) : {};
+            const config = newRemoteConfig ? JSON.parse(newRemoteConfig) : {};
             await axios.post(`${API_BASE}/rclone/remotes`, {
-                name: newName,
-                type: newType,
+                name: newRemoteName,
+                type: newRemoteType,
                 config
             });
             setMessage('✓ Remote created');
             setShowAddModal(false);
-            setNewName('');
-            setNewType('drive');
-            setNewConfig('');
-            await loadRemotes();
+            setNewRemoteName('');
+            setNewRemoteType('drive');
+            setNewRemoteConfig('');
+            await loadRemotes(true);
         } catch (e: any) {
-            setMessage(`Error: ${e.message}`);
-        }
-    };
-
-    const [lastClickedRemote, setLastClickedRemote] = useState<string | null>(null);
-
-    const toggleCopySelect = (name: string, multi?: boolean, rangeStart?: string, rangeEnd?: string, allItems?: string[]) => {
-        let next = new Set(selectedForCopy);
-
-        if (rangeStart && rangeEnd && allItems) {
-            const startIdx = allItems.indexOf(rangeStart);
-            const endIdx = allItems.indexOf(rangeEnd);
-            if (startIdx !== -1 && endIdx !== -1) {
-                const s = Math.min(startIdx, endIdx);
-                const e = Math.max(startIdx, endIdx);
-                for (let i = s; i <= e; i++) {
-                    next.add(allItems[i]);
-                }
-            }
-        } else if (multi) {
-            if (next.has(name)) next.delete(name); // Optional: Standard shift-click adds, but sometimes toggles. Let's stick to "add range" logic usually. 
-            // Actually for simple click:
-            if (next.has(name)) next.delete(name);
-            else next.add(name);
-        } else {
-            if (next.has(name)) next.delete(name);
-            else next.add(name);
-        }
-        setSelectedForCopy(next);
-    };
-
-    const handleCopySelectClick = (name: string, e: React.MouseEvent, allItems: string[]) => {
-        if (e.shiftKey && lastClickedRemote) {
-            const startIdx = allItems.indexOf(lastClickedRemote);
-            const endIdx = allItems.indexOf(name);
-            if (startIdx !== -1 && endIdx !== -1) {
-                const min = Math.min(startIdx, endIdx);
-                const max = Math.max(startIdx, endIdx);
-                const next = new Set(selectedForCopy);
-                for (let i = min; i <= max; i++) {
-                    next.add(allItems[i]);
-                }
-                setSelectedForCopy(next);
-            }
-        } else {
-            const next = new Set(selectedForCopy);
-            if (next.has(name)) next.delete(name);
-            else next.add(name);
-            setSelectedForCopy(next);
-            setLastClickedRemote(name);
-        }
-    };
-
-    // Helper for Manage Tab
-    const [lastClickedManage, setLastClickedManage] = useState<string | null>(null);
-    const handleManageSelectClick = (name: string, e: React.MouseEvent, allItems: string[]) => {
-        if (e.shiftKey && lastClickedManage) {
-            const startIdx = allItems.indexOf(lastClickedManage);
-            const endIdx = allItems.indexOf(name);
-            if (startIdx !== -1 && endIdx !== -1) {
-                const min = Math.min(startIdx, endIdx);
-                const max = Math.max(startIdx, endIdx);
-                const next = new Set(selectedForAction);
-                for (let i = min; i <= max; i++) {
-                    next.add(allItems[i]);
-                }
-                setSelectedForAction(next);
-            }
-        } else {
-            const next = new Set(selectedForAction);
-            if (next.has(name)) next.delete(name);
-            else next.add(name);
-            setSelectedForAction(next);
-            setLastClickedManage(name);
+            setMessage(`Error: ${e.message} `);
         }
     };
 
     const handleCopyToLocal = async () => {
-        if (selectedForCopy.size === 0 || !selectedServer) return;
+        if (selectedItems.size === 0 || !selectedServer) return;
 
         try {
             await axios.post(`${API_BASE}/rclone/remote/pull`, {
                 server_id: selectedServer,
-                remote_names: Array.from(selectedForCopy)
+                remote_names: Array.from(selectedItems)
             });
-            setMessage(`✓ Copied ${selectedForCopy.size} remotes to local`);
-            setSelectedForCopy(new Set());
+            setMessage(`✓ Copied ${selectedItems.size} remotes to local`);
+            setSelectedItems(new Set());
         } catch (e: any) {
-            setMessage(`Error: ${e.message}`);
+            setMessage(`Error: ${e.message} `);
         }
     };
 
     const handlePushToRemote = () => {
-        if (selectedForCopy.size === 0) return;
+        if (selectedItems.size === 0) return;
         setTargetSshServers(new Set());
         setPushStatus(null);
         setPushProgress([]);
@@ -368,7 +332,7 @@ const RcloneManagement: React.FC = () => {
         setPushStatus('pushing');
         setPushProgress([]);
         const targets = Array.from(targetSshServers);
-        const remotesToPush = Array.from(selectedForCopy);
+        const remotesToPush = Array.from(selectedItems);
         let successCount = 0;
 
         for (const serverId of targets) {
@@ -384,10 +348,10 @@ const RcloneManagement: React.FC = () => {
                 if (res.data.status === 'ok') {
                     setPushProgress(prev => {
                         const next = [...prev];
-                        next[next.length - 1] = `✓ ${serverName}: Success (Updated ${res.data.target_path})`;
+                        next[next.length - 1] = `✓ ${serverName}: Success(Updated ${res.data.target_path})`;
                         // Add trace if available (for debugging)
                         if (res.data.debug_trace) {
-                            res.data.debug_trace.forEach((t: string) => next.push(`    > ${t}`));
+                            res.data.debug_trace.forEach((t: string) => next.push(`    > ${t} `));
                         }
                         return next;
                     });
@@ -398,10 +362,10 @@ const RcloneManagement: React.FC = () => {
             } catch (e: any) {
                 setPushProgress(prev => {
                     const next = [...prev];
-                    next[next.length - 1] = `✗ ${serverName}: Failed - ${e.message}`;
+                    next[next.length - 1] = `✗ ${serverName}: Failed - ${e.message} `;
                     // If we have a trace in the error response (handled via axios interceptor mostly, but let's check response data if available)
                     if (e.response?.data?.debug_trace) {
-                        e.response.data.debug_trace.forEach((t: string) => next.push(`    > ${t}`));
+                        e.response.data.debug_trace.forEach((t: string) => next.push(`    > ${t} `));
                     }
                     return next;
                 });
@@ -415,20 +379,21 @@ const RcloneManagement: React.FC = () => {
             setMessage(`✓ Successfully pushed to ${successCount} SSH servers`);
             setTimeout(() => {
                 setShowPushModal(false);
-                setSelectedForCopy(new Set());
+                setSelectedItems(new Set());
             }, 1000); // Auto close on full success
         } else {
-            setMessage(`Completed with errors. Pushed to ${successCount}/${targets.length} servers.`);
+            setMessage(`Completed with errors.Pushed to ${successCount}/${targets.length} servers.`);
         }
     };
 
     return (
 
-        <div className="space-y-6">
+        <div className="space-y-4">
             <PageHeader
                 icon={HardDrive}
                 title="Rclone Manager"
                 subtitle="View and edit rclone remotes on local or remote servers"
+                compact={true}
             />
 
             {/* Source & Server Selector */}
@@ -462,13 +427,23 @@ const RcloneManagement: React.FC = () => {
                     )}
 
                     <button
-                        onClick={() => loadRemotesWithFlagsData()}
+                        onClick={() => loadRemotes(true)}
                         disabled={loading}
                         className="flex items-center gap-2 px-3 py-2 bg-zinc-700 hover:bg-zinc-600 rounded-lg text-sm text-white transition disabled:opacity-50"
                     >
                         <RefreshCw size={14} className={loading ? 'animate-spin' : ''} />
                         Refresh
                     </button>
+
+                    <button
+                        onClick={handleBulkExclude}
+                        disabled={selectedItems.size === 0}
+                        className="flex items-center gap-2 px-3 py-2 bg-orange-900/30 hover:bg-orange-800/50 disabled:opacity-50 disabled:cursor-not-allowed text-orange-400 rounded-lg text-sm transition border border-orange-900/50"
+                    >
+                        <ShieldAlert size={14} />
+                        Exclude ({selectedItems.size})
+                    </button>
+
 
                     {source === 'local' && (
                         <button
@@ -528,11 +503,12 @@ const RcloneManagement: React.FC = () => {
 
             {/* Unified Remotes View */}
             <>
-                {/* Copy Actions (when viewing remote) */}
-                {source === 'remote' && selectedForCopy.size > 0 && (
-                    <Card>
-                        <div className="flex items-center gap-4">
-                            <span className="text-sm text-zinc-400">{selectedForCopy.size} selected</span>
+                {/* Actions for Selected Items */}
+                <Card>
+                    <div className="flex items-center gap-4 flex-wrap">
+                        <span className="text-sm text-zinc-400">{selectedItems.size} selected</span>
+
+                        {source === 'remote' && (
                             <button
                                 onClick={handleCopyToLocal}
                                 className="flex items-center gap-2 px-3 py-2 bg-emerald-600 hover:bg-emerald-500 rounded-lg text-sm text-white transition"
@@ -540,194 +516,185 @@ const RcloneManagement: React.FC = () => {
                                 <Copy size={14} />
                                 Copy to Local
                             </button>
-                        </div>
-                    </Card>
-                )}
-
-                {/* Push to Remote (when viewing local) */}
-                {source === 'local' && selectedForCopy.size > 0 && (
-                    <Card>
-                        <div className="flex items-center gap-4">
-                            <span className="text-sm text-zinc-400">{selectedForCopy.size} Rclone Remotes selected</span>
-                            <button
-                                onClick={handlePushToRemote}
-                                className="flex items-center gap-2 px-3 py-2 bg-cyan-600 hover:bg-cyan-500 rounded-lg text-sm text-white transition"
-                            >
-                                <Server size={14} />
-                                Push to SSH Server(s)
-                            </button>
-                        </div>
-                    </Card>
-                )}
-
-                {/* Remotes List */}
-                <Card>
-                    <div className="flex items-center justify-between mb-4">
-                        <h3 className="text-lg font-medium text-white flex items-center gap-2">
-                            <HardDrive size={18} className="text-purple-400" />
-                            Remotes ({remotes.length})
-                        </h3>
-                        <button
-                            onClick={() => {
-                                const filteredNames = remotes.filter(r => r.name.toLowerCase().includes(searchFilter.toLowerCase())).map(r => r.name);
-                                if (selectedForCopy.size === filteredNames.length && filteredNames.length > 0) {
-                                    setSelectedForCopy(new Set());
-                                } else {
-                                    setSelectedForCopy(new Set(filteredNames));
-                                }
-                            }}
-                            className="text-xs text-zinc-500 hover:text-zinc-300 font-medium"
-                        >
-                            {(() => {
-                                const filteredNames = remotes.filter(r => r.name.toLowerCase().includes(searchFilter.toLowerCase())).map(r => r.name);
-                                return selectedForCopy.size === filteredNames.length && filteredNames.length > 0 ? 'Deselect All' : 'Select All';
-                            })()}
-                        </button>
-                        <button
-                            onClick={() => {
-                                const filteredNames = remotes.filter(r => r.name.toLowerCase().includes(searchFilter.toLowerCase())).map(r => r.name);
-                                const inverted = new Set(filteredNames.filter(name => !selectedForCopy.has(name)));
-                                setSelectedForCopy(inverted);
-                            }}
-                            className="text-xs text-zinc-500 hover:text-zinc-300 font-medium"
-                        >
-                            Invert
-                        </button>
-                    </div>
-
-                    {/* Search Filter */}
-                    <div className="mb-4 relative">
-                        <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-500" />
-                        <input
-                            type="text"
-                            value={searchFilter}
-                            onChange={(e) => setSearchFilter(e.target.value)}
-                            placeholder="Filter remotes..."
-                            className="w-full bg-zinc-800 border border-zinc-700 rounded-lg pl-10 pr-3 py-2 text-white placeholder-zinc-500 focus:outline-none focus:border-purple-500"
-                        />
-                        {searchFilter && (
-                            <button
-                                onClick={() => setSearchFilter('')}
-                                className="absolute right-3 top-1/2 -translate-y-1/2 text-zinc-500 hover:text-white"
-                            >
-                                <X size={14} />
-                            </button>
                         )}
+
+                        {source === 'local' && (
+                            <>
+                                <button
+                                    onClick={handlePushToRemote}
+                                    className="flex items-center gap-2 px-3 py-2 bg-cyan-600 hover:bg-cyan-500 rounded-lg text-sm text-white transition"
+                                >
+                                    <Server size={14} />
+                                    Push to SSH
+                                </button>
+                                <button
+                                    onClick={() => handleBulkSetFlag('ignored')}
+                                    className="flex items-center gap-2 px-3 py-2 bg-zinc-700 hover:bg-zinc-600 rounded-lg text-sm text-white transition"
+                                >
+                                    <EyeOff size={14} />
+                                    Ignore
+                                </button>
+                                <button
+                                    onClick={() => handleBulkSetFlag('protected')}
+                                    className="flex items-center gap-2 px-3 py-2 bg-amber-600 hover:bg-amber-500 rounded-lg text-sm text-white transition"
+                                >
+                                    <Shield size={14} />
+                                    Protect
+                                </button>
+                            </>
+                        )}
+                        <button
+                            onClick={handleTestSelected}
+                            disabled={testing}
+                            className="flex items-center gap-2 px-3 py-2 bg-violet-600 hover:bg-violet-500 rounded-lg text-sm text-white transition"
+                        >
+                            <Zap size={14} className={testing ? 'animate-pulse' : ''} />
+                            Test
+                        </button>
+                    </div>
+                </Card>
+
+                {/* Remotes Table */}
+                <div className="mb-4">
+                    <h3 className="text-base font-medium text-white flex items-center gap-2 mb-2">
+                        <HardDrive size={18} className="text-purple-400" />
+                        Remotes ({remotes.length})
+                    </h3>
+
+                    <div className="mb-4 flex items-center justify-between gap-4">
+                        <div className="relative flex-1">
+                            <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-500" />
+                            <input
+                                type="text"
+                                value={searchFilter}
+                                onChange={(e) => setSearchFilter(e.target.value)}
+                                placeholder="Filter remotes..."
+                                className="w-full bg-zinc-800 border border-zinc-700 rounded-lg pl-10 pr-3 py-2 text-white placeholder-zinc-500 focus:outline-none focus:border-purple-500"
+                            />
+                        </div>
+                        <div className="flex gap-1">
+                            {(['all', 'normal', 'ignored', 'protected'] as const).map(filter => (
+                                <button
+                                    key={filter}
+                                    onClick={() => setStatusFilter(filter)}
+                                    className={`px-3 py-2 rounded-lg text-xs font-medium transition ${statusFilter === filter
+                                        ? filter === 'ignored' ? 'bg-zinc-600 text-white'
+                                            : filter === 'protected' ? 'bg-amber-600 text-white'
+                                                : 'bg-purple-600 text-white'
+                                        : 'bg-zinc-800 text-zinc-400 hover:text-white'
+                                        }`}
+                                >
+                                    {filter.charAt(0).toUpperCase() + filter.slice(1)}
+                                </button>
+                            ))}
+                        </div>
                     </div>
 
-                    {loading ? (
-                        <div className="text-center py-8 text-zinc-500">Loading...</div>
-                    ) : remotes.filter(r => r.name.toLowerCase().includes(searchFilter.toLowerCase())).length === 0 ? (
-                        <div className="text-center py-8 text-zinc-500">{searchFilter ? `No remotes matching "${searchFilter}"` : 'No remotes found'}</div>
-                    ) : (
-                        <div className="space-y-2">
-                            <div className="space-y-1">
-                                {remotes
-                                    .filter(r => r.name.toLowerCase().includes(searchFilter.toLowerCase()))
-                                    .map(remote => {
-                                        const isSelected = selectedForCopy.has(remote.name);
-                                        return (
-                                            <div
-                                                key={remote.name}
-                                                onClick={(e) => {
-                                                    // Stop propagation if clicking on edit/delete/checkbox directly (handled separately), 
-                                                    // but here we are handling the row click.
-                                                    if (e.target instanceof HTMLInputElement || (e.target as HTMLElement).closest('button')) return;
-
-                                                    handleCopySelectClick(
-                                                        remote.name,
-                                                        e,
-                                                        remotes.filter(r => r.name.toLowerCase().includes(searchFilter.toLowerCase())).map(r => r.name)
-                                                    );
-                                                }}
-                                                className={`group relative rounded border transition-colors cursor-pointer ${isSelected
-                                                    ? 'bg-purple-900/20 border-purple-500/50'
-                                                    : 'bg-zinc-900/50 border-zinc-800 hover:bg-zinc-800'
-                                                    } ${editingRemote === remote.name ? 'border-purple-500 ring-1 ring-purple-500' : ''} p-2`}
-                                            >
-                                                <div className="flex items-center justify-between gap-3">
-                                                    <div className="flex items-center gap-3 overflow-hidden">
-                                                        <div
-                                                            className={`w-4 h-4 rounded border flex items-center justify-center shrink-0 transition-colors ${isSelected ? 'bg-purple-600 border-purple-600' : 'border-zinc-600 bg-zinc-800'
-                                                                }`}
-                                                            onClick={(e) => {
-                                                                e.stopPropagation();
-                                                                toggleCopySelect(remote.name);
-                                                            }}
-                                                        >
-                                                            {isSelected && <CheckCircle size={10} className="text-white" />}
-                                                        </div>
-
-                                                        <div className="min-w-0 flex flex-col">
-                                                            <div className="flex items-center gap-2">
-                                                                <span className={`text-xs font-semibold truncate ${isSelected ? 'text-purple-200' : 'text-zinc-300'}`}>
-                                                                    {remote.name}
-                                                                </span>
-                                                                <span className="text-[10px] px-1.5 py-0.5 bg-zinc-800 border border-zinc-700 rounded text-zinc-500 uppercase tracking-wider">
-                                                                    {remote.type}
-                                                                </span>
-                                                            </div>
-                                                            {editingRemote !== remote.name && (
-                                                                <div className="text-[10px] text-zinc-500 font-mono truncate hidden group-hover:block transition-all">
-                                                                    {Object.entries(remote.config).map(([k, v]) => `${k}=${v}`).join(' ')}
-                                                                </div>
-                                                            )}
-                                                        </div>
-                                                    </div>
-
-                                                    {source === 'local' && (
-                                                        <div className="flex items-center gap-1" onClick={e => e.stopPropagation()}>
-                                                            <button
-                                                                onClick={(e) => { e.stopPropagation(); handleEdit(remote); }}
-                                                                className="p-1.5 text-zinc-400 hover:text-white hover:bg-zinc-700 rounded transition"
-                                                                title="Edit Config"
-                                                            >
-                                                                <Edit2 size={14} />
-                                                            </button>
-                                                            <button
-                                                                onClick={(e) => { e.stopPropagation(); handleDelete(remote.name); }}
-                                                                className="p-1.5 text-zinc-500 hover:text-red-400 hover:bg-red-900/30 rounded transition"
-                                                                title="Delete Remote"
-                                                            >
-                                                                <Trash2 size={12} />
-                                                            </button>
-                                                        </div>
-                                                    )}
-
-                                                </div>
-
-                                                {editingRemote === remote.name && (
-                                                    <div className="mt-3 space-y-2 border-t border-zinc-700/50 pt-3" onClick={e => e.stopPropagation()}>
-                                                        <textarea
-                                                            value={editConfig}
-                                                            onChange={(e) => setEditConfig(e.target.value)}
-                                                            className="w-full h-32 bg-zinc-950 border border-zinc-700 rounded p-2 text-xs font-mono text-zinc-300 focus:border-purple-500 outline-none"
-                                                        />
-                                                        <div className="flex justify-end gap-2">
-                                                            <button
-                                                                onClick={(e) => { e.stopPropagation(); setEditingRemote(null); }}
-                                                                className="flex items-center gap-1 px-3 py-1.5 bg-zinc-800 hover:bg-zinc-700 text-white rounded text-xs transition"
-                                                            >
-                                                                <X size={12} /> Cancel
-                                                            </button>
-                                                            <button
-                                                                onClick={(e) => { e.stopPropagation(); handleSaveEdit(); }}
-                                                                className="flex items-center gap-1 px-3 py-1.5 bg-purple-600 hover:bg-purple-500 text-white rounded text-xs transition font-medium"
-                                                            >
-                                                                <Save size={12} /> Save Changes
-                                                            </button>
-                                                        </div>
-                                                    </div>
-                                                )
-                                                }
+                    <DataTable
+                        compact={true}
+                        data={sortedRemotes.filter(r => {
+                            const matchesSearch = r.name.toLowerCase().includes(searchFilter.toLowerCase());
+                            const matchesStatus = statusFilter === 'all' || r.status === statusFilter;
+                            return matchesSearch && matchesStatus;
+                        })}
+                        columns={[
+                            {
+                                key: 'name',
+                                header: 'Name',
+                                sortable: true,
+                                width: '200px',
+                                render: (val, item) => (
+                                    <div className="flex items-center gap-2">
+                                        <span className="font-medium text-zinc-200 truncate">{val}</span>
+                                        {item.status === 'ignored' && <span className="text-[9px] bg-red-900/30 text-red-400 px-1 py-0 rounded leading-none">Ignored</span>}
+                                        {item.status === 'protected' && <span className="text-[9px] bg-amber-900/30 text-amber-400 px-1 py-0 rounded leading-none">Protected</span>}
+                                    </div>
+                                )
+                            },
+                            {
+                                key: 'type',
+                                header: 'Type',
+                                sortable: true,
+                                width: '100px',
+                                render: (val) => (
+                                    <span className="text-[10px] font-mono text-zinc-500 bg-zinc-900/50 px-1.5 py-0.5 rounded border border-zinc-800">{val}</span>
+                                )
+                            },
+                            {
+                                key: 'config',
+                                header: 'Config Parameters',
+                                render: (val) => (
+                                    <div className="flex flex-col gap-0.5 text-[10px] leading-tight font-mono">
+                                        {Object.entries(val || {}).map(([k, v]) => (
+                                            <div key={k} className="flex items-start gap-1">
+                                                <span className="text-zinc-500 shrink-0">{k}=</span>
+                                                <span className={`${k === 'service_account_file' ? 'text-amber-400 font-bold' : 'text-zinc-300'} break-all`}>
+                                                    {String(v)}
+                                                </span>
                                             </div>
-                                        );
-                                    })
-                                }
-                            </div>
-                        </div>
-                    )}
-                </Card>
+                                        ))}
+                                        {(!val || Object.keys(val).length === 0) && (
+                                            <span className="text-zinc-600 italic">No parameters</span>
+                                        )}
+                                    </div>
+                                )
+                            },
+                            {
+                                key: 'actions',
+                                header: '',
+                                render: (_, item) => (
+                                    <div className="flex items-center justify-end gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                                        {source === 'local' ? (
+                                            <>
+                                                <button
+                                                    onClick={(e) => { e.stopPropagation(); handleEdit(item); }}
+                                                    className="p-1.5 text-zinc-400 hover:text-white hover:bg-zinc-700 rounded transition"
+                                                    title="Edit Config"
+                                                >
+                                                    <Edit2 size={14} />
+                                                </button>
+                                                <button
+                                                    onClick={(e) => { e.stopPropagation(); handleDelete(item.name); }}
+                                                    className="p-1.5 text-zinc-500 hover:text-red-400 hover:bg-red-900/30 rounded transition"
+                                                    title="Delete Remote"
+                                                >
+                                                    <Trash2 size={14} />
+                                                </button>
+                                            </>
+                                        ) : (
+                                            <div className="text-xs text-zinc-500 italic">Read-only</div>
+                                        )}
+                                    </div>
+                                )
+                            }
+                        ]}
+                        selectedItems={selectedItems}
+                        onToggleItem={(id) => {
+                            const next = new Set(selectedItems);
+                            if (next.has(id as string)) next.delete(id as string);
+                            else next.add(id as string);
+                            setSelectedItems(next);
+                        }}
+                        onSelectAll={() => {
+                            const filtered = sortedRemotes.filter(r => r.name.toLowerCase().includes(searchFilter.toLowerCase()));
+                            if (selectedItems.size === filtered.length) setSelectedItems(new Set());
+                            else setSelectedItems(new Set(filtered.map(r => r.name)));
+                        }}
+                        onInvertSelection={() => {
+                            const filtered = sortedRemotes.filter(r => r.name.toLowerCase().includes(searchFilter.toLowerCase()));
+                            const inverted = new Set(filtered.filter(r => !selectedItems.has(r.name)).map(r => r.name));
+                            setSelectedItems(inverted);
+                        }}
+                        handleSort={requestSort}
+                        SortIcon={SortIcon}
+                        columnFilters={{}}
+                        onToggleColumnFilter={() => { }}
+                        onClearColumnFilter={() => { }}
+                        getUniqueValues={() => []}
+                        rowIdKey="name"
+                        isLoading={loading}
+                    />
+                </div>
 
                 {/* Add Remote Modal */}
                 {showAddModal && (
@@ -740,8 +707,8 @@ const RcloneManagement: React.FC = () => {
                                     <label className="block text-xs text-zinc-500 mb-1">Name</label>
                                     <input
                                         type="text"
-                                        value={newName}
-                                        onChange={(e) => setNewName(e.target.value)}
+                                        value={newRemoteName}
+                                        onChange={(e) => setNewRemoteName(e.target.value)}
                                         placeholder="my-remote"
                                         className="w-full bg-zinc-800 border border-zinc-700 rounded px-3 py-2 text-white"
                                     />
@@ -750,8 +717,8 @@ const RcloneManagement: React.FC = () => {
                                 <div>
                                     <label className="block text-xs text-zinc-500 mb-1">Type</label>
                                     <select
-                                        value={newType}
-                                        onChange={(e) => setNewType(e.target.value)}
+                                        value={newRemoteType}
+                                        onChange={(e) => setNewRemoteType(e.target.value)}
                                         className="w-full bg-zinc-800 border border-zinc-700 rounded px-3 py-2 text-white"
                                     >
                                         <option value="drive">Google Drive</option>
@@ -766,11 +733,26 @@ const RcloneManagement: React.FC = () => {
                                 <div>
                                     <label className="block text-xs text-zinc-500 mb-1">Config (JSON)</label>
                                     <textarea
-                                        value={newConfig}
-                                        onChange={(e) => setNewConfig(e.target.value)}
-                                        placeholder='{"scope": "drive", "team_drive": "..."}'
-                                        className="w-full h-24 bg-zinc-800 border border-zinc-700 rounded px-3 py-2 text-white font-mono text-sm"
+                                        value={newRemoteConfig}
+                                        onChange={(e) => setNewRemoteConfig(e.target.value)}
+                                        placeholder='{"scope": "drive", "team_drive": "...", "service_account_file": "..."}'
+                                        className="w-full h-24 bg-zinc-800 border border-zinc-700 rounded px-3 py-2 text-white font-mono text-sm mb-2"
                                     />
+                                    {newRemoteConfig.includes("service_account_file") && (
+                                        <div className="p-2 bg-amber-900/10 border border-amber-900/30 rounded text-[10px]">
+                                            <span className="text-amber-500 font-bold uppercase mr-2">Detected SA:</span>
+                                            <span className="text-amber-200/80 font-mono italic">
+                                                {(() => {
+                                                    try {
+                                                        const parsed = JSON.parse(newRemoteConfig);
+                                                        return parsed.service_account_file || parsed.service_account_file_path || "Not found";
+                                                    } catch (e) {
+                                                        return "Invalid JSON";
+                                                    }
+                                                })()}
+                                            </span>
+                                        </div>
+                                    )}
                                 </div>
                             </div>
 
@@ -898,7 +880,7 @@ const RcloneManagement: React.FC = () => {
                                 <>
                                     <div className="space-y-4 mb-6 bg-zinc-950 p-4 rounded border border-zinc-800">
                                         <h4 className="text-white font-medium flex gap-2 items-center">
-                                            <FileCheck size={18} className="text-emerald-400" /> Confirm Copy Details
+                                            <FileText size={18} className="text-emerald-400" /> Confirm Copy Details
                                         </h4>
 
                                         <div className="grid gap-4 text-sm">
@@ -984,7 +966,7 @@ const RcloneManagement: React.FC = () => {
 
                                 <div className="mb-4">
                                     <div className="text-sm text-zinc-400 mb-2">
-                                        Pushing <span className="text-white font-bold">{selectedForCopy.size}</span> selected Rclone details to:
+                                        Pushing <span className="text-white font-bold">{selectedItems.size}</span> selected Rclone details to:
                                     </div>
                                     <div className="max-h-60 overflow-y-auto bg-zinc-950 border border-zinc-800 rounded p-2 space-y-1">
                                         {servers.map(server => (
@@ -1074,226 +1056,102 @@ const RcloneManagement: React.FC = () => {
                         </div>
                     </div>
                 )}
-            </>
-
-            {/* Search, Filter & Bulk Actions */}
-            <div className="space-y-4">
-                {/* Search & Filter Bar */}
-                <Card>
-                    <div className="flex items-center gap-4 flex-wrap">
-                        <div className="flex-1 min-w-[200px] relative">
-                            <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-zinc-500" />
-                            <input
-                                type="text"
-                                value={searchFilter}
-                                onChange={(e) => setSearchFilter(e.target.value)}
-                                placeholder="Fuzzy search remotes..."
-                                className="w-full bg-zinc-800 border border-zinc-700 rounded-lg pl-10 pr-3 py-2 text-white text-sm"
-                            />
-                        </div>
-                        <div className="flex gap-1">
-                            {(['all', 'normal', 'ignored', 'protected'] as const).map(filter => (
-                                <button
-                                    key={filter}
-                                    onClick={() => setStatusFilter(filter)}
-                                    className={`px-3 py-1.5 rounded text-xs font-medium transition ${statusFilter === filter
-                                        ? filter === 'ignored' ? 'bg-zinc-600 text-white'
-                                            : filter === 'protected' ? 'bg-amber-600 text-white'
-                                                : 'bg-purple-600 text-white'
-                                        : 'bg-zinc-800 text-zinc-400 hover:text-white'
-                                        }`}
-                                >
-                                    {filter.charAt(0).toUpperCase() + filter.slice(1)}
+                {/* Edit Remote Modal */}
+                {editingRemote && (
+                    <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4">
+                        <div className="bg-zinc-900 border border-zinc-700 rounded-xl p-6 w-full max-w-lg shadow-2xl">
+                            <div className="flex items-center justify-between mb-4">
+                                <h3 className="text-lg font-bold text-white flex items-center gap-2">
+                                    <Edit2 size={18} className="text-blue-400" />
+                                    Edit Remote: <span className="text-blue-400 font-mono">{editingRemote}</span>
+                                </h3>
+                                <button onClick={() => setEditingRemote(null)} className="text-zinc-500 hover:text-white transition">
+                                    <X size={20} />
                                 </button>
-                            ))}
-                        </div>
-                    </div>
-                </Card>
+                            </div>
 
-                {/* Bulk Actions */}
-                {selectedForAction.size > 0 && (
-                    <Card>
-                        <div className="flex items-center gap-3 flex-wrap">
-                            <span className="text-sm text-zinc-400">{selectedForAction.size} selected</span>
-                            <button
-                                onClick={() => handleBulkSetFlag('ignored')}
-                                className="flex items-center gap-1.5 px-3 py-1.5 bg-zinc-700 hover:bg-zinc-600 rounded text-sm text-white"
-                            >
-                                <EyeOff size={14} /> Ignore
-                            </button>
-                            <button
-                                onClick={() => handleBulkSetFlag('protected')}
-                                className="flex items-center gap-1.5 px-3 py-1.5 bg-amber-600 hover:bg-amber-500 rounded text-sm text-white"
-                            >
-                                <Shield size={14} /> Protect
-                            </button>
-                            <button
-                                onClick={handleTestSelected}
-                                disabled={testing}
-                                className="flex items-center gap-1.5 px-3 py-1.5 bg-cyan-600 hover:bg-cyan-500 disabled:bg-zinc-700 rounded text-sm text-white"
-                            >
-                                <Zap size={14} className={testing ? 'animate-pulse' : ''} /> Test
-                            </button>
-                            <button
-                                onClick={() => setSelectedForAction(new Set())}
-                                className="px-3 py-1.5 text-zinc-500 hover:text-zinc-300 text-sm"
-                            >
-                                Clear
-                            </button>
-                        </div>
-                    </Card>
-                )}
-
-                {/* Test Results */}
-                {testResults.length > 0 && (
-                    <Card>
-                        <h4 className="text-sm font-medium text-white mb-3">Test Results</h4>
-                        <div className="space-y-2 max-h-48 overflow-y-auto">
-                            {testResults.map(r => (
-                                <div key={r.name} className={`flex items-center gap-3 p-2 rounded ${r.status === 'ok' ? 'bg-emerald-900/20' : 'bg-red-900/20'}`}>
-                                    {r.status === 'ok' ? <CheckCircle size={16} className="text-emerald-400" /> : <XCircle size={16} className="text-red-400" />}
-                                    <span className="font-mono text-sm text-white">{r.name}</span>
-                                    <span className="text-xs text-zinc-500 truncate flex-1">{r.message}</span>
-                                    {r.status === 'error' && (
-                                        <div className="flex gap-1">
-                                            <button
-                                                onClick={() => handleSetFlag(r.name, 'ignored')}
-                                                className="px-2 py-1 bg-zinc-700 hover:bg-zinc-600 rounded text-xs text-white"
-                                            >
-                                                Ignore
-                                            </button>
-                                            <button
-                                                onClick={() => handleDeleteRemote(r.name)}
-                                                className="px-2 py-1 bg-red-600 hover:bg-red-500 rounded text-xs text-white"
-                                            >
-                                                Delete
-                                            </button>
-                                        </div>
-                                    )}
+                            <div className="space-y-4">
+                                <div>
+                                    <label className="block text-xs text-zinc-500 mb-1 uppercase font-bold tracking-wider">Configuration (JSON)</label>
+                                    <textarea
+                                        value={editConfig}
+                                        onChange={(e) => setEditConfig(e.target.value)}
+                                        className="w-full h-64 bg-zinc-950 border border-zinc-700 rounded px-3 py-2 text-white font-mono text-xs focus:border-blue-500 outline-none custom-scrollbar"
+                                        spellCheck={false}
+                                    />
+                                    <p className="mt-1 text-[10px] text-zinc-500">
+                                        Modify the JSON configuration directly. Ensure it is valid JSON.
+                                    </p>
                                 </div>
-                            ))}
-                        </div>
-                    </Card>
-                )}
 
-                {/* Remotes List with Flags */}
-                <Card>
-                    <div className="flex items-center justify-between mb-4">
-                        <h3 className="text-sm font-medium text-white">
-                            Remotes ({filteredRemotesWithFlags.length})
-                        </h3>
-                        <div className="flex items-center gap-2">
-                            <button
-                                onClick={() => {
-                                    const allNames = filteredRemotesWithFlags.map(r => r.name);
-                                    setSelectedForAction(prev => prev.size === allNames.length ? new Set() : new Set(allNames));
-                                }}
-                                className="text-xs text-zinc-500 hover:text-zinc-300 transition"
-                            >
-                                {selectedForAction.size === filteredRemotesWithFlags.length ? 'Deselect All' : 'Select All'}
-                            </button>
-                            <button
-                                onClick={() => {
-                                    const allNames = filteredRemotesWithFlags.map(r => r.name);
-                                    const inverted = new Set(allNames.filter(name => !selectedForAction.has(name)));
-                                    setSelectedForAction(inverted);
-                                }}
-                                className="text-xs text-zinc-500 hover:text-zinc-300 transition"
-                            >
-                                Invert
-                            </button>
-                        </div>
-                    </div>
-
-                    {loading ? (
-                        <div className="text-center py-8 text-zinc-500">Loading...</div>
-                    ) : filteredRemotesWithFlags.length === 0 ? (
-                        <div className="text-center py-8 text-zinc-500">No remotes found</div>
-                    ) : (
-                        <div className="space-y-1 max-h-96 overflow-y-auto pr-1">
-                            {filteredRemotesWithFlags.map(remote => {
-                                const isSelected = selectedForAction.has(remote.name);
-                                return (
-                                    <div
-                                        key={remote.name}
-                                        className={`flex items-center gap-3 p-2 rounded border transition cursor-pointer group ${isSelected
-                                            ? 'border-purple-500/50 bg-purple-900/20'
-                                            : remote.status === 'ignored' ? 'border-zinc-800 bg-zinc-800/40 opacity-70'
-                                                : remote.status === 'protected' ? 'border-amber-900/40 bg-amber-900/10'
-                                                    : 'border-zinc-800 bg-zinc-900/50 hover:bg-zinc-800'
-                                            }`}
-                                        onClick={(e) => {
-                                            if (e.target instanceof HTMLInputElement || (e.target as HTMLElement).closest('button')) return;
-                                            handleManageSelectClick(
-                                                remote.name,
-                                                e,
-                                                filteredRemotesWithFlags.map(r => r.name)
-                                            );
-                                        }}
-                                    >
-                                        <div
-                                            className={`w-4 h-4 rounded border flex items-center justify-center shrink-0 transition-colors ${isSelected ? 'bg-purple-600 border-purple-600' : 'border-zinc-600 bg-zinc-800'
-                                                }`}
-                                            onClick={(e) => {
-                                                e.stopPropagation();
-                                                handleManageSelectClick(remote.name, { shiftKey: false } as any, filteredRemotesWithFlags.map(r => r.name));
-
-                                            }}
-                                        >
-                                            {isSelected && <CheckCircle size={10} className="text-white" />}
-                                        </div>
-
-                                        <div className="flex-1 min-w-0">
-                                            <div className="flex items-center gap-2">
-                                                <span className={`text-xs font-semibold truncate ${isSelected ? 'text-purple-200' : 'text-zinc-300'}`}>{remote.name}</span>
-                                                <span className="text-[10px] px-1.5 py-0.5 bg-zinc-800 border border-zinc-700 rounded text-zinc-500 uppercase tracking-wider">{remote.type}</span>
-                                                {remote.status === 'ignored' && <span className="text-[10px] px-1.5 py-0.5 bg-zinc-800 border border-zinc-700 rounded text-zinc-500">IGNORED</span>}
-                                                {remote.status === 'protected' && <span className="text-[10px] px-1.5 py-0.5 bg-amber-900/20 border border-amber-900/40 text-amber-500 rounded">PROTECTED</span>}
-                                            </div>
-                                        </div>
-                                        <div className="flex gap-1" onClick={e => e.stopPropagation()}>
-                                            <button
-                                                onClick={() => handleEdit(remote)}
-                                                className="p-1.5 text-zinc-500 hover:text-white hover:bg-zinc-700 rounded transition"
-                                                title="Edit Config"
-                                            >
-                                                <Edit2 size={14} />
-                                            </button>
-                                            {remote.status !== 'ignored' && (
-                                                <button
-                                                    onClick={() => handleSetFlag(remote.name, 'ignored')}
-                                                    className="p-1.5 text-zinc-500 hover:text-zinc-300 hover:bg-zinc-700 rounded transition"
-                                                    title="Ignore"
-                                                >
-                                                    <EyeOff size={14} />
-                                                </button>
-                                            )}
-                                            {remote.status !== 'protected' && (
-                                                <button
-                                                    onClick={() => handleSetFlag(remote.name, 'protected')}
-                                                    className="p-1.5 text-zinc-500 hover:text-amber-400 hover:bg-zinc-700 rounded transition"
-                                                    title="Protect"
-                                                >
-                                                    <Shield size={14} />
-                                                </button>
-                                            )}
-                                            {remote.status !== 'normal' && (
-                                                <button
-                                                    onClick={() => handleClearFlag(remote.name)}
-                                                    className="p-1.5 text-zinc-500 hover:text-emerald-400 hover:bg-zinc-700 rounded transition"
-                                                    title="Clear Flag"
-                                                >
-                                                    <X size={14} />
-                                                </button>
-                                            )}
+                                {editConfig.includes("service_account_file") && (
+                                    <div className="p-3 bg-amber-900/10 border border-amber-900/30 rounded">
+                                        <div className="text-[10px] font-bold text-amber-500 uppercase mb-1">Detected Service Account</div>
+                                        <div className="text-[11px] text-amber-200/80 font-mono break-all leading-relaxed">
+                                            {(() => {
+                                                try {
+                                                    const parsed = JSON.parse(editConfig);
+                                                    return parsed.service_account_file || parsed.service_account_file_path || "Not found in valid JSON";
+                                                } catch (e) {
+                                                    return "Invalid JSON - cannot parse service account";
+                                                }
+                                            })()}
                                         </div>
                                     </div>
-                                );
-                            })}
+                                )}
+                            </div>
+
+                            <div className="flex gap-2 mt-6">
+                                <button
+                                    onClick={handleSaveEdit}
+                                    className="flex-1 px-4 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-lg font-medium transition-colors flex items-center justify-center gap-2"
+                                >
+                                    <Save size={16} />
+                                    Save Changes
+                                </button>
+                                <button
+                                    onClick={() => setEditingRemote(null)}
+                                    className="px-4 py-2 bg-zinc-800 hover:bg-zinc-700 text-white rounded-lg transition-colors"
+                                >
+                                    Cancel
+                                </button>
+                            </div>
                         </div>
-                    )}
+                    </div>
+                )}
+            </>
+
+            {/* Test Results */}
+            {testResults.length > 0 && (
+                <Card>
+                    <h4 className="text-sm font-medium text-white mb-3">Test Results</h4>
+                    <div className="space-y-2 max-h-48 overflow-y-auto">
+                        {testResults.map(r => (
+                            <div key={r.name} className={`flex items-center gap-3 p-2 rounded ${r.status === 'ok' ? 'bg-emerald-900/20' : 'bg-red-900/20'}`}>
+                                {r.status === 'ok' ? <CheckCircle size={16} className="text-emerald-400" /> : <XCircle size={16} className="text-red-400" />}
+                                <span className="font-mono text-sm text-white">{r.name}</span>
+                                <span className="text-xs text-zinc-500 truncate flex-1">{r.message}</span>
+                                {r.status === 'error' && (
+                                    <div className="flex gap-1">
+                                        <button
+                                            onClick={() => handleSetFlag(r.name, 'ignored')}
+                                            className="px-2 py-1 bg-zinc-700 hover:bg-zinc-600 rounded text-xs text-white"
+                                        >
+                                            Ignore
+                                        </button>
+                                        <button
+                                            onClick={() => handleDeleteRemote(r.name)}
+                                            className="px-2 py-1 bg-red-600 hover:bg-red-500 rounded text-xs text-white"
+                                        >
+                                            Delete
+                                        </button>
+                                    </div>
+                                )}
+                            </div>
+                        ))}
+                    </div>
                 </Card>
-            </div>
+            )}
 
             {/* Status Message */}
             {

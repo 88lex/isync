@@ -18,11 +18,18 @@ NC='\033[0m'
 
 # Parse arguments
 FORCE_MODE=false
-if [ "${1:-}" = "--force" ] || [ "${1:-}" = "-f" ]; then
-    FORCE_MODE=true
-fi
+DEV_MODE=false
+for arg in "$@"; do
+    case $arg in
+        --force|-f) FORCE_MODE=true ;;
+        --dev|-d)   DEV_MODE=true ;;
+    esac
+done
 
 echo -e "${BLUE}=== ISync Launcher ===${NC}"
+if [ "$DEV_MODE" = true ]; then
+    echo -e "${YELLOW}Developer Mode: AUTO-RELOAD ENABLED${NC}"
+fi
 echo "Working directory: $SCRIPT_DIR"
 
 # Check if already running (by process name)
@@ -175,7 +182,11 @@ trap cleanup INT TERM
 
 # Start backend
 echo -e "${BLUE}Starting backend on port 8000...${NC}"
-uvicorn backend.main:app --host 0.0.0.0 --port 8000 &
+RELOAD_FLAG=""
+if [ "$DEV_MODE" = true ]; then
+    RELOAD_FLAG="--reload"
+fi
+uvicorn backend.main:app --host 0.0.0.0 --port 8000 $RELOAD_FLAG &
 BACKEND_PID=$!
 
 # Wait for backend to be ready

@@ -178,6 +178,12 @@ def list_remotes() -> Dict[str, Any]:
     
     if result["status"] == "ok":
         remotes = [r.strip() for r in result["stdout"].strip().split("\n") if r.strip()]
+        
+        # Filter excluded
+        from backend.store import store
+        excluded = set(store.config.get('excluded_remotes', []))
+        remotes = [r for r in remotes if r.rstrip(':') not in excluded]
+        
         return {"status": "ok", "remotes": remotes, "count": len(remotes)}
     
     return {"status": "error", "message": result.get("stderr", result.get("message")), "remotes": []}

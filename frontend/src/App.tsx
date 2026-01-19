@@ -3,7 +3,7 @@ import { APP_VERSION } from './constants/config';
 import { STORAGE_KEYS } from './constants/storageKeys';
 import {
   LayoutDashboard, Settings, Activity, Database, History, Calendar,
-  Users, FileCode, Server, HardDrive, Wrench, ChevronDown, ChevronRight
+  Users, FileCode, Server, HardDrive, Wrench, ChevronDown, ChevronRight, ShieldAlert, Key // [NEW]
 } from 'lucide-react';
 import Dashboard from './pages/Dashboard';
 import UserManagement from './pages/UserManagement';
@@ -18,10 +18,13 @@ import PrepCheck from './pages/PrepCheck';
 import RemoteSync from './pages/RemoteSync';
 import RcloneManagement from './pages/RcloneManagement';
 import MonitorPage from './pages/MonitorPage';
+import ManageExcluded from './pages/ManageExcluded';
+import KeyManager from './pages/KeyManager'; // [NEW]
+import { IsyncDataProvider } from './contexts/IsyncDataContext';
 import ErrorBoundary from './components/ErrorBoundary';
 import { ConfigStatusIndicator } from './components/ConfigStatusIndicator';
 
-type ViewType = 'dashboard' | 'users' | 'batch' | 'config' | 'sync' | 'history' | 'schedules' | 'servers' | 'drives' | 'prep' | 'remotesync' | 'rclone' | 'monitor';
+type ViewType = 'dashboard' | 'users' | 'batch' | 'config' | 'sync' | 'history' | 'schedules' | 'servers' | 'drives' | 'prep' | 'remotesync' | 'rclone' | 'monitor' | 'excluded' | 'keys';
 
 // Define navigation groups
 interface SubItem {
@@ -68,6 +71,8 @@ const navGroups: NavGroup[] = [
       { id: 'drives', label: 'Drive Manager', icon: HardDrive },
       { id: 'rclone', label: 'Rclone Manager', icon: HardDrive },
       { id: 'remotesync', label: 'Remote Sync', icon: Database },
+      { id: 'keys', label: 'Manage JSONs', icon: Key }, // [NEW]
+      { id: 'excluded', label: 'Manage Excluded', icon: ShieldAlert },
     ]
   },
   {
@@ -103,7 +108,7 @@ function App() {
   const [view, setView] = useState<ViewType>(() => {
     const saved = localStorage.getItem(STORAGE_KEYS.VIEW);
     if (saved === 'manual') return 'users';
-    const validViews: ViewType[] = ['dashboard', 'users', 'batch', 'config', 'sync', 'history', 'schedules', 'servers', 'drives', 'prep', 'remotesync', 'rclone', 'monitor'];
+    const validViews: ViewType[] = ['dashboard', 'users', 'batch', 'config', 'sync', 'history', 'schedules', 'servers', 'drives', 'prep', 'remotesync', 'rclone', 'monitor', 'excluded', 'keys'];
     return validViews.includes(saved as ViewType) ? (saved as ViewType) : 'dashboard';
   });
 
@@ -146,96 +151,100 @@ function App() {
 
   return (
     <ErrorBoundary>
-      <div className="min-h-screen bg-zinc-950 text-zinc-100 flex font-sans antialiased selection:bg-indigo-500/30">
-        {/* Sidebar */}
-        <aside className="w-64 border-r border-zinc-800 bg-zinc-950 p-6 flex flex-col">
-          <div className="flex items-center gap-3 mb-8">
-            <div className="w-8 h-8 rounded-lg bg-gradient-to-tr from-blue-600 to-indigo-600 flex items-center justify-center shadow-lg shadow-indigo-500/20">
-              <Activity className="text-white" size={18} />
+      <IsyncDataProvider>
+        <div className="min-h-screen bg-zinc-950 text-zinc-100 flex font-sans antialiased selection:bg-indigo-500/30">
+          {/* Sidebar */}
+          <aside className="w-64 border-r border-zinc-800 bg-zinc-950 p-6 flex flex-col">
+            <div className="flex items-center gap-3 mb-8">
+              <div className="w-8 h-8 rounded-lg bg-gradient-to-tr from-blue-600 to-indigo-600 flex items-center justify-center shadow-lg shadow-indigo-500/20">
+                <Activity className="text-white" size={18} />
+              </div>
+              <span className="text-lg font-bold tracking-tight">ISync</span>
             </div>
-            <span className="text-lg font-bold tracking-tight">ISync</span>
-          </div>
 
-          <nav className="space-y-4 flex-1 overflow-y-auto">
-            {navGroups.map((group) => {
-              const isCollapsed = collapsedGroups.has(group.label);
-              return (
-                <div key={group.label}>
-                  <button
-                    onClick={() => toggleGroup(group.label)}
-                    className="w-full flex items-center justify-between px-2 py-1 text-xs font-semibold text-zinc-500 uppercase tracking-wider hover:text-zinc-300 transition"
-                  >
-                    {group.label}
-                    {isCollapsed ? <ChevronRight size={14} /> : <ChevronDown size={14} />}
-                  </button>
-                  {!isCollapsed && (
-                    <div className="mt-1 space-y-0.5">
-                      {group.items.map((item) => (
-                        <div key={item.id}>
-                          <button
-                            onClick={() => {
-                              setView(item.id);
-                              if (!item.subItems) setActiveSubSection(null);
-                            }}
-                            className={navClass(view === item.id)}
-                          >
-                            <item.icon size={18} />
-                            {item.label}
-                          </button>
+            <nav className="space-y-4 flex-1 overflow-y-auto">
+              {navGroups.map((group) => {
+                const isCollapsed = collapsedGroups.has(group.label);
+                return (
+                  <div key={group.label}>
+                    <button
+                      onClick={() => toggleGroup(group.label)}
+                      className="w-full flex items-center justify-between px-2 py-1 text-xs font-semibold text-zinc-500 uppercase tracking-wider hover:text-zinc-300 transition"
+                    >
+                      {group.label}
+                      {isCollapsed ? <ChevronRight size={14} /> : <ChevronDown size={14} />}
+                    </button>
+                    {!isCollapsed && (
+                      <div className="mt-1 space-y-0.5">
+                        {group.items.map((item) => (
+                          <div key={item.id}>
+                            <button
+                              onClick={() => {
+                                setView(item.id);
+                                if (!item.subItems) setActiveSubSection(null);
+                              }}
+                              className={navClass(view === item.id)}
+                            >
+                              <item.icon size={18} />
+                              {item.label}
+                            </button>
 
-                          {/* Sub-items */}
-                          {item.subItems && view === item.id && (
-                            <div className="mt-1 space-y-0.5 relative">
-                              <div className="absolute left-6 top-1 bottom-1 w-px bg-zinc-800" />
-                              {item.subItems.map(sub => (
-                                <button
-                                  key={sub.id}
-                                  onClick={() => setActiveSubSection(sub.id)}
-                                  className={subNavClass(activeSubSection === sub.id)}
-                                >
-                                  {sub.label}
-                                </button>
-                              ))}
-                            </div>
-                          )}
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              );
-            })}
-          </nav>
+                            {/* Sub-items */}
+                            {item.subItems && view === item.id && (
+                              <div className="mt-1 space-y-0.5 relative">
+                                <div className="absolute left-6 top-1 bottom-1 w-px bg-zinc-800" />
+                                {item.subItems.map(sub => (
+                                  <button
+                                    key={sub.id}
+                                    onClick={() => setActiveSubSection(sub.id)}
+                                    className={subNavClass(activeSubSection === sub.id)}
+                                  >
+                                    {sub.label}
+                                  </button>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </nav>
 
-          {/* Config Status */}
-          <div className="py-4 border-t border-zinc-800">
-            <ConfigStatusIndicator compact />
-          </div>
+            {/* Config Status */}
+            <div className="py-4 border-t border-zinc-800">
+              <ConfigStatusIndicator compact />
+            </div>
 
-          <div className="pt-2 text-xs text-zinc-600">
-            {APP_VERSION} Modular
-          </div>
-        </aside>
+            <div className="pt-2 text-xs text-zinc-600">
+              {APP_VERSION} Modular
+            </div>
+          </aside>
 
-        {/* Main Content */}
-        <main className="flex-1 overflow-auto bg-black/20">
-          <ErrorBoundary>
-            {view === 'dashboard' && <Dashboard />}
-            {view === 'users' && <UserManagement />}
-            {view === 'batch' && <BatchGenerator activeSection={activeSubSection} />}
-            {view === 'schedules' && <SchedulesPage activeSection={activeSubSection} />}
-            {view === 'history' && <HistoryPage />}
-            {view === 'config' && <ConfigPage />}
-            {view === 'sync' && <SyncBackup />}
-            {view === 'servers' && <RemoteServers />}
-            {view === 'drives' && <DriveManager />}
-            {view === 'prep' && <PrepCheck />}
-            {view === 'remotesync' && <RemoteSync />}
-            {view === 'rclone' && <RcloneManagement />}
-            {view === 'monitor' && <MonitorPage />}
-          </ErrorBoundary>
-        </main>
-      </div>
+          {/* Main Content */}
+          <main className="flex-1 overflow-auto bg-black/20">
+            <ErrorBoundary>
+              {view === 'dashboard' && <Dashboard />}
+              {view === 'users' && <UserManagement />}
+              {view === 'batch' && <BatchGenerator activeSection={activeSubSection} />}
+              {view === 'schedules' && <SchedulesPage activeSection={activeSubSection} />}
+              {view === 'history' && <HistoryPage />}
+              {view === 'config' && <ConfigPage />}
+              {view === 'sync' && <SyncBackup />}
+              {view === 'servers' && <RemoteServers />}
+              {view === 'drives' && <DriveManager />}
+              {view === 'prep' && <PrepCheck />}
+              {view === 'remotesync' && <RemoteSync />}
+              {view === 'rclone' && <RcloneManagement />}
+              {view === 'monitor' && <MonitorPage />}
+              {view === 'keys' && <KeyManager />}
+              {view === 'excluded' && <ManageExcluded />}
+            </ErrorBoundary>
+          </main>
+        </div>
+      </IsyncDataProvider>
     </ErrorBoundary>
   );
 }

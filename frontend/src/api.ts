@@ -51,6 +51,7 @@ export interface Config {
 }
 
 export interface SyncPair {
+    index?: number;
     id?: string;
     source: string;
     dest: string;
@@ -292,6 +293,7 @@ export interface SharedDrive {
     id: string;
     name: string;
     kind: string;
+    hidden?: boolean;
 }
 
 export interface SharedDrivesResponse {
@@ -465,6 +467,7 @@ export interface RandomBatchRequest {
     user_count: number;
     domains: string[];
     dry_run: boolean;
+    random_order: boolean;
 }
 
 export interface RandomBatchResponse {
@@ -1209,6 +1212,7 @@ export interface CreateDrivesResponse {
 export interface DriveInfo {
     name: string;
     id: string;
+    hidden?: boolean;
 }
 
 export interface ListDrivesResponse {
@@ -1302,6 +1306,7 @@ export interface CreateDrivesUnifiedRequest {
     base_name: string;
     suffixes: string[];
     delay_seconds?: number;
+    default_managers?: { email: string; role: string }[];
     // fclone-specific
     gdrive_remote?: string;
     member_template?: string;
@@ -1740,3 +1745,54 @@ export const addDriveToDb = async (driveId: string, name: string, unionGroupId?:
     return res.data;
 };
 
+
+// --- Key Manager ---
+
+export interface KeyInfo {
+    filename: string;
+    path: string;
+    project_id?: string;
+    client_email?: string;
+    private_key_id?: string;
+    client_id?: string;
+    admin_email?: string;
+    valid_json: boolean;
+    error?: string;
+}
+
+export interface KeyInspection {
+    filename: string;
+    roles: string[];
+    permissions: string[];
+    dwd_enabled?: boolean;
+    dwd_verified?: boolean;
+    dwd_scopes?: string[];
+    status: string;
+    details?: string;
+}
+
+export const listJSONKeys = async (): Promise<KeyInfo[]> => {
+    const res = await axios.get(`${API_BASE}/keys`);
+    return res.data;
+};
+
+export const inspectJSONKey = async (filename: string, admin_email?: string): Promise<KeyInspection> => {
+    const res = await axios.post(`${API_BASE}/keys/${filename}/inspect`, { admin_email });
+    return res.data;
+};
+
+export const deleteJSONKey = async (filename: string): Promise<void> => {
+    await axios.delete(`${API_BASE}/keys/${filename}`);
+};
+
+export interface KeyAttributes {
+    filename: string;
+    attributes: Record<string, any>;
+    status: string;
+    details?: string;
+}
+
+export const extractKeyAttributes = async (filename: string): Promise<KeyAttributes> => {
+    const res = await axios.post(`${API_BASE}/keys/${filename}/attributes`);
+    return res.data;
+};

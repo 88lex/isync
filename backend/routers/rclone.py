@@ -42,68 +42,20 @@ class ExpandUnionRequest(BaseModel):
 
 
 # --- Helper Functions ---
-def get_rclone_config_path():
-    """Get the path to rclone.conf."""
-    # Check common locations
-    home = os.path.expanduser("~")
-    paths = [
-        os.path.join(home, ".config", "rclone", "rclone.conf"),
-        os.path.join(home, ".rclone.conf"),
-        "/etc/rclone/rclone.conf"
-    ]
-    for p in paths:
-        if os.path.exists(p):
-            return p
-    # Default to standard location
-    return os.path.join(home, ".config", "rclone", "rclone.conf")
-
-
-def parse_rclone_config(content: str) -> Dict[str, Dict[str, str]]:
-    """Parse rclone.conf content into a dict of remotes."""
-    remotes = {}
-    current_remote = None
-    current_config = {}
-    
-    for line in content.split('\n'):
-        line = line.strip()
-        if not line or line.startswith('#'):
-            continue
-        
-        # Section header [remote_name]
-        match = re.match(r'^\[(.+)\]$', line)
-        if match:
-            if current_remote:
-                remotes[current_remote] = current_config
-            current_remote = match.group(1)
-            current_config = {}
-        elif '=' in line and current_remote:
-            key, value = line.split('=', 1)
-            current_config[key.strip()] = value.strip()
-    
-    if current_remote:
-        remotes[current_remote] = current_config
-    
-    return remotes
-
-
-def write_rclone_config(remotes: Dict[str, Dict[str, str]], config_path: str):
-    """Write remotes dict back to rclone.conf."""
-    lines = []
-    for name, config in remotes.items():
-        lines.append(f"[{name}]")
-        for key, value in config.items():
-            lines.append(f"{key} = {value}")
-        lines.append("")
-    
-    os.makedirs(os.path.dirname(config_path), exist_ok=True)
-    with open(config_path, 'w') as f:
-        f.write('\n'.join(lines))
+from backend.rclone_utils import (
+    get_rclone_config_path,
+    parse_rclone_config,
+    write_rclone_config,
+    add_or_update_remote
+)
 
 
 # --- Local Rclone Endpoints ---
 @router.get("/remotes")
 def list_local_remotes():
     """List all rclone remotes on local machine."""
+    store = get_store()
+    excluded = set(store.get_config().get('excluded_remotes', []))
     config_path = get_rclone_config_path()
     
     if not os.path.exists(config_path):
@@ -117,6 +69,7 @@ def list_local_remotes():
         remotes = [
             {"name": name, "type": config.get("type", "unknown"), "config": config}
             for name, config in remotes_dict.items()
+            if name not in excluded
         ]
         
         return {"remotes": remotes, "config_path": config_path, "exists": True}
@@ -246,7 +199,7 @@ def api_backup_config(req: BackupConfigRequest):
     find_cmd = cmd_prefix + ["rclone config file"]
     path = ""
     try:
-        res = subprocess.run(find_cmd, capture_output=True, text=True, timeout=10)
+        res = subprocess.run(find_cmd, capture_output=True, text=True, timeout=30)
         # Output: "Configuration file is stored at: /path/to/rclone.conf"
         match = re.search(r'is stored at:\s*(.+)', res.stdout)
         if not match:
@@ -255,7 +208,7 @@ def api_backup_config(req: BackupConfigRequest):
                 path = get_rclone_config_path()
             else:
                 check_cmd = cmd_prefix + ["ls ~/.config/rclone/rclone.conf 2>/dev/null || ls ~/.rclone.conf 2>/dev/null"]
-                cres = subprocess.run(check_cmd, capture_output=True, text=True, timeout=5)
+                cres = subprocess.run(check_cmd, capture_output=True, text=True, timeout=20)
                 path = cres.stdout.strip()
         else:
             path = match.group(1).strip()
@@ -287,7 +240,7 @@ def api_backup_config(req: BackupConfigRequest):
         copy_cmd = ["cp", path, backup_path]
         
     try:
-        res = subprocess.run(copy_cmd, capture_output=True, text=True, timeout=10)
+        res = subprocess.run(copy_cmd, capture_output=True, text=True, timeout=30)
         if res.returncode != 0:
             raise HTTPException(500, f"Backup failed: {res.stderr}")
         return {"status": "ok", "message": f"Backup created at {backup_path}", "backup_path": backup_path, "server": target_desc}
@@ -338,7 +291,7 @@ def api_copy_config(req: CopyConfigRequest):
         if server_id == 'local': return get_rclone_config_path()
         try:
              find = cmd_prefix + ["rclone config file"]
-             r = subprocess.run(find, capture_output=True, text=True, timeout=10)
+             r = subprocess.run(find, capture_output=True, text=True, timeout=30)
              m = re.search(r'is stored at:\s*(.+)', r.stdout)
              val = m.group(1).strip() if m else "~/.config/rclone/rclone.conf"
              if val.startswith('~/'): val = f"$HOME/{val[2:]}"
@@ -360,7 +313,7 @@ def api_copy_config(req: CopyConfigRequest):
             else:
                  try:
                      find = cmd_prefix + ["rclone config file"]
-                     r = subprocess.run(find, capture_output=True, text=True, timeout=10)
+                     r = subprocess.run(find, capture_output=True, text=True, timeout=30)
                      m = re.search(r'is stored at:\s*(.+)', r.stdout)
                      if m: target_dir = os.path.dirname(m.group(1).strip())
                      else: target_dir = "~/.config/rclone" # default
@@ -408,7 +361,7 @@ def api_copy_config(req: CopyConfigRequest):
              with open(src_final, 'r') as f: content = f.read()
         else:
              cat = cmd_prefix + [f"cat \\\"{src_final}\\\""]
-             r = subprocess.run(cat, capture_output=True, text=True, timeout=15)
+             r = subprocess.run(cat, capture_output=True, text=True, timeout=30)
              if r.returncode != 0: raise Exception(f"Failed to read source {src_final}")
              content = r.stdout
              
@@ -436,7 +389,7 @@ def api_copy_config(req: CopyConfigRequest):
                        shutil.copy2(os.path.expanduser(dest_final), os.path.expanduser(bkp_path))
                   else:
                        cp = cmd_dest + [f"cp \\\"{dest_final}\\\" \\\"{bkp_path}\\\""]
-                       subprocess.run(cp, check=True, timeout=10)
+                       subprocess.run(cp, check=True, timeout=30)
                   bkp_path_str = bkp_path
 
         # Write Destination
@@ -449,9 +402,9 @@ def api_copy_config(req: CopyConfigRequest):
              with open(final_p, 'w') as f: f.write(content)
         else:
              mkdir = cmd_dest + [f"mkdir -p \\\"{target_dir}\\\""]
-             subprocess.run(mkdir, check=True, timeout=10)
+             subprocess.run(mkdir, check=True, timeout=20)
              write = cmd_dest + [f"cat > \\\"{dest_final}\\\""]
-             r = subprocess.run(write, input=content, capture_output=True, text=True, timeout=20)
+             r = subprocess.run(write, input=content, capture_output=True, text=True, timeout=45)
              if r.returncode != 0: raise Exception(f"Write failed: {r.stderr}")
 
         msg = f"Config copied to {dest_final}"
@@ -479,17 +432,19 @@ def list_remote_server_remotes(server_id: str):
     if server.get('user'):
         target = f"{server['user']}@{target}"
     
-    cmd = ["ssh", "-o", "StrictHostKeyChecking=no", "-o", "ConnectTimeout=10"]
+    cmd = ["ssh", "-o", "StrictHostKeyChecking=no", "-o", "ConnectTimeout=30"]
     if server.get('key_path'):
         cmd.extend(["-i", server['key_path']])
     cmd.extend([target, "cat ~/.config/rclone/rclone.conf 2>/dev/null || cat ~/.rclone.conf 2>/dev/null || echo ''"])
     
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=45)
         remotes_dict = parse_rclone_config(result.stdout)
+        excluded = set(config.get('excluded_remotes', []))
         remotes = [
             {"name": name, "type": cfg.get("type", "unknown"), "config": cfg}
             for name, cfg in remotes_dict.items()
+            if name not in excluded
         ]
         return {"remotes": remotes, "server": server['name']}
     except Exception as e:
@@ -518,7 +473,7 @@ def pull_remote_remotes(req: PullRemoteRequest):
     cmd.extend([target, "cat ~/.config/rclone/rclone.conf 2>/dev/null || cat ~/.rclone.conf 2>/dev/null"])
     
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=45)
         remote_remotes = parse_rclone_config(result.stdout)
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Failed to read remote config: {e}")
@@ -591,7 +546,7 @@ def push_local_remotes(req: PushRemoteRequest):
         for p in possible_paths:
             debug_log.append(f"Checking path: {p}")
             # Try to cat the file. If successful, we use this path.
-            read_res = subprocess.run(ssh_cmd + [target, f"cat {p}"], capture_output=True, text=True, timeout=15)
+            read_res = subprocess.run(ssh_cmd + [target, f"cat {p}"], capture_output=True, text=True, timeout=30)
             
             if read_res.returncode == 0:
                 debug_log.append(f"Found config at {p}")
@@ -607,7 +562,7 @@ def push_local_remotes(req: PushRemoteRequest):
         ts = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
         backup_path = f"{conf_path}.{ts}.bak"
         if found_existing:
-             subprocess.run(ssh_cmd + [target, f"cp {conf_path} {backup_path}"], capture_output=True, timeout=20)
+             subprocess.run(ssh_cmd + [target, f"cp {conf_path} {backup_path}"], capture_output=True, timeout=30)
 
         # 3. MERGE
         pushed_list = []
@@ -688,7 +643,7 @@ def check_rclone_duplicates(req: CheckDuplicatesRequest):
         cmd.extend([target, "cat ~/.config/rclone/rclone.conf 2>/dev/null || cat ~/.rclone.conf 2>/dev/null"])
         
         try:
-            res = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
+            res = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
             content = res.stdout
         except: content = ""
 
@@ -739,7 +694,7 @@ def search_rclone_remotes(req: SearchRemotesRequest):
             cmd.extend([target, "cat ~/.config/rclone/rclone.conf 2>/dev/null || cat ~/.rclone.conf 2>/dev/null || echo ''"])
             
             try:
-                result = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
+                result = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
                 remotes_dict = parse_rclone_config(result.stdout)
             except Exception as e:
                 logger.error(f"Search fetch failed: {e}")
@@ -753,10 +708,12 @@ def search_rclone_remotes(req: SearchRemotesRequest):
     
     # Filter
     query = req.query.lower()
+    store = get_store()
+    excluded = set(store.get_config().get('excluded_remotes', []))
     matches = [
         {"name": name, "type": cfg.get('type', 'unknown')}
         for name, cfg in remotes_dict.items()
-        if query in name.lower()
+        if query in name.lower() and name not in excluded
     ]
     
     return {"matches": matches, "count": len(matches)}
@@ -786,7 +743,7 @@ def test_batch_connections(req: BatchTestRequest):
             rclone_cmd = f"rclone {' '.join(rclone_args)}"
             full_cmd = server_cmd_prefix + [rclone_cmd]
             try:
-                res = subprocess.run(full_cmd, capture_output=True, text=True, timeout=10)
+                res = subprocess.run(full_cmd, capture_output=True, text=True, timeout=20)
                 duration = int((time.time() - start) * 1000)
                 if res.returncode == 0:
                      return {"remote": name, "success": True, "duration_ms": duration}
@@ -798,7 +755,7 @@ def test_batch_connections(req: BatchTestRequest):
             # Local
             cmd = ["rclone"] + rclone_args
             try:
-                res = subprocess.run(cmd, capture_output=True, text=True, timeout=10)
+                res = subprocess.run(cmd, capture_output=True, text=True, timeout=20)
                 duration = int((time.time() - start) * 1000)
                 if res.returncode == 0:
                     return {"remote": name, "success": True, "duration_ms": duration}
@@ -821,7 +778,7 @@ def test_batch_connections(req: BatchTestRequest):
         if server.get('user'):
             target = f"{server['user']}@{target}"
         
-        server_prefix = ["ssh", "-o", "StrictHostKeyChecking=no", "-o", "ConnectTimeout=5"]
+        server_prefix = ["ssh", "-o", "StrictHostKeyChecking=no", "-o", "ConnectTimeout=30"]
         if server.get('key_path'):
             server_prefix.extend(["-i", server['key_path']])
         server_prefix.append(target)
@@ -927,6 +884,10 @@ def list_remotes_with_flags(server_id: Optional[str] = None):
     config = store.get_config()
     ignored = set(config.get('rclone_ignored_remotes', []))
     protected = set(config.get('rclone_protected_remotes', []))
+    excluded = set(config.get('excluded_remotes', []))
+    
+    # Filter excluded
+    remotes = [r for r in remotes if r['name'] not in excluded]
     
     results = []
     for r in remotes:

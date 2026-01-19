@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { Calendar, Plus, Trash2, Pause, Play, Clock, AlertCircle, Server, ChevronDown, ChevronUp, FileCode } from 'lucide-react';
+import { Calendar, Plus, Trash2, Pause, Play, Clock, AlertCircle, Server, ChevronDown, ChevronUp, FileCode, CheckCircle, RefreshCw, X } from 'lucide-react';
 import { LoadingSpinner } from '../components/LoadingSpinner';
 import { PageHeader } from '../components/PageHeader';
 import { EmptyState } from '../components/EmptyState';
@@ -30,6 +30,8 @@ import {
     BatchGroup,
     installCrontab
 } from '../api';
+import { DataTable, ColumnConfig } from '../components/ui/DataTable';
+import { useDataTable } from '../hooks/useDataTable';
 
 // Common cron presets
 const CRON_PRESETS = [
@@ -88,7 +90,6 @@ const SchedulesPage: React.FC<SchedulesPageProps> = ({ activeSection }) => {
     const [cronEntryAnnotation, setCronEntryAnnotation] = useState('');
 
     const loadRemoteData = async () => {
-        // Atomic loading of independent resources
         try {
             const srvs = await fetchSSHServers();
             setServers(srvs || []);
@@ -116,7 +117,6 @@ const SchedulesPage: React.FC<SchedulesPageProps> = ({ activeSection }) => {
         try {
             let config = await getServerCrontab(server.id);
             if (!config.entries) {
-                // Initialize if not exists
                 await initServerCrontab(server.id, server.name);
                 config = await getServerCrontab(server.id);
             }
@@ -166,8 +166,6 @@ const SchedulesPage: React.FC<SchedulesPageProps> = ({ activeSection }) => {
         try {
             const result = await generateCrontabFile(selectedServer.id);
             alert(`✅ Crontab generated!\n${result.entry_count} entries`);
-            // Show preview in console
-            console.log('Generated crontab:', result.content);
         } catch (e: any) {
             alert(`Failed: ${e.message}`);
         } finally {
@@ -224,8 +222,6 @@ const SchedulesPage: React.FC<SchedulesPageProps> = ({ activeSection }) => {
             };
 
             await createSchedule(req);
-
-            // Reset form and refresh
             setFormName('');
             setFormSource('');
             setFormDest('');
@@ -243,7 +239,6 @@ const SchedulesPage: React.FC<SchedulesPageProps> = ({ activeSection }) => {
 
     const handleDeleteSchedule = async (id: string) => {
         if (!confirm('Are you sure you want to delete this schedule?')) return;
-
         try {
             await deleteSchedule(id);
             loadSchedules();
@@ -270,6 +265,127 @@ const SchedulesPage: React.FC<SchedulesPageProps> = ({ activeSection }) => {
         loadRemoteData();
     }, []);
 
+    // Local Schedules DataTable
+    const localColumns: ColumnConfig<Schedule>[] = [
+        {
+            key: 'enabled',
+            header: 'Status',
+            render: (enabled) => (
+                <div className="flex items-center gap-2">
+                    <div className={`w-2 h-2 rounded-full ${enabled ? 'bg-green-500 shadow-[0_0_8px_rgba(34,197,94,0.5)]' : 'bg-zinc-600'}`} />
+                    <span className="text-xs text-zinc-400">{enabled ? 'Active' : 'Paused'}</span>
+                </div>
+            ),
+            sortable: true,
+            filterable: true
+        },
+        { key: 'name', header: 'Schedule Name', sortable: true },
+        {
+            key: 'cron_expression',
+            header: 'Cron',
+            render: (val, item) => (
+                <div className="flex items-center gap-2">
+                    <span className="text-xs px-2 py-0.5 bg-zinc-800 rounded text-zinc-400 font-mono">{val}</span>
+                    {item.dry_run && <span className="text-[10px] px-1.5 py-0.5 bg-yellow-500/10 text-yellow-400 rounded uppercase font-bold">Dry Run</span>}
+                </div>
+            ),
+            sortable: true
+        },
+        {
+            key: 'source',
+            header: 'Source → Dest',
+            render: (_, item) => (
+                <div className="flex items-center gap-2 text-xs">
+                    <span className="text-blue-400 font-mono truncate max-w-[120px]">{item.source}</span>
+                    <span className="text-zinc-500">→</span>
+                    <span className="text-emerald-400 font-mono truncate max-w-[120px]">{item.dest}</span>
+                </div>
+            )
+        },
+        {
+            key: 'next_run',
+            header: 'Next Run',
+            render: (val) => (
+                <div className="flex items-center gap-1.5 text-xs text-zinc-400">
+                    <Clock size={12} />
+                    {formatDate(val)}
+                </div>
+            ),
+            sortable: true
+        },
+        {
+            key: 'last_run',
+            header: 'Last Run',
+            render: (val) => <div className="text-xs text-zinc-500">{formatDate(val)}</div>,
+            sortable: true
+        },
+        {
+            key: 'actions',
+            header: 'Actions',
+            render: (_, item) => (
+                <div className="flex gap-1">
+                    <button
+                        onClick={() => handleToggleSchedule(item.id, item.enabled)}
+                        className={`p-1.5 rounded transition ${item.enabled ? 'text-yellow-400 hover:bg-yellow-400/10' : 'text-green-400 hover:bg-green-400/10'}`}
+                        title={item.enabled ? 'Pause' : 'Resume'}
+                    >
+                        {item.enabled ? <Pause size={14} /> : <Play size={14} />}
+                    </button>
+                    <button
+                        onClick={() => handleDeleteSchedule(item.id)}
+                        className="p-1.5 text-zinc-500 hover:text-red-400 hover:bg-red-400/10 rounded transition"
+                        title="Delete"
+                    >
+                        <Trash2 size={14} />
+                    </button>
+                </div>
+            )
+        }
+    ];
+
+    const localTable = useDataTable({
+        data: schedules,
+        columns: localColumns,
+        persistentKey: 'local_schedules_list'
+    });
+
+    // Remote Crontab DataTable
+    const remoteColumns: ColumnConfig<CrontabEntry>[] = [
+        {
+            key: 'command_type',
+            header: 'Type',
+            render: (val) => (
+                <span className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider ${val === 'batch' ? 'bg-amber-600/20 text-amber-400 border border-amber-600/30' : 'bg-purple-600/20 text-purple-400 border border-purple-600/30'}`}>
+                    {val}
+                </span>
+            ),
+            sortable: true,
+            filterable: true
+        },
+        { key: 'command_name', header: 'Command', sortable: true, render: (val) => <span className="text-white font-mono text-xs">{val}</span> },
+        { key: 'cron_expression', header: 'Cron Expression', sortable: true, render: (val) => <span className="text-cyan-400 font-mono text-xs">{val}</span> },
+        { key: 'annotation', header: 'Annotation', render: (val) => <span className="text-xs text-zinc-500 italic">{val || '-'}</span> },
+        {
+            key: 'actions',
+            header: 'Actions',
+            render: (_, item) => (
+                <button
+                    onClick={() => handleDeleteCronEntry(item.id)}
+                    className="p-1.5 text-zinc-500 hover:text-red-400 hover:bg-red-400/10 rounded transition"
+                    title="Delete"
+                >
+                    <Trash2 size={14} />
+                </button>
+            )
+        }
+    ];
+
+    const remoteTable = useDataTable({
+        data: serverCrontab?.entries || [],
+        columns: remoteColumns,
+        persistentKey: 'remote_crontab_list'
+    });
+
     if (loading) {
         return (
             <div className="p-8 flex items-center justify-center min-h-[400px]">
@@ -288,8 +404,9 @@ const SchedulesPage: React.FC<SchedulesPageProps> = ({ activeSection }) => {
             >
                 <button
                     onClick={loadSchedules}
-                    className="px-4 py-2 bg-zinc-800 hover:bg-zinc-700 text-white rounded-lg transition text-sm"
+                    className="px-4 py-2 bg-zinc-800 hover:bg-zinc-700 text-white rounded-lg transition text-sm flex items-center gap-2"
                 >
+                    <RefreshCw size={14} />
                     Refresh
                 </button>
                 <button
@@ -308,42 +425,38 @@ const SchedulesPage: React.FC<SchedulesPageProps> = ({ activeSection }) => {
                     <div>
                         <div className="text-yellow-400 font-medium">Scheduler Notice</div>
                         <div className="text-yellow-300/80 text-sm">{error}</div>
-                        <div className="text-yellow-300/60 text-xs mt-1">
-                            Install APScheduler: <code className="bg-zinc-800 px-1 rounded">pip install apscheduler</code>
-                        </div>
                     </div>
                 </div>
             )}
 
-            {/* Create Form */}
+            {/* Add Schedule Form */}
             {showForm && (
                 <Card className="mb-6">
                     <h3 className="text-lg font-medium text-white mb-4">Create New Schedule</h3>
-
-                    <div className="grid grid-cols-2 gap-4 mb-4">
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
                         <div>
-                            <label className="block text-sm text-zinc-400 mb-1">Schedule Name *</label>
+                            <label className="block text-xs text-zinc-500 mb-1 uppercase tracking-wider font-bold">Schedule Name *</label>
                             <input
                                 type="text"
                                 value={formName}
                                 onChange={(e) => setFormName(e.target.value)}
                                 placeholder="e.g., Daily Backup"
-                                className="w-full px-3 py-2 bg-zinc-800 border border-zinc-700 rounded-lg text-white placeholder-zinc-500"
+                                className="w-full px-3 py-2 bg-zinc-800 border border-zinc-700 rounded-lg text-white placeholder-zinc-500 focus:outline-none focus:border-blue-500"
                             />
                         </div>
                         <div>
-                            <label className="block text-sm text-zinc-400 mb-1">Cron Expression *</label>
+                            <label className="block text-xs text-zinc-500 mb-1 uppercase tracking-wider font-bold">Cron Expression *</label>
                             <div className="flex gap-2">
                                 <input
                                     type="text"
                                     value={formCron}
                                     onChange={(e) => setFormCron(e.target.value)}
                                     placeholder="0 2 * * *"
-                                    className="flex-1 px-3 py-2 bg-zinc-800 border border-zinc-700 rounded-lg text-white font-mono placeholder-zinc-500"
+                                    className="flex-1 px-3 py-2 bg-zinc-800 border border-zinc-700 rounded-lg text-white font-mono placeholder-zinc-500 focus:outline-none focus:border-blue-500"
                                 />
                                 <select
                                     onChange={(e) => e.target.value && setFormCron(e.target.value)}
-                                    className="px-3 py-2 bg-zinc-800 border border-zinc-700 rounded-lg text-white"
+                                    className="px-3 py-2 bg-zinc-800 border border-zinc-700 rounded-lg text-white text-sm"
                                 >
                                     <option value="">Presets...</option>
                                     {CRON_PRESETS.map((p) => (
@@ -354,38 +467,38 @@ const SchedulesPage: React.FC<SchedulesPageProps> = ({ activeSection }) => {
                         </div>
                     </div>
 
-                    <div className="grid grid-cols-2 gap-4 mb-4">
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
                         <div>
-                            <label className="block text-sm text-zinc-400 mb-1">Source Path *</label>
+                            <label className="block text-xs text-zinc-500 mb-1 uppercase tracking-wider font-bold">Source Path *</label>
                             <input
                                 type="text"
                                 value={formSource}
                                 onChange={(e) => setFormSource(e.target.value)}
                                 placeholder="e.g., gdrive:MyFolder"
-                                className="w-full px-3 py-2 bg-zinc-800 border border-zinc-700 rounded-lg text-white font-mono placeholder-zinc-500"
+                                className="w-full px-3 py-2 bg-zinc-800 border border-zinc-700 rounded-lg text-white font-mono placeholder-zinc-500 focus:outline-none focus:border-blue-500"
                             />
                         </div>
                         <div>
-                            <label className="block text-sm text-zinc-400 mb-1">Destination Path *</label>
+                            <label className="block text-xs text-zinc-500 mb-1 uppercase tracking-wider font-bold">Destination Path *</label>
                             <input
                                 type="text"
                                 value={formDest}
                                 onChange={(e) => setFormDest(e.target.value)}
                                 placeholder="e.g., backup:Archive"
-                                className="w-full px-3 py-2 bg-zinc-800 border border-zinc-700 rounded-lg text-white font-mono placeholder-zinc-500"
+                                className="w-full px-3 py-2 bg-zinc-800 border border-zinc-700 rounded-lg text-white font-mono placeholder-zinc-500 focus:outline-none focus:border-blue-500"
                             />
                         </div>
                     </div>
 
                     <div className="flex items-center gap-4 mb-6">
-                        <label className="flex items-center gap-2 cursor-pointer">
+                        <label className="flex items-center gap-2 cursor-pointer group">
                             <input
                                 type="checkbox"
                                 checked={formDryRun}
                                 onChange={(e) => setFormDryRun(e.target.checked)}
-                                className="w-4 h-4 rounded bg-zinc-800 border-zinc-700"
+                                className="w-4 h-4 rounded bg-zinc-800 border-zinc-700 text-blue-600 focus:ring-blue-500"
                             />
-                            <span className="text-sm text-zinc-300">Dry Run (test without making changes)</span>
+                            <span className="text-xs text-zinc-400 group-hover:text-zinc-300 transition-colors">Dry Run (test without making changes)</span>
                         </label>
                     </div>
 
@@ -393,13 +506,13 @@ const SchedulesPage: React.FC<SchedulesPageProps> = ({ activeSection }) => {
                         <button
                             onClick={handleCreateSchedule}
                             disabled={formSubmitting}
-                            className="px-4 py-2 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white rounded-lg transition"
+                            className="px-6 py-2 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white rounded-lg font-bold transition shadow-lg shadow-blue-900/20"
                         >
-                            {formSubmitting ? 'Creating...' : 'Create Schedule'}
+                            {formSubmitting ? 'Creating...' : 'Create'}
                         </button>
                         <button
                             onClick={() => setShowForm(false)}
-                            className="px-4 py-2 bg-zinc-700 hover:bg-zinc-600 text-white rounded-lg transition"
+                            className="px-6 py-2 bg-zinc-700 hover:bg-zinc-600 text-white rounded-lg transition"
                         >
                             Cancel
                         </button>
@@ -407,267 +520,213 @@ const SchedulesPage: React.FC<SchedulesPageProps> = ({ activeSection }) => {
                 </Card>
             )}
 
-            {/* Empty State */}
-            {schedules.length === 0 && !error && (
-                <EmptyState
-                    icon={Calendar}
-                    title="No scheduled jobs"
-                    description="Create a schedule to automate your sync operations."
-                    action={{
-                        label: 'Create First Schedule',
-                        onClick: () => setShowForm(true)
-                    }}
-                />
-            )}
+            {/* Local Schedules Table */}
+            <div id="local-schedules" className="space-y-4">
+                <div className="flex items-center justify-between px-1">
+                    <h2 className="text-lg font-bold text-white flex items-center gap-2">
+                        <Calendar size={18} className="text-blue-400" />
+                        Local Schedules
+                    </h2>
+                </div>
 
-            {/* Schedules List */}
-            <div id="local-schedules" className="space-y-3">
-                {schedules.map((schedule) => (
-                    <Card
-                        key={schedule.id}
-                        padding="none"
-                        className={schedule.enabled ? '' : 'opacity-60'}
-                    >
-                        <div className="p-4 flex items-center gap-4">
-                            {/* Status Indicator */}
-                            <div className={`w-3 h-3 rounded-full ${schedule.enabled ? 'bg-green-500' : 'bg-zinc-600'}`} />
-
-                            {/* Main Info */}
-                            <div className="flex-1 min-w-0">
-                                <div className="flex items-center gap-2 mb-1">
-                                    <span className="font-medium text-white">{schedule.name}</span>
-                                    <span className="text-xs px-2 py-0.5 bg-zinc-800 rounded text-zinc-400 font-mono">
-                                        {schedule.cron_expression}
-                                    </span>
-                                    {schedule.dry_run && (
-                                        <span className="text-xs px-2 py-0.5 bg-yellow-500/10 text-yellow-400 rounded">
-                                            DRY RUN
-                                        </span>
-                                    )}
-                                </div>
-                                <div className="flex items-center gap-4 text-sm">
-                                    <span className="text-blue-400 font-mono truncate" title={schedule.source}>
-                                        {schedule.source}
-                                    </span>
-                                    <span className="text-zinc-500">→</span>
-                                    <span className="text-emerald-400 font-mono truncate" title={schedule.dest}>
-                                        {schedule.dest}
-                                    </span>
-                                </div>
-                            </div>
-
-                            {/* Timing Info */}
-                            <div className="text-right text-sm w-48">
-                                <div className="flex items-center gap-1 text-zinc-400 justify-end">
-                                    <Clock size={14} />
-                                    <span>Next: {formatDate(schedule.next_run)}</span>
-                                </div>
-                                <div className="text-zinc-500 text-xs">
-                                    Last: {formatDate(schedule.last_run)}
-                                </div>
-                            </div>
-
-                            {/* Actions */}
-                            <div className="flex gap-2">
-                                <button
-                                    onClick={() => handleToggleSchedule(schedule.id, schedule.enabled)}
-                                    className={`p-2 rounded-lg transition ${schedule.enabled
-                                        ? 'bg-zinc-800 hover:bg-zinc-700 text-yellow-400'
-                                        : 'bg-zinc-800 hover:bg-zinc-700 text-green-400'
-                                        }`}
-                                    title={schedule.enabled ? 'Pause' : 'Resume'}
-                                >
-                                    {schedule.enabled ? <Pause size={16} /> : <Play size={16} />}
-                                </button>
-                                <button
-                                    onClick={() => handleDeleteSchedule(schedule.id)}
-                                    className="p-2 bg-zinc-800 hover:bg-red-900/50 text-zinc-400 hover:text-red-400 rounded-lg transition"
-                                    title="Delete"
-                                >
-                                    <Trash2 size={16} />
-                                </button>
-                            </div>
-                        </div>
-                    </Card>
-                ))}
+                <div className="card p-0 overflow-hidden">
+                    <DataTable
+                        data={localTable.data}
+                        columns={localColumns}
+                        handleSort={localTable.handleSort}
+                        SortIcon={localTable.SortIcon}
+                        columnFilters={localTable.columnFilters}
+                        onToggleColumnFilter={localTable.toggleColumnFilter}
+                        onClearColumnFilter={localTable.clearColumnFilter}
+                        getUniqueValues={localTable.getUniqueValues}
+                        selectedItems={localTable.selectedItems}
+                        onToggleItem={localTable.toggleItem}
+                        onSelectAll={localTable.selectAll}
+                        onInvertSelection={localTable.invertSelection}
+                        emptyMessage="No local schedules found."
+                    />
+                </div>
             </div>
 
-            {/* Remote Schedules / Cronjobs Section */}
-            <div id="remote-schedules" className="mt-8">
+            {/* Remote Schedules Section */}
+            <div id="remote-schedules" className="mt-12 space-y-4">
                 <button
                     onClick={() => setShowRemoteSection(!showRemoteSection)}
-                    className="flex items-center gap-2 text-lg font-bold text-cyan-400 mb-4 hover:text-cyan-300 transition"
+                    className="flex items-center gap-2 text-lg font-bold text-cyan-400 hover:text-cyan-300 transition px-1"
                 >
                     {showRemoteSection ? <ChevronUp size={20} /> : <ChevronDown size={20} />}
                     <Server size={18} />
-                    Remote Schedules / Cronjobs
+                    Remote Crontab Manager
                 </button>
 
                 {showRemoteSection && (
                     <div className="space-y-4">
-                        {/* Server Selection */}
-                        <div className="flex gap-2 flex-wrap">
+                        <div className="flex gap-2 flex-wrap min-h-[40px]">
                             {servers.map((srv) => (
                                 <button
                                     key={srv.id}
                                     onClick={() => loadServerCrontab(srv)}
-                                    className={`px-4 py-2 rounded-lg text-sm font-medium transition ${selectedServer?.id === srv.id
-                                        ? 'bg-cyan-600 text-white'
-                                        : 'bg-zinc-800 text-zinc-300 hover:bg-zinc-700'
+                                    className={`px-4 py-2 rounded-lg text-sm font-medium transition flex items-center gap-2 border ${selectedServer?.id === srv.id
+                                        ? 'bg-cyan-600 border-cyan-500 text-white shadow-lg shadow-cyan-900/20'
+                                        : 'bg-zinc-800/50 border-zinc-700 text-zinc-400 hover:border-zinc-500 hover:text-white'
                                         }`}
                                 >
+                                    <Server size={14} />
                                     {srv.name}
                                 </button>
                             ))}
                             {servers.length === 0 && (
-                                <div className="text-zinc-500 italic">No SSH servers configured. Add servers in Settings.</div>
+                                <div className="text-zinc-500 text-sm italic py-2 px-1 flex items-center gap-2">
+                                    <AlertCircle size={14} />
+                                    No SSH servers configured.
+                                </div>
                             )}
                         </div>
 
-                        {/* Selected Server Crontab */}
                         {selectedServer && (
-                            <Card>
-                                <div className="flex items-center justify-between mb-4">
-                                    <h3 className="font-medium text-white">
-                                        Crontab for {selectedServer.name}
-                                    </h3>
-                                    <div className="flex gap-2">
-                                        <button
-                                            onClick={() => setShowCronEntryForm(true)}
-                                            className="flex items-center gap-1 px-3 py-1 bg-cyan-600 hover:bg-cyan-500 text-white rounded text-xs font-medium transition"
-                                        >
-                                            <Plus size={14} /> Add Entry
-                                        </button>
-                                        <button
-                                            onClick={handleGenerateCrontab}
-                                            disabled={remoteCronLoading}
-                                            className="flex items-center gap-1 px-3 py-1 bg-zinc-700 hover:bg-zinc-600 disabled:opacity-50 text-white rounded text-xs font-medium transition"
-                                        >
-                                            <FileCode size={14} /> Generate
-                                        </button>
-                                        <button
-                                            onClick={handleInstallCrontab}
-                                            disabled={remoteCronLoading}
-                                            className="flex items-center gap-1 px-3 py-1 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white rounded text-xs font-medium transition"
-                                        >
-                                            <Server size={14} /> Install
-                                        </button>
-                                    </div>
-                                </div>
-
-                                {remoteCronLoading ? (
-                                    <div className="text-center py-4 text-zinc-500">Loading...</div>
-                                ) : serverCrontab?.entries?.length === 0 ? (
-                                    <div className="text-center py-4 text-zinc-500 italic">No crontab entries yet.</div>
-                                ) : (
-                                    <div className="space-y-2">
-                                        {serverCrontab?.entries?.map((entry) => (
-                                            <div key={entry.id} className={`bg-zinc-800 rounded-lg p-3 ${!entry.enabled ? 'opacity-50' : ''}`}>
-                                                <div className="flex items-center justify-between">
-                                                    <div className="flex items-center gap-3">
-                                                        <span className={`px-2 py-0.5 rounded text-xs font-medium ${entry.command_type === 'batch' ? 'bg-amber-600/20 text-amber-400' : 'bg-purple-600/20 text-purple-400'
-                                                            }`}>
-                                                            {entry.command_type}
-                                                        </span>
-                                                        <span className="text-white font-mono text-sm">{entry.command_name}</span>
-                                                    </div>
-                                                    <div className="flex items-center gap-2">
-                                                        <span className="text-cyan-400 font-mono text-sm">{entry.cron_expression}</span>
-                                                        <button
-                                                            onClick={() => handleDeleteCronEntry(entry.id)}
-                                                            className="p-1 text-zinc-500 hover:text-red-400 transition"
-                                                        >
-                                                            <Trash2 size={14} />
-                                                        </button>
-                                                    </div>
-                                                </div>
-                                                {entry.annotation && (
-                                                    <div className="text-xs text-zinc-500 mt-1">{entry.annotation}</div>
-                                                )}
-                                            </div>
-                                        ))}
-                                    </div>
-                                )}
-
-                                {/* Add Entry Form */}
-                                {showCronEntryForm && (
-                                    <div className="mt-4 p-4 bg-zinc-800/50 rounded-lg border border-zinc-700">
-                                        <h4 className="text-sm font-medium text-white mb-3">Add Crontab Entry</h4>
-                                        <div className="grid grid-cols-2 gap-4 mb-3">
-                                            <div>
-                                                <label className="block text-xs text-zinc-500 mb-1">Type</label>
-                                                <select
-                                                    value={cronEntryType}
-                                                    onChange={(e) => setCronEntryType(e.target.value as 'batch' | 'group')}
-                                                    className="w-full bg-zinc-800 border border-zinc-700 rounded px-3 py-2 text-white text-sm"
-                                                >
-                                                    <option value="batch">Batch</option>
-                                                    <option value="group">Group</option>
-                                                </select>
-                                            </div>
-                                            <div>
-                                                <label className="block text-xs text-zinc-500 mb-1">Command</label>
-                                                <select
-                                                    value={cronEntryCommand}
-                                                    onChange={(e) => setCronEntryCommand(e.target.value)}
-                                                    className="w-full bg-zinc-800 border border-zinc-700 rounded px-3 py-2 text-white text-sm"
-                                                >
-                                                    <option value="">Select...</option>
-                                                    {cronEntryType === 'batch'
-                                                        ? savedBatches.map((b) => <option key={b.name} value={b.name}>{b.name}</option>)
-                                                        : batchGroups.map((g) => <option key={g.id} value={`group_${g.name.replace(/\s+/g, '_').toLowerCase()}.sh`}>{g.name}</option>)
-                                                    }
-                                                </select>
-                                            </div>
-                                        </div>
-                                        <div className="grid grid-cols-2 gap-4 mb-3">
-                                            <div>
-                                                <label className="block text-xs text-zinc-500 mb-1">Cron Expression</label>
-                                                <div className="flex gap-2">
-                                                    <input
-                                                        type="text"
-                                                        value={cronEntryCron}
-                                                        onChange={(e) => setCronEntryCron(e.target.value)}
-                                                        className="flex-1 bg-zinc-800 border border-zinc-700 rounded px-3 py-2 text-white font-mono text-sm"
-                                                    />
-                                                    <select
-                                                        onChange={(e) => e.target.value && setCronEntryCron(e.target.value)}
-                                                        className="bg-zinc-800 border border-zinc-700 rounded px-2 py-2 text-sm text-white"
-                                                    >
-                                                        <option value="">Preset...</option>
-                                                        {cronPresets.map((p) => <option key={p.expression} value={p.expression}>{p.name}</option>)}
-                                                    </select>
-                                                </div>
-                                            </div>
-                                            <div>
-                                                <label className="block text-xs text-zinc-500 mb-1">Annotation (optional)</label>
-                                                <input
-                                                    type="text"
-                                                    value={cronEntryAnnotation}
-                                                    onChange={(e) => setCronEntryAnnotation(e.target.value)}
-                                                    placeholder="e.g., Daily backup"
-                                                    className="w-full bg-zinc-800 border border-zinc-700 rounded px-3 py-2 text-white text-sm"
-                                                />
-                                            </div>
+                            <div className="space-y-4">
+                                <Card>
+                                    <div className="flex items-center justify-between mb-6">
+                                        <div className="flex flex-col">
+                                            <h3 className="font-bold text-white text-lg">
+                                                Crontab: {selectedServer.name}
+                                            </h3>
+                                            <p className="text-xs text-zinc-500 font-mono">{selectedServer.host}</p>
                                         </div>
                                         <div className="flex gap-2">
                                             <button
-                                                onClick={handleAddCronEntry}
-                                                disabled={!cronEntryCommand || !cronEntryCron}
-                                                className="px-4 py-2 bg-cyan-600 hover:bg-cyan-500 disabled:opacity-50 text-white rounded text-sm font-medium transition"
+                                                onClick={() => setShowCronEntryForm(true)}
+                                                className="flex items-center gap-2 px-4 py-2 bg-cyan-600 hover:bg-cyan-500 text-white rounded-lg text-xs font-bold transition shadow-lg shadow-cyan-900/20"
                                             >
-                                                Add Entry
+                                                <Plus size={14} /> Add Entry
                                             </button>
                                             <button
-                                                onClick={() => setShowCronEntryForm(false)}
-                                                className="px-4 py-2 bg-zinc-700 hover:bg-zinc-600 text-white rounded text-sm transition"
+                                                onClick={handleGenerateCrontab}
+                                                disabled={remoteCronLoading}
+                                                className="flex items-center gap-2 px-4 py-2 bg-zinc-800 hover:bg-zinc-700 disabled:opacity-50 text-white rounded-lg text-xs font-medium transition"
                                             >
-                                                Cancel
+                                                <FileCode size={14} /> Preview
+                                            </button>
+                                            <button
+                                                onClick={handleInstallCrontab}
+                                                disabled={remoteCronLoading}
+                                                className="flex items-center gap-2 px-4 py-2 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white rounded-lg text-xs font-bold transition shadow-lg shadow-emerald-900/20"
+                                            >
+                                                <CheckCircle size={14} /> Install to Server
                                             </button>
                                         </div>
                                     </div>
-                                )}
-                            </Card>
+
+                                    {remoteCronLoading ? (
+                                        <div className="text-center py-12">
+                                            <LoadingSpinner size="md" message="Refreshing crontab..." />
+                                        </div>
+                                    ) : (
+                                        <div className="overflow-hidden rounded-xl border border-zinc-800 bg-zinc-950/20">
+                                            <DataTable
+                                                data={remoteTable.data}
+                                                columns={remoteColumns}
+                                                handleSort={remoteTable.handleSort}
+                                                SortIcon={remoteTable.SortIcon}
+                                                columnFilters={remoteTable.columnFilters}
+                                                onToggleColumnFilter={remoteTable.toggleColumnFilter}
+                                                onClearColumnFilter={remoteTable.clearColumnFilter}
+                                                getUniqueValues={remoteTable.getUniqueValues}
+                                                selectedItems={remoteTable.selectedItems}
+                                                onToggleItem={remoteTable.toggleItem}
+                                                onSelectAll={remoteTable.selectAll}
+                                                onInvertSelection={remoteTable.invertSelection}
+                                                emptyMessage="No crontab entries for this server."
+                                            />
+                                        </div>
+                                    )}
+
+                                    {/* Add Entry Modal/Form */}
+                                    {showCronEntryForm && (
+                                        <div className="mt-8 p-6 bg-zinc-900/50 rounded-xl border border-zinc-700 shadow-xl">
+                                            <div className="flex items-center justify-between mb-4">
+                                                <h4 className="text-sm font-bold text-white uppercase tracking-wider">New Crontab Entry</h4>
+                                                <button onClick={() => setShowCronEntryForm(false)} className="text-zinc-500 hover:text-white transition">
+                                                    <X size={18} />
+                                                </button>
+                                            </div>
+                                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-4">
+                                                <div>
+                                                    <label className="block text-xs text-zinc-500 mb-1 uppercase tracking-wider font-bold">Execution Type</label>
+                                                    <select
+                                                        value={cronEntryType}
+                                                        onChange={(e) => setCronEntryType(e.target.value as 'batch' | 'group')}
+                                                        className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-cyan-500"
+                                                    >
+                                                        <option value="batch">Single Batch File</option>
+                                                        <option value="group">Batch Group (Parallel)</option>
+                                                    </select>
+                                                </div>
+                                                <div>
+                                                    <label className="block text-xs text-zinc-500 mb-1 uppercase tracking-wider font-bold">Select Target</label>
+                                                    <select
+                                                        value={cronEntryCommand}
+                                                        onChange={(e) => setCronEntryCommand(e.target.value)}
+                                                        className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-cyan-500"
+                                                    >
+                                                        <option value="">Choose a command...</option>
+                                                        {cronEntryType === 'batch'
+                                                            ? savedBatches.map((b) => <option key={b.name} value={b.name}>{b.name}</option>)
+                                                            : batchGroups.map((g) => <option key={g.id} value={`group_${g.name.replace(/\s+/g, '_').toLowerCase()}.sh`}>{g.name}</option>)
+                                                        }
+                                                    </select>
+                                                </div>
+                                            </div>
+                                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
+                                                <div>
+                                                    <label className="block text-xs text-zinc-500 mb-1 uppercase tracking-wider font-bold">Cron Schedule</label>
+                                                    <div className="flex gap-2">
+                                                        <input
+                                                            type="text"
+                                                            value={cronEntryCron}
+                                                            onChange={(e) => setCronEntryCron(e.target.value)}
+                                                            className="flex-1 bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-white font-mono text-sm focus:outline-none focus:border-cyan-500"
+                                                            placeholder="* * * * *"
+                                                        />
+                                                        <select
+                                                            onChange={(e) => e.target.value && setCronEntryCron(e.target.value)}
+                                                            className="bg-zinc-800 border border-zinc-700 rounded-lg px-2 py-2 text-xs text-white"
+                                                        >
+                                                            <option value="">Quick Presets...</option>
+                                                            {cronPresets.map((p) => <option key={p.expression} value={p.expression}>{p.name}</option>)}
+                                                        </select>
+                                                    </div>
+                                                </div>
+                                                <div>
+                                                    <label className="block text-xs text-zinc-500 mb-1 uppercase tracking-wider font-bold">Annotation</label>
+                                                    <input
+                                                        type="text"
+                                                        value={cronEntryAnnotation}
+                                                        onChange={(e) => setCronEntryAnnotation(e.target.value)}
+                                                        placeholder="e.g., Nightly sync of marketing data"
+                                                        className="w-full bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:border-cyan-500"
+                                                    />
+                                                </div>
+                                            </div>
+                                            <div className="flex gap-2">
+                                                <button
+                                                    onClick={handleAddCronEntry}
+                                                    disabled={!cronEntryCommand || !cronEntryCron}
+                                                    className="px-6 py-2 bg-cyan-600 hover:bg-cyan-500 disabled:opacity-50 text-white rounded-lg text-sm font-bold transition shadow-lg shadow-cyan-900/20"
+                                                >
+                                                    Add Entry
+                                                </button>
+                                                <button
+                                                    onClick={() => setShowCronEntryForm(false)}
+                                                    className="px-6 py-2 bg-zinc-700 hover:bg-zinc-600 text-white rounded-lg text-sm transition"
+                                                >
+                                                    Cancel
+                                                </button>
+                                            </div>
+                                        </div>
+                                    )}
+                                </Card>
+                            </div>
                         )}
                     </div>
                 )}

@@ -9,4 +9,4 @@ export { Select } from './Select';
 export { SelectionControls } from './SelectionControls';
 
 export { DataTable } from './DataTable';
-export type { Column } from './DataTable';
+export type { ColumnConfig } from './DataTable';

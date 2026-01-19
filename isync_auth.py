@@ -280,10 +280,15 @@ class ISyncAuthManager:
     def list_users(self, domain_name, max_results=500, return_detailed=False):
         """Lists users in the domain."""
         try:
-            results = self.service.users().list(domain=domain_name, maxResults=max_results, orderBy='email').execute()
+            results = self.service.users().list(domain=domain_name, maxResults=max_results, orderBy='email', projection='full').execute()
             users = results.get('users', [])
+            
             if return_detailed:
-                return [{'email': u['primaryEmail'], 'suspended': u.get('suspended', False), 'suspensionReason': u.get('suspensionReason', '')} for u in users]
+                return [{'email': u['primaryEmail'], 
+                         'suspended': u.get('suspended', False), 
+                         'suspensionReason': u.get('suspensionReason', ''), 
+                         'isAdmin': u.get('isAdmin', False) or u.get('isDelegatedAdmin', False), 
+                         'isDelegatedAdmin': u.get('isDelegatedAdmin', False)} for u in users]
             return [u['primaryEmail'] for u in users]
         except HttpError as e:
             logging.error(f"[ISyncAuth] Failed to list users: {e}")

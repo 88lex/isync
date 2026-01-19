@@ -195,7 +195,8 @@ async def api_create_drives_unified(request: CreateDrivesUnifiedRequest):
         gdrive_remote=request.gdrive_remote,
         member_template=request.member_template,
         service_account_file=request.service_account_file,
-        impersonate_email=request.impersonate_email
+        impersonate_email=request.impersonate_email,
+        default_managers=request.default_managers
     )
     return result
 

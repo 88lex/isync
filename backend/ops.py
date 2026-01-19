@@ -457,12 +457,33 @@ def list_domain_users(domain_name: str):
             except Exception:
                 pass # Fail verification silently or log?
 
-        # Annotate users
+        # Annotate users and check for admins to auto-protect
         annotated = []
+        protected_list = cfg.get('protected_users', [])
+        protected_set = set(u.lower() for u in protected_list)
+        config_changed = False
+        admin_count = 0
+
         for u in users:
             email = u['email']
             u['in_group'] = email.lower() in member_set
+            
+            # Auto-protect Admins
+            if u.get('isAdmin'):
+                admin_count += 1
+                if email.lower() not in protected_set:
+                    protected_list.append(email)
+                    protected_set.add(email.lower())
+                    config_changed = True
+                    logger.info(f"Auto-protecting Admin user: {email}")
+
             annotated.append(u)
+        
+        logger.info(f"Domain {domain_name}: Found {admin_count} admins out of {len(users)} users.")
+            
+        if config_changed:
+            cfg['protected_users'] = protected_list
+            store.save_config(cfg)
             
         return {
             "domain": domain_name, 
@@ -483,6 +504,8 @@ def process_bulk_ops(req: BulkOpRequest):
     results = {}
     
     if req.action == 'verify':
+        # engine.batch_check_suspension needs to be updated too if we want isAdmin there, 
+        # but list_domain_users already identifies them.
         results = engine.batch_check_suspension(req.domain, req.users)
         
     elif req.action == 'unsuspend':

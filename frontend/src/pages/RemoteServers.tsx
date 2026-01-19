@@ -14,6 +14,7 @@ import {
 } from '../api';
 import { PageHeader } from '../components/PageHeader';
 import { Card } from '../components/Card';
+import { useDataTable } from '../hooks/useDataTable';
 
 const RemoteServers = () => {
     const [servers, setServers] = useState<SSHServer[]>([]);
@@ -34,8 +35,30 @@ const RemoteServers = () => {
         sync_keys: false
     });
 
+    const {
+        data: filteredServers,
+        searchTerm: filterQuery,
+        setSearchTerm: setFilterQuery,
+        selectedItems: selectedServers,
+        toggleItem: handleServerClick,
+        selectAll: selectAllServers,
+        invertSelection
+    } = useDataTable({
+        data: servers,
+        columns: [
+            { key: 'name', header: 'Name', sortable: true },
+            { key: 'host', header: 'Host', sortable: true }
+        ],
+        persistentKey: 'remote_servers_list',
+        filterFn: (s, search) => (
+            s.name.toLowerCase().includes(search.toLowerCase()) ||
+            s.alias?.toLowerCase().includes(search.toLowerCase()) ||
+            s.host.toLowerCase().includes(search.toLowerCase()) ||
+            s.user?.toLowerCase().includes(search.toLowerCase())
+        )
+    });
+
     // Orchestrator state
-    const [selectedServers, setSelectedServers] = useState<Set<string>>(new Set());
     const [expandedServer, setExpandedServer] = useState<string | null>(null);
     const [serverVerifications, setServerVerifications] = useState<Record<string, FullVerification>>({});
     const [showCronModal, setShowCronModal] = useState(false);
@@ -66,15 +89,7 @@ const RemoteServers = () => {
         is_default: false
     });
 
-    const [filterQuery, setFilterQuery] = useState('');
     const [verificationFilters, setVerificationFilters] = useState<Record<string, string>>({});
-    const filteredServers = servers.filter(s =>
-        filterQuery === '' ||
-        s.name.toLowerCase().includes(filterQuery.toLowerCase()) ||
-        s.alias?.toLowerCase().includes(filterQuery.toLowerCase()) ||
-        s.host.toLowerCase().includes(filterQuery.toLowerCase()) ||
-        s.user?.toLowerCase().includes(filterQuery.toLowerCase())
-    );
 
     useEffect(() => {
         loadServers();
@@ -295,80 +310,6 @@ const RemoteServers = () => {
         }
     };
 
-    const [lastClickedServer, setLastClickedServer] = useState<string | null>(null);
-
-    const toggleServerSelection = (serverId: string, multi?: boolean, rangeStart?: string, rangeEnd?: string, allItems?: string[]) => {
-        let newSet = new Set(selectedServers);
-
-        if (rangeStart && rangeEnd && allItems) {
-            const startIdx = allItems.indexOf(rangeStart);
-            const endIdx = allItems.indexOf(rangeEnd);
-            if (startIdx !== -1 && endIdx !== -1) {
-                const s = Math.min(startIdx, endIdx);
-                const e = Math.max(startIdx, endIdx);
-                for (let i = s; i <= e; i++) {
-                    newSet.add(allItems[i]);
-                }
-            }
-        } else if (multi) {
-            if (newSet.has(serverId)) newSet.delete(serverId);
-            else newSet.add(serverId);
-        } else {
-            if (newSet.has(serverId)) newSet.delete(serverId);
-            else newSet.add(serverId);
-        }
-        setSelectedServers(newSet);
-    };
-
-    const handleServerClick = (serverId: string, e: React.MouseEvent, visibleServers: string[]) => {
-        if (e.shiftKey && lastClickedServer) {
-            // Shift-Click logic
-            const startIdx = visibleServers.indexOf(lastClickedServer);
-            const endIdx = visibleServers.indexOf(serverId);
-            if (startIdx !== -1 && endIdx !== -1) {
-                const min = Math.min(startIdx, endIdx);
-                const max = Math.max(startIdx, endIdx);
-                const newSet = new Set(selectedServers);
-
-                // Add all in range that are currently visible
-                for (let i = min; i <= max; i++) {
-                    newSet.add(visibleServers[i]);
-                }
-                setSelectedServers(newSet);
-            }
-        } else {
-            // Normal click
-            const newSet = new Set(selectedServers);
-            if (newSet.has(serverId)) newSet.delete(serverId);
-            else newSet.add(serverId);
-            setSelectedServers(newSet);
-            setLastClickedServer(serverId);
-        }
-    };
-
-    const selectAllServers = () => {
-        const visibleIds = filteredServers.map(s => s.id);
-        const allVisibleSelected = visibleIds.every(id => selectedServers.has(id));
-
-        if (allVisibleSelected) {
-            // Deselect all visible
-            const newSet = new Set(selectedServers);
-            visibleIds.forEach(id => newSet.delete(id));
-            setSelectedServers(newSet);
-        } else {
-            // Select all visible
-            const newSet = new Set(selectedServers);
-            visibleIds.forEach(id => newSet.add(id));
-            setSelectedServers(newSet);
-        }
-    };
-
-    const invertSelection = () => {
-        const visibleIds = filteredServers.map(s => s.id);
-        const inverted = new Set(visibleIds.filter(id => !selectedServers.has(id)));
-        setSelectedServers(inverted);
-    };
-
     const openCronModal = async (serverId: string) => {
         setCronServerId(serverId);
         setCronLoading(true);
@@ -427,12 +368,8 @@ const RemoteServers = () => {
     };
 
     const previewPush = async () => {
-        const serverIds = Array.from(selectedServers);
-        if (serverIds.length === 0) {
-            alert('Select at least one server');
-            return;
-        }
         try {
+            const serverIds = Array.from(selectedServers).map(String);
             const result = await getFilePushPreview(serverIds, pushFileTypes);
             setPushPreviews(result.previews);
         } catch (e: any) {
@@ -441,7 +378,7 @@ const RemoteServers = () => {
     };
 
     const executePush = async (dryRun: boolean = false) => {
-        const serverIds = Array.from(selectedServers);
+        const serverIds = Array.from(selectedServers).map(String);
         if (serverIds.length === 0) return;
 
         setPushing(true);
@@ -466,7 +403,7 @@ const RemoteServers = () => {
     };
 
     const executePull = async () => {
-        const serverIds = Array.from(selectedServers);
+        const serverIds = Array.from(selectedServers).map(String);
         if (serverIds.length === 0) {
             alert('Select at least one server');
             return;
@@ -523,20 +460,15 @@ const RemoteServers = () => {
                         <>
                             <button
                                 onClick={selectAllServers}
-                                className="flex items-center gap-2 text-sm text-zinc-400 hover:text-white transition"
+                                className={`text-sm transition ${selectedServers.size === filteredServers.length && filteredServers.length > 0 ? 'text-cyan-400' : 'text-zinc-400 hover:text-white'}`}
                             >
-                                <div className={`w-4 h-4 rounded border flex items-center justify-center transition-colors ${filteredServers.length > 0 && filteredServers.every(s => selectedServers.has(s.id))
-                                    ? 'bg-cyan-600 border-cyan-600' : 'border-zinc-600 bg-zinc-800'
-                                    }`}>
-                                    {filteredServers.length > 0 && filteredServers.every(s => selectedServers.has(s.id)) && <CheckCircle size={10} className="text-white" />}
-                                </div>
-                                Select All ({selectedServers.size})
+                                {selectedServers.size === filteredServers.length && filteredServers.length > 0 ? 'Deselect All' : 'Select All'}
                             </button>
                             <button
                                 onClick={invertSelection}
                                 className="text-sm text-zinc-400 hover:text-white transition"
                             >
-                                Invert
+                                Invert Selection
                             </button>
                             {selectedServers.size > 0 && (
                                 <>
@@ -597,7 +529,7 @@ const RemoteServers = () => {
                                     key={server.id}
                                     onClick={(e) => {
                                         if ((e.target as HTMLElement).closest('button')) return;
-                                        handleServerClick(server.id, e, filteredServers.map(s => s.id));
+                                        handleServerClick(server.id, e);
                                     }}
                                     className={`bg-zinc-900 border rounded-xl p-4 transition-all cursor-pointer ${isSelected ? 'border-cyan-500/50 bg-cyan-900/10' : 'border-zinc-800 hover:border-zinc-700'}`}
                                 >
@@ -608,7 +540,7 @@ const RemoteServers = () => {
                                                 className={`w-5 h-5 mt-1 rounded border flex items-center justify-center shrink-0 transition-colors ${isSelected ? 'bg-cyan-600 border-cyan-600' : 'border-zinc-600 bg-zinc-800'}`}
                                                 onClick={(e) => {
                                                     e.stopPropagation();
-                                                    toggleServerSelection(server.id);
+                                                    handleServerClick(server.id, e);
                                                 }}
                                             >
                                                 {isSelected && <CheckCircle size={12} className="text-white" />}

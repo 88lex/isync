@@ -92,7 +92,10 @@ class ConfigStore:
             'step_check': False,
             'domains': [],
             'ssh_servers': [],
-            'known_emails': []  # List of known user/group emails
+            'known_emails': [],  # List of known user/group emails
+            'always_included_managers': [], # List of {email: string, role: string}
+            'excluded_drives': [], # List of excluded shared drive names/IDs
+            'excluded_remotes': [] # List of excluded rclone remote names
         }
 
     def load_all(self):

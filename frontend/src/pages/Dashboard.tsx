@@ -63,6 +63,7 @@ const Dashboard = () => {
   }, []);
 
   const [selectedIndices, setSelectedIndices] = useState<Set<number>>(new Set());
+  const [lastClickedIdx, setLastClickedIdx] = useState<number | null>(null);
   const [showConfirm, setShowConfirm] = useState(false);
   const [previews, setPreviews] = useState<any[]>([]);
   const [loadingPreview, setLoadingPreview] = useState(false);
@@ -95,10 +96,19 @@ const Dashboard = () => {
     await startJob({ pairs: selectedPairs, dry_run: false });
   };
 
-  const toggleSelection = (idx: number) => {
+  const toggleSelection = (idx: number, shiftKey: boolean = false) => {
     const newSet = new Set(selectedIndices);
-    if (newSet.has(idx)) newSet.delete(idx);
-    else newSet.add(idx);
+    if (shiftKey && lastClickedIdx !== null) {
+      const start = Math.min(lastClickedIdx, idx);
+      const end = Math.max(lastClickedIdx, idx);
+      for (let i = start; i <= end; i++) {
+        newSet.add(i);
+      }
+    } else {
+      if (newSet.has(idx)) newSet.delete(idx);
+      else newSet.add(idx);
+      setLastClickedIdx(idx);
+    }
     setSelectedIndices(newSet);
     localStorage.setItem(STORAGE_KEYS.SELECTED_INDICES, JSON.stringify(Array.from(newSet)));
   };
@@ -328,7 +338,7 @@ const Dashboard = () => {
             {pairs.map((pair, idx) => (
               <div
                 key={idx}
-                onClick={() => toggleSelection(idx)}
+                onClick={(e) => toggleSelection(idx, e.shiftKey)}
                 className={`p-2 rounded border transition cursor-pointer ${selectedIndices.has(idx) ? 'bg-zinc-800 border-blue-500/50' : 'bg-zinc-950 border-zinc-800 hover:border-zinc-700 opacity-70 hover:opacity-100'}`}
               >
                 <div className="flex items-center gap-2 mb-1">

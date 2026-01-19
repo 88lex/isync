@@ -5,7 +5,7 @@ Uses service account with domain-wide delegation for authentication.
 """
 import json
 import logging
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Set
 from pathlib import Path
 
 logger = logging.getLogger("uvicorn")
@@ -181,7 +181,8 @@ async def list_shared_drives_api(
     impersonate_email: str,
     prefix: Optional[str] = None,
     page_size: int = 100,
-    limit: Optional[int] = None
+    limit: Optional[int] = None,
+    excluded_items: Optional[Set[str]] = None
 ) -> Dict[str, Any]:
     """
     List Shared Drives using Google Drive API.
@@ -192,6 +193,7 @@ async def list_shared_drives_api(
         prefix: Optional prefix to filter drives
         page_size: Number of results per page
         limit: Maximum number of drives to return
+        excluded_items: Set of names or IDs to exclude
     
     Returns:
         Dict with list of drives
@@ -206,15 +208,21 @@ async def list_shared_drives_api(
             result = service.drives().list(
                 pageSize=page_size,
                 pageToken=page_token,
-                fields="nextPageToken, drives(id, name, kind)"
+                fields="nextPageToken, drives(id, name, kind, hidden)"
             ).execute()
             
             for drive in result.get('drives', []):
                 if prefix is None or drive['name'].startswith(prefix):
+                    # Exclusion check
+                    if excluded_items:
+                        if drive['id'] in excluded_items or drive['name'] in excluded_items:
+                            continue
+
                     drives.append({
                         "id": drive['id'],
                         "name": drive['name'],
-                        "kind": drive.get('kind', 'drive#drive')
+                        "kind": drive.get('kind', 'drive#drive'),
+                        "hidden": drive.get('hidden', False)
                     })
                     if limit and len(drives) >= limit:
                         page_token = None

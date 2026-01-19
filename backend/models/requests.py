@@ -167,6 +167,8 @@ class CreateDrivesUnifiedRequest(BaseModel):
     # google_api-specific
     service_account_file: Optional[str] = None
     impersonate_email: Optional[str] = None
+    # New: allow passing managers during creation
+    default_managers: Optional[List[Dict[str, str]]] = None # [{"email": "...", "role": "..."}]
 
 
 class ListDrivesUnifiedRequest(BaseModel):

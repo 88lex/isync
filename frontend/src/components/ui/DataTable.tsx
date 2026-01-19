@@ -1,258 +1,225 @@
-import React, { useState, useCallback, useRef } from 'react';
-import { ChevronUp, ChevronDown, ChevronRight } from 'lucide-react';
+import React, { useState } from 'react';
+import { Check, Columns, ChevronDown } from 'lucide-react';
+import { ColumnFilter } from './ColumnFilter';
 
-export interface Column<T> {
+export interface ColumnConfig<T> {
     key: string;
     header: string;
-    width?: string;
     sortable?: boolean;
-    render?: (row: T, index: number) => React.ReactNode;
-    align?: 'left' | 'center' | 'right';
+    filterable?: boolean;
+    render?: (value: any, item: T) => React.ReactNode;
+    getFilterValue?: (item: T) => string;
+    width?: string;
+    headerClassName?: string;
+    cellClassName?: string;
 }
 
 interface DataTableProps<T> {
     data: T[];
-    columns: Column<T>[];
-    keyField: keyof T;
-    selectable?: boolean;
-    selectedKeys?: Set<string | number>;
-    onSelectionChange?: (keys: Set<string | number>) => void;
-    expandable?: boolean;
-    renderExpanded?: (row: T) => React.ReactNode;
-    defaultSortColumn?: string;
-    defaultSortDirection?: 'asc' | 'desc';
+    columns: ColumnConfig<T>[];
+    selectedItems?: Set<string | number>;
+    onToggleItem?: (id: string | number, e: React.MouseEvent) => void;
+    onSelectAll?: () => void;
+    onInvertSelection?: () => void;
+    handleSort: (key: string) => void;
+    SortIcon: React.FC<{ column: string }>;
+    columnFilters: Record<string, Set<string>>;
+    onToggleColumnFilter: (column: string, value: string) => void;
+    onClearColumnFilter: (column: string) => void;
+    getUniqueValues: (column: string) => string[];
+    rowIdKey?: string;
+    isLoading?: boolean;
     emptyMessage?: string;
-    compact?: boolean;
+    renderExpansion?: (item: T) => React.ReactNode;
     className?: string;
+    compact?: boolean;
 }
-
-type SortDirection = 'asc' | 'desc' | null;
 
 export function DataTable<T extends Record<string, any>>({
     data,
     columns,
-    keyField,
-    selectable = false,
-    selectedKeys = new Set(),
-    onSelectionChange,
-    expandable = false,
-    renderExpanded,
-    defaultSortColumn,
-    defaultSortDirection = 'asc',
-    emptyMessage = 'No data available',
-    compact = true,
-    className = '',
+    selectedItems,
+    onToggleItem,
+    onSelectAll,
+    onInvertSelection,
+    handleSort,
+    SortIcon,
+    columnFilters,
+    onToggleColumnFilter,
+    onClearColumnFilter,
+    getUniqueValues,
+    rowIdKey = 'id',
+    isLoading = false,
+    emptyMessage = "No items found.",
+    renderExpansion,
+    className = "",
+    compact = false
 }: DataTableProps<T>) {
-    // Sorting state
-    const [sortColumn, setSortColumn] = useState<string | null>(
-        defaultSortColumn || (columns[0]?.sortable !== false ? columns[0]?.key : null)
-    );
-    const [sortDirection, setSortDirection] = useState<SortDirection>(
-        defaultSortColumn || columns[0] ? defaultSortDirection : null
-    );
 
-    // Expansion state
-    const [expandedKeys, setExpandedKeys] = useState<Set<string | number>>(new Set());
+    const [expandedRows, setExpandedRows] = useState<Set<string | number>>(new Set());
+    const isAllSelected = selectedItems && data.length > 0 && selectedItems.size === data.length;
 
-    // Shift-click tracking
-    const lastClickedIndex = useRef<number | null>(null);
-
-    // Handle column header click for sorting
-    const handleSort = (colKey: string) => {
-        if (sortColumn === colKey) {
-            setSortDirection(sortDirection === 'asc' ? 'desc' : 'asc');
-        } else {
-            setSortColumn(colKey);
-            setSortDirection('asc');
-        }
-    };
-
-    // Sort data
-    const sortedData = React.useMemo(() => {
-        if (!sortColumn || !sortDirection) return data;
-
-        return [...data].sort((a, b) => {
-            const aVal = a[sortColumn];
-            const bVal = b[sortColumn];
-
-            if (aVal == null && bVal == null) return 0;
-            if (aVal == null) return 1;
-            if (bVal == null) return -1;
-
-            const comparison = aVal < bVal ? -1 : aVal > bVal ? 1 : 0;
-            return sortDirection === 'asc' ? comparison : -comparison;
-        });
-    }, [data, sortColumn, sortDirection]);
-
-    // Handle row selection with shift-click support
-    const handleRowClick = useCallback((e: React.MouseEvent, row: T, index: number) => {
-        const key = row[keyField] as string | number;
-
-        if (expandable && !selectable) {
-            // Toggle expansion
-            setExpandedKeys(prev => {
-                const next = new Set(prev);
-                if (next.has(key)) next.delete(key);
-                else next.add(key);
-                return next;
-            });
-            return;
-        }
-
-        if (!selectable || !onSelectionChange) return;
-
-        if (e.shiftKey && lastClickedIndex.current !== null) {
-            // Shift-click: select range
-            const start = Math.min(lastClickedIndex.current, index);
-            const end = Math.max(lastClickedIndex.current, index);
-            const newKeys = new Set(selectedKeys);
-
-            for (let i = start; i <= end; i++) {
-                const rowKey = sortedData[i][keyField] as string | number;
-                newKeys.add(rowKey);
-            }
-            onSelectionChange(newKeys);
-        } else {
-            // Normal click: toggle single
-            const newKeys = new Set(selectedKeys);
-            if (newKeys.has(key)) newKeys.delete(key);
-            else newKeys.add(key);
-            onSelectionChange(newKeys);
-            lastClickedIndex.current = index;
-        }
-    }, [selectable, onSelectionChange, selectedKeys, keyField, sortedData, expandable]);
-
-    // Toggle expansion separately if both selectable and expandable
-    const handleExpandClick = (e: React.MouseEvent, row: T) => {
+    const toggleExpand = (id: string | number, e: React.MouseEvent) => {
         e.stopPropagation();
-        const key = row[keyField] as string | number;
-        setExpandedKeys(prev => {
+        setExpandedRows(prev => {
             const next = new Set(prev);
-            if (next.has(key)) next.delete(key);
-            else next.add(key);
+            if (next.has(id)) next.delete(id);
+            else next.add(id);
             return next;
         });
     };
 
-    const cellPadding = compact ? 'px-2 py-1.5' : 'px-3 py-2';
-    const headerPadding = compact ? 'px-2 py-2' : 'px-3 py-2.5';
-
     return (
-        <div className={`overflow-auto ${className}`}>
-            <table className="w-full text-sm">
-                <thead>
-                    <tr>
-                        {expandable && selectable && <th className={`${headerPadding} w-8`} />}
-                        {selectable && (
-                            <th className={`${headerPadding} w-8 text-left`}>
-                                <input
-                                    type="checkbox"
-                                    checked={selectedKeys.size === data.length && data.length > 0}
-                                    onChange={() => {
-                                        if (!onSelectionChange) return;
-                                        if (selectedKeys.size === data.length) {
-                                            onSelectionChange(new Set());
-                                        } else {
-                                            onSelectionChange(new Set(data.map(d => d[keyField] as string | number)));
-                                        }
-                                    }}
-                                    className="w-4 h-4 rounded border-zinc-600 bg-zinc-800 text-blue-500 cursor-pointer"
-                                />
-                            </th>
-                        )}
-                        {columns.map((col) => (
-                            <th
-                                key={col.key}
-                                onClick={() => col.sortable !== false && handleSort(col.key)}
-                                className={`${headerPadding} text-left text-xs font-semibold uppercase tracking-wide bg-zinc-900 border-b border-zinc-700 select-none transition-colors ${col.sortable !== false ? 'cursor-pointer hover:bg-zinc-800' : ''
-                                    } ${sortColumn === col.key ? 'text-cyan-400' : 'text-zinc-400'}`}
-                                style={{ width: col.width, textAlign: col.align || 'left' }}
-                            >
-                                <div className="flex items-center gap-1">
-                                    {col.header}
-                                    {col.sortable !== false && sortColumn === col.key && (
-                                        sortDirection === 'asc' ? <ChevronUp size={12} /> : <ChevronDown size={12} />
-                                    )}
-                                </div>
-                            </th>
-                        ))}
-                    </tr>
-                </thead>
-                <tbody>
-                    {sortedData.length === 0 ? (
-                        <tr>
-                            <td
-                                colSpan={columns.length + (selectable ? 1 : 0) + (expandable && selectable ? 1 : 0)}
-                                className="px-4 py-8 text-center text-zinc-500"
-                            >
-                                {emptyMessage}
-                            </td>
-                        </tr>
-                    ) : (
-                        sortedData.map((row, idx) => {
-                            const key = row[keyField] as string | number;
-                            const isSelected = selectedKeys.has(key);
-                            const isExpanded = expandedKeys.has(key);
-
-                            return (
-                                <React.Fragment key={key}>
-                                    <tr
-                                        onClick={(e) => handleRowClick(e, row, idx)}
-                                        className={`border-b border-zinc-800 transition-colors ${selectable || expandable ? 'cursor-pointer' : ''
-                                            } ${isSelected ? 'bg-blue-900/20' : 'hover:bg-zinc-800/50'} ${isExpanded ? 'bg-zinc-800/30' : ''
-                                            }`}
-                                    >
-                                        {expandable && selectable && (
-                                            <td className={`${cellPadding} w-8`}>
-                                                <button
-                                                    onClick={(e) => handleExpandClick(e, row)}
-                                                    className="p-0.5 hover:bg-zinc-700 rounded"
+        <div className={`bg-zinc-900/50 rounded-xl border border-zinc-800 overflow-hidden backdrop-blur-sm flex flex-col ${className}`}>
+            <div className="overflow-auto flex-1 min-h-0 custom-scrollbar">
+                <table className="w-full text-left border-collapse">
+                    <thead className="sticky top-0 z-10">
+                        <tr className="border-b border-zinc-800 bg-zinc-900 shadow-sm">
+                            {(onToggleItem || renderExpansion) && (
+                                <th className={`${compact ? 'px-2 py-1' : 'p-4'} w-12`}>
+                                    <div className="flex items-center gap-2">
+                                        {onToggleItem && (
+                                            <>
+                                                <div
+                                                    onClick={onSelectAll}
+                                                    className={`w-4 h-4 rounded border flex items-center justify-center cursor-pointer transition-colors ${isAllSelected ? 'bg-indigo-500 border-indigo-500' : 'border-zinc-600 bg-zinc-800 hover:border-zinc-500'
+                                                        }`}
                                                 >
-                                                    <ChevronRight
-                                                        size={14}
-                                                        className={`transition-transform ${isExpanded ? 'rotate-90' : ''}`}
-                                                    />
-                                                </button>
-                                            </td>
+                                                    {isAllSelected && <Check size={10} className="text-white" />}
+                                                </div>
+                                                {onInvertSelection && (
+                                                    <button
+                                                        onClick={onInvertSelection}
+                                                        className="text-[10px] text-zinc-500 hover:text-zinc-300 transition-colors uppercase font-bold tracking-tighter"
+                                                        title="Invert Selection"
+                                                    >
+                                                        Inv
+                                                    </button>
+                                                )}
+                                            </>
                                         )}
-                                        {selectable && (
-                                            <td className={`${cellPadding} w-8`}>
-                                                <input
-                                                    type="checkbox"
-                                                    checked={isSelected}
-                                                    onChange={() => { }}
-                                                    className="w-4 h-4 rounded border-zinc-600 bg-zinc-800 text-blue-500 cursor-pointer"
-                                                />
-                                            </td>
+                                    </div>
+                                </th>
+                            )}
+                            {columns.map((col) => (
+                                <th
+                                    key={col.key}
+                                    className={`${compact ? 'px-2 py-1' : 'p-4'} text-xs font-bold text-zinc-400 uppercase tracking-wider ${col.headerClassName || ''}`}
+                                    style={col.width ? { width: col.width } : {}}
+                                >
+                                    <div className="flex items-center">
+                                        <div
+                                            className={col.sortable ? "cursor-pointer hover:text-zinc-200 transition-colors flex items-center" : "flex items-center"}
+                                            onClick={() => col.sortable && handleSort(col.key)}
+                                        >
+                                            {col.header}
+                                            {col.sortable && <SortIcon column={col.key} />}
+                                        </div>
+                                        {col.filterable && (
+                                            <ColumnFilter
+                                                column={col.key}
+                                                title={col.header}
+                                                options={getUniqueValues(col.key)}
+                                                selected={columnFilters[col.key] || new Set()}
+                                                onToggle={onToggleColumnFilter}
+                                                onClear={onClearColumnFilter}
+                                            />
                                         )}
-                                        {columns.map((col) => (
-                                            <td
-                                                key={col.key}
-                                                className={`${cellPadding} text-zinc-200`}
-                                                style={{ textAlign: col.align || 'left' }}
-                                            >
-                                                {col.render ? col.render(row, idx) : row[col.key]}
-                                            </td>
-                                        ))}
-                                    </tr>
-                                    {expandable && isExpanded && renderExpanded && (
-                                        <tr>
-                                            <td
-                                                colSpan={columns.length + (selectable ? 1 : 0) + (expandable && selectable ? 1 : 0)}
-                                                className="px-4 py-2 bg-zinc-900/50 border-b border-zinc-800"
-                                            >
-                                                {renderExpanded(row)}
-                                            </td>
+                                    </div>
+                                </th>
+                            ))}
+                        </tr>
+                    </thead>
+                    <tbody className="divide-y divide-zinc-800/50">
+                        {isLoading ? (
+                            <tr>
+                                <td colSpan={columns.length + (onToggleItem || renderExpansion ? 1 : 0)} className="p-8 text-center text-zinc-500">
+                                    <div className="flex flex-col items-center gap-2">
+                                        <div className="w-6 h-6 border-2 border-indigo-500 border-t-transparent rounded-full animate-spin"></div>
+                                        <span>Loading data...</span>
+                                    </div>
+                                </td>
+                            </tr>
+                        ) : data.length === 0 ? (
+                            <tr>
+                                <td colSpan={columns.length + (onToggleItem || renderExpansion ? 1 : 0)} className="p-12 text-center text-zinc-500 italic">
+                                    <div className="flex flex-col items-center gap-2">
+                                        <Columns size={24} className="text-zinc-700" />
+                                        <span>{emptyMessage}</span>
+                                    </div>
+                                </td>
+                            </tr>
+                        ) : (
+                            data.map((item, index) => {
+                                const id = item[rowIdKey] || item.email || item.index || index;
+                                const isSelected = selectedItems?.has(id);
+                                const isExpanded = expandedRows.has(id);
+                                return (
+                                    <React.Fragment key={id}>
+                                        <tr
+                                            className={`group transition-colors cursor-pointer ${isSelected ? 'bg-indigo-900/10' : 'hover:bg-zinc-800/30'
+                                                }`}
+                                            onClick={(e) => onToggleItem ? onToggleItem(id, e) : (renderExpansion ? toggleExpand(id, e) : null)}
+                                        >
+                                            {(onToggleItem || renderExpansion) && (
+                                                <td className={`${compact ? 'px-2 py-1' : 'p-4'}`} onClick={(e) => e.stopPropagation()}>
+                                                    <div className="flex items-center gap-3">
+                                                        {onToggleItem && (
+                                                            <div
+                                                                onClick={(e) => onToggleItem(id, e)}
+                                                                className={`w-4 h-4 rounded border flex items-center justify-center cursor-pointer transition-colors ${isSelected ? 'bg-indigo-500 border-indigo-500' : 'border-zinc-700 bg-zinc-800 group-hover:border-zinc-500'
+                                                                    }`}
+                                                            >
+                                                                {isSelected && <Check size={10} className="text-white" />}
+                                                            </div>
+                                                        )}
+                                                        {renderExpansion && (
+                                                            <button
+                                                                onClick={(e) => toggleExpand(id, e)}
+                                                                className={`p-1 rounded transition-transform ${isExpanded ? 'rotate-180 text-indigo-400' : 'text-zinc-500'}`}
+                                                            >
+                                                                <ChevronDown size={14} />
+                                                            </button>
+                                                        )}
+                                                    </div>
+                                                </td>
+                                            )}
+                                            {columns.map((col) => (
+                                                <td
+                                                    key={col.key}
+                                                    className={`${compact ? 'px-2 py-1' : 'p-4'} text-sm text-zinc-300 min-w-0 ${col.cellClassName || ''}`}
+                                                    style={col.width ? { width: col.width } : {}}
+                                                >
+                                                    {col.render ? col.render(item[col.key], item) : String(item[col.key] ?? '')}
+                                                </td>
+                                            ))}
                                         </tr>
-                                    )}
-                                </React.Fragment>
-                            );
-                        })
-                    )}
-                </tbody>
-            </table>
+                                        {isExpanded && renderExpansion && (
+                                            <tr className="bg-zinc-950/30">
+                                                <td colSpan={columns.length + (onToggleItem || renderExpansion ? 1 : 0)} className="p-0">
+                                                    <div className="p-4 animate-in slide-in-from-top-2 duration-200">
+                                                        {renderExpansion(item)}
+                                                    </div>
+                                                </td>
+                                            </tr>
+                                        )}
+                                    </React.Fragment>
+                                );
+                            })
+                        )}
+                    </tbody>
+                </table>
+            </div>
+            <div className="p-3 bg-zinc-900/30 border-t border-zinc-800 flex justify-between items-center text-[10px] text-zinc-500 font-medium">
+                <div>
+                    Showing {data.length} items
+                </div>
+                {selectedItems && selectedItems.size > 0 && (
+                    <div className="text-indigo-400 font-bold uppercase tracking-wider">
+                        {selectedItems.size} selected
+                    </div>
+                )}
+            </div>
         </div>
     );
 }
-
-export default DataTable;

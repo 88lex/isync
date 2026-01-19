@@ -57,6 +57,7 @@ class RandomBatchRequest(BaseModel):
     user_count: int
     domains: List[str]
     dry_run: bool = False
+    random_order: bool = False
 
 # --- Helper Functions ---
 def get_batch_dir():
@@ -741,7 +742,8 @@ def generate_random_batch(request: RandomBatchRequest):
         cmd = engine.generate_batch_command(
             pair_dict, 
             dry_run=request.dry_run, 
-            user_list=selected_users
+            user_list=selected_users,
+            random_order=request.random_order
         )
         label = f"{pair.source} -> {pair.dest}"
         results[label] = cmd

@@ -339,12 +339,12 @@ const ConfigPage = () => {
                                         <button onClick={() => removeDomain(i)} className="text-zinc-500 hover:text-red-400 text-xs"><Trash2 size={12} /></button>
                                     </div>
                                     <div className="grid grid-cols-2 gap-2">
-                                        <UIInput inputSize="sm" placeholder="Domain" value={d.domain_name} onChange={e => updateDomain(i, 'domain_name', e.target.value)} />
-                                        <UIInput inputSize="sm" placeholder="Admin Email" value={d.admin_email} onChange={e => updateDomain(i, 'admin_email', e.target.value)} />
-                                        <UIInput inputSize="sm" placeholder="Group Email" value={d.group_email} onChange={e => updateDomain(i, 'group_email', e.target.value)} />
-                                        <UIInput inputSize="sm" placeholder="JSON Key Path" value={d.sa_json_path} onChange={e => updateDomain(i, 'sa_json_path', e.target.value)} />
+                                        <UIInput inputSize="sm" label="Domain Name" value={d.domain_name} onChange={e => updateDomain(i, 'domain_name', e.target.value)} />
+                                        <UIInput inputSize="sm" label="Admin Email" value={d.admin_email} onChange={e => updateDomain(i, 'admin_email', e.target.value)} />
+                                        <UIInput inputSize="sm" label="Group Email" value={d.group_email} onChange={e => updateDomain(i, 'group_email', e.target.value)} />
+                                        <UIInput inputSize="sm" label="JSON Key Path" value={d.sa_json_path} onChange={e => updateDomain(i, 'sa_json_path', e.target.value)} />
                                         <div className="col-span-2">
-                                            <UIInput inputSize="sm" placeholder="Remote JSON Path" value={d.remote_sa_json_path || ''} onChange={e => updateDomain(i, 'remote_sa_json_path', e.target.value)} />
+                                            <UIInput inputSize="sm" label="Remote JSON Path (optional)" value={d.remote_sa_json_path || ''} onChange={e => updateDomain(i, 'remote_sa_json_path', e.target.value)} />
                                         </div>
                                     </div>
                                 </div>

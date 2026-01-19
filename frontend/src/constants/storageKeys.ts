@@ -26,6 +26,7 @@ export const SESSION_KEYS = {
     // Drive Manager
     DRIVE_MANAGER_QUERY: 'isync_dm_query',
     DRIVE_MANAGER_LIMIT: 'isync_dm_limit',
+    DRIVE_MANAGER_DOMAIN: 'isync_dm_domain',
 
     // Rclone Manager
     RCLONE_SEARCH_FILTER: 'isync_rclone_search',

@@ -290,7 +290,7 @@ def get_ssh_command(server):
     if server.get('user'):
         target = f"{server['user']}@{target}"
     
-    cmd = ["ssh", "-o", "StrictHostKeyChecking=no", "-o", "ConnectTimeout=10"]
+    cmd = ["ssh", "-o", "StrictHostKeyChecking=no", "-o", "ConnectTimeout=30"]
     if server.get('key_path'):
         cmd.extend(["-i", server['key_path']])
     cmd.append(target)
@@ -308,7 +308,7 @@ def list_remote_batches(req: RemoteSyncRequest):
     ssh_cmd.append(f"ls -la {remote_path} 2>/dev/null | grep -v '^d' | grep -v '^\\.git' | awk '{{print $NF, $5}}'")
     
     try:
-        result = subprocess.run(ssh_cmd, capture_output=True, text=True, timeout=15)
+        result = subprocess.run(ssh_cmd, capture_output=True, text=True, timeout=30)
         if result.returncode != 0:
             return {"items": [], "error": result.stderr.strip()}
         
@@ -337,7 +337,7 @@ def list_remote_groups(req: RemoteSyncRequest):
     ssh_cmd.append(f"ls -la {remote_path} 2>/dev/null | grep -v '^d' | grep '\\.sh$' | awk '{{print $NF, $5}}'")
     
     try:
-        result = subprocess.run(ssh_cmd, capture_output=True, text=True, timeout=15)
+        result = subprocess.run(ssh_cmd, capture_output=True, text=True, timeout=30)
         items = []
         for line in result.stdout.strip().split('\n'):
             if line:
@@ -363,7 +363,7 @@ def list_remote_keys(req: RemoteSyncRequest):
     ssh_cmd.append(f"ls -la {remote_path} 2>/dev/null | grep '\\.json$' | awk '{{print $NF, $5}}'")
     
     try:
-        result = subprocess.run(ssh_cmd, capture_output=True, text=True, timeout=15)
+        result = subprocess.run(ssh_cmd, capture_output=True, text=True, timeout=30)
         items = []
         for line in result.stdout.strip().split('\n'):
             if line:
@@ -388,7 +388,7 @@ def list_remote_crons(req: RemoteSyncRequest):
     ssh_cmd.append("crontab -l 2>/dev/null || echo ''")
     
     try:
-        result = subprocess.run(ssh_cmd, capture_output=True, text=True, timeout=15)
+        result = subprocess.run(ssh_cmd, capture_output=True, text=True, timeout=30)
         lines = [l for l in result.stdout.strip().split('\n') if l and not l.startswith('#')]
         return {"items": [{"entry": l, "index": i} for i, l in enumerate(lines)], "raw": result.stdout}
     except Exception as e:
@@ -432,7 +432,7 @@ def pull_remote_items(req: RemoteSyncItemsRequest):
         cmd.extend([f"{ssh_target}:{remote}", local])
         
         try:
-            res = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+            res = subprocess.run(cmd, capture_output=True, text=True, timeout=45)
             if res.returncode == 0:
                 results.append({"item": item, "status": "success"})
             else:
@@ -506,7 +506,7 @@ def push_remote_items(req: RemoteSyncItemsRequest):
         cmd.extend([local, f"{ssh_target}:{remote}"])
         
         try:
-            res = subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+            res = subprocess.run(cmd, capture_output=True, text=True, timeout=90)
             if res.returncode == 0:
                 # Verify file exists on remote
                 verify_res = exec_remote_command(ssh_req, f"test -f {remote} && stat --printf='%s' {remote}")
@@ -683,7 +683,7 @@ def api_relay_sync(req: RelaySyncRequest):
         cmd = ["scp", "-o", "StrictHostKeyChecking=no"]
         if key_path: cmd.extend(["-i", key_path])
         cmd.extend([src_str, dst_str])
-        return subprocess.run(cmd, capture_output=True, text=True, timeout=60)
+        return subprocess.run(cmd, capture_output=True, text=True, timeout=90)
 
     # 1. PUSH: Source -> Targets
     if req.direction == "push":

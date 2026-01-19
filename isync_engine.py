@@ -243,10 +243,12 @@ class ISyncEngine:
 
             for email in user_emails:
                 try:
-                    user = service.users().get(userKey=email).execute()
+                    user = service.users().get(userKey=email, projection='full').execute()
                     is_suspended = user.get('suspended', False)
+                    is_admin = user.get('isAdmin', False)
+                    is_delegated = user.get('isDelegatedAdmin', False)
                     reason = user.get('suspensionReason', 'None')
-                    results[email] = {'suspended': is_suspended, 'reason': reason}
+                    results[email] = {'suspended': is_suspended, 'reason': reason, 'isAdmin': is_admin, 'isDelegatedAdmin': is_delegated}
                 except Exception as e:
                     results[email] = {'error': str(e)}
                     logging.error(f"[ISyncEngine] Failed to check suspension for {email}: {e}")
