@@ -90,12 +90,16 @@ export const IsyncDataProvider: React.FC<{ children: ReactNode }> = ({ children 
         remotes: [], servers: [], source: 'local', selectedServer: '', searchFilter: '', statusFilter: 'all', lastUpdated: 0
     });
 
-    // Load cache from backend on mount
+    // Load cache from backend on mount (non-blocking)
     useEffect(() => {
         const loadCacheFromBackend = async () => {
             try {
-                const res = await axios.get(`${API_BASE}/cache`);
+                // Use a short timeout to prevent blocking
+                const res = await axios.get(`${API_BASE}/cache`, { timeout: 3000 });
                 const entries = res.data;
+
+                // Only process if we got an array
+                if (!Array.isArray(entries)) return;
 
                 // Populate cache state from backend
                 setCache(prev => {
@@ -116,7 +120,8 @@ export const IsyncDataProvider: React.FC<{ children: ReactNode }> = ({ children 
                     return newCache;
                 });
             } catch (e) {
-                console.error('Failed to load cache index from backend', e);
+                // Silently fail - cache loading should not block the app
+                console.warn('Cache loading skipped (backend may not be ready)');
             }
         };
 
