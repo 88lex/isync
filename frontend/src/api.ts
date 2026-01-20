@@ -56,6 +56,12 @@ export interface SyncPair {
     source: string;
     dest: string;
     domain_reference?: string;
+    source_type?: 'LOCAL' | 'SSH' | 'RCLONE';
+    source_server_id?: string;
+    dest_type?: 'LOCAL' | 'SSH' | 'RCLONE';
+    dest_server_id?: string;
+    meta_server_id?: string;
+    meta_execution_mode?: 'local' | 'ssh';
 }
 
 export interface JobRequest {
@@ -157,6 +163,12 @@ export interface SyncPairWithBatch {
     source: string;
     dest: string;
     domain_reference: string;
+    source_type?: 'LOCAL' | 'SSH' | 'RCLONE';
+    source_server_id?: string;
+    dest_type?: 'LOCAL' | 'SSH' | 'RCLONE';
+    dest_server_id?: string;
+    meta_server_id?: string;
+    meta_execution_mode?: 'local' | 'ssh';
     batch: BatchInfo;
 }
 
@@ -286,6 +298,43 @@ export const copyRcloneConfig = async (
 
 export const checkRcloneDuplicates = async (serverId: string) => {
     const res = await axios.post(`${API_BASE}/rclone/duplicates`, { server_id: serverId });
+    return res.data;
+};
+
+// --- Expand Union ---
+
+export interface ExpansionProposal {
+    new_remote_name: string;
+    new_drive_name: string;
+    based_on_remote: string;
+    service_account_file?: string;
+    team_drive_id?: string;
+}
+
+export interface UnionAnalysis {
+    union_name: string;
+    upstreams: string[];
+    detected_pattern?: string;
+    next_index?: number;
+    members: any[];
+}
+
+export interface ExpansionPlan {
+    analysis: UnionAnalysis;
+    proposals: ExpansionProposal[];
+}
+
+export const analyzeUnionExpansion = async (serverId: string, unionRemote: string): Promise<ExpansionPlan> => {
+    const res = await axios.post(`${API_BASE}/rclone/expand/analyze`, { server_id: serverId, union_remote: unionRemote });
+    return res.data;
+};
+
+export const executeUnionExpansion = async (serverId: string, unionRemote: string, proposals: ExpansionProposal[]): Promise<{ status: string; logs: string[] }> => {
+    const res = await axios.post(`${API_BASE}/rclone/expand/execute`, {
+        server_id: serverId,
+        union_remote: unionRemote,
+        proposals
+    });
     return res.data;
 };
 
@@ -1386,7 +1435,6 @@ export interface CreateUnionRemoteRequest {
     upstreams: string[];
     action_policy?: string;
     create_policy?: string;
-    service_account_file_path?: string;
 }
 
 export const createUnionRemoteDirect = async (req: CreateUnionRemoteRequest): Promise<{ status: string; remote: string; upstreams: string[] }> => {
@@ -1395,8 +1443,7 @@ export const createUnionRemoteDirect = async (req: CreateUnionRemoteRequest): Pr
         name: req.name,
         upstreams: req.upstreams,
         action_policy: req.action_policy,
-        create_policy: req.create_policy,
-        sa_file_path: req.service_account_file_path
+        create_policy: req.create_policy
     };
     const res = await axios.post(`${API_BASE}/drives/union`, payload);
     return res.data;
@@ -1659,92 +1706,6 @@ export const browseRcloneContent = async (remoteName: string, path: string, serv
     });
     return res.data;
 };
-
-// --- MONITOR API ---
-export interface CapacityCheckResult {
-    status: string;
-    drives_scanned: number;
-    alerts_created: number;
-    errors: string[];
-    details: {
-        name: string;
-        drive_id: string;
-        file_count: number;
-        alert_level: string | null;
-    }[];
-}
-
-export interface CapacityAlert {
-    id: number;
-    drive_name: string;
-    drive_id: string | null;
-    alert_type: string;
-    message: string;
-    created_at: string | null;
-}
-
-export interface UnionGroupInfo {
-    id: number;
-    name: string;
-    remote_name: string | null;
-    drives: {
-        id: number;
-        drive_id: string;
-        name: string;
-        file_count: number;
-        is_full: boolean;
-        last_scanned: string | null;
-    }[];
-    drive_count: number;
-}
-
-export const runCapacityCheck = async (): Promise<CapacityCheckResult> => {
-    const res = await axios.post(`${API_BASE}/monitor/run`);
-    return res.data;
-};
-
-export const getActiveAlerts = async (): Promise<{ status: string; alerts: CapacityAlert[]; count: number }> => {
-    const res = await axios.get(`${API_BASE}/monitor/alerts`);
-    return res.data;
-};
-
-export const resolveAlert = async (alertId: number): Promise<{ status: string; message: string }> => {
-    const res = await axios.put(`${API_BASE}/alerts/${alertId}/resolve`);
-    return res.data;
-};
-
-export const listUnionGroups = async (): Promise<{ status: string; groups: UnionGroupInfo[]; count: number }> => {
-    const res = await axios.get(`${API_BASE}/unions`);
-    return res.data;
-};
-
-export const expandUnionGroup = async (unionId: number, groupEmails?: string[]): Promise<{
-    status: string;
-    new_drive?: { id: string; name: string };
-    permissions_added?: string[];
-    rclone_status?: string;
-    message?: string;
-}> => {
-    const res = await axios.post(`${API_BASE}/unions/${unionId}/expand`, {
-        group_emails: groupEmails
-    });
-    return res.data;
-};
-
-export const createUnionGroup = async (name: string, remoteName?: string): Promise<{ status: string; id: number; name: string }> => {
-    const res = await axios.post(`${API_BASE}/unions`, null, {
-        params: { name, remote_name: remoteName }
-    });
-    return res.data;
-};
-
-export const addDriveToDb = async (driveId: string, name: string, unionGroupId?: number): Promise<{ status: string; id: number; name: string }> => {
-    const res = await axios.post(`${API_BASE}/drives`, null, {
-        params: { drive_id: driveId, name, union_group_id: unionGroupId }
-    });
-    return res.data;
-};
-
 
 // --- Key Manager ---
 

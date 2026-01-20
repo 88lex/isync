@@ -1,5 +1,5 @@
 import React from 'react';
-import { Plus, Zap, Shuffle, Edit2, Trash2 } from 'lucide-react';
+import { Plus, Zap, Shuffle, Edit2, Trash2, Shield, Globe } from 'lucide-react';
 import { SyncPairWithBatch, regenerateBatch } from '../../api';
 import { DataTable, ColumnConfig } from '../ui/DataTable';
 
@@ -44,15 +44,35 @@ export const SyncPairList: React.FC<SyncPairListProps> = ({
     const columns: ColumnConfig<SyncPairWithBatch>[] = [
         {
             key: 'source',
-            header: 'Source Path',
+            header: 'Source',
             sortable: true,
-            render: (val) => <span className="text-orange-300 font-mono truncate" title={val}>{val}</span>
+            render: (_, p) => (
+                <div className="flex flex-col">
+                    <span className="text-orange-300 font-mono text-xs truncate" title={p.source}>{p.source}</span>
+                    {p.source_type && p.source_type !== 'LOCAL' && (
+                        <span className="text-[10px] text-orange-500/70 font-bold uppercase tracking-widest flex items-center gap-1">
+                            {p.source_type === 'SSH' ? <Shield size={10} /> : <Globe size={10} />}
+                            {p.source_type}: {p.source_server_id}
+                        </span>
+                    )}
+                </div>
+            )
         },
         {
             key: 'dest',
             header: 'Destination',
             sortable: true,
-            render: (val) => <span className="text-blue-300 font-mono truncate" title={val}>{val}</span>
+            render: (_, p) => (
+                <div className="flex flex-col">
+                    <span className="text-blue-300 font-mono text-xs truncate" title={p.dest}>{p.dest}</span>
+                    {p.dest_type && p.dest_type !== 'LOCAL' && (
+                        <span className="text-[10px] text-blue-500/70 font-bold uppercase tracking-widest flex items-center gap-1">
+                            {p.dest_type === 'SSH' ? <Shield size={10} /> : <Globe size={10} />}
+                            {p.dest_type}: {p.dest_server_id}
+                        </span>
+                    )}
+                </div>
+            )
         },
         {
             key: 'status',

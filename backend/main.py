@@ -31,7 +31,6 @@ from backend.routers import (
     batch_groups_router,
     crontab_router,
     rclone_router,
-    monitor_router,
     keys_router,
 )
 
@@ -75,14 +74,16 @@ app.include_router(admin_router)
 app.include_router(batch_groups_router)
 app.include_router(crontab_router)
 app.include_router(rclone_router)
-app.include_router(monitor_router)
 app.include_router(keys_router)
 
+
+from backend.database import init_db
 
 # --- Lifecycle Events ---
 @app.on_event("startup")
 async def startup_event():
     logger.info("[Startup] ISync API v3.0 (Modular) starting...")
+    init_db()
     asyncio.create_task(status_broadcaster())
     logger.info(f"[Startup] CORS origins: {CORS_ORIGINS}")
     if os.environ.get("ISYNC_API_KEY"):

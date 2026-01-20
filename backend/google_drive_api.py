@@ -30,16 +30,15 @@ def get_drive_service(
 ):
     """
     Create a Google Drive API service using service account with domain-wide delegation.
-    
-    Args:
-        service_account_file: Path to service account JSON key file
-        impersonate_email: Email of admin user to impersonate (required for DWD)
-    
-    Returns:
-        Google Drive API service object
     """
     if not GOOGLE_API_AVAILABLE:
         raise RuntimeError("Google API libraries not installed. Run: pip install google-api-python-client google-auth")
+    
+    if not impersonate_email:
+        raise ValueError("impersonate_email is required for Domain-Wide Delegation authentication.")
+
+    # Log attempt (excluding sensitive content of SA file)
+    logger.debug(f"Creating Drive service: SA={Path(service_account_file).name}, Impersonate={impersonate_email}")
     
     credentials = service_account.Credentials.from_service_account_file(
         service_account_file,
@@ -474,5 +473,11 @@ async def get_drive_details_api(
             "permissions": permissions
         }
 
+    except HttpError as e:
+        error_details = json.loads(e.content.decode('utf-8'))
+        error_msg = error_details.get('error', {}).get('message', str(e))
+        logger.error(f"Google API HttpError in get_drive_details: {error_msg} (Imp={impersonate_email})")
+        return {"status": "error", "message": error_msg}
     except Exception as e:
+        logger.error(f"Error in get_drive_details: {str(e)} (Imp={impersonate_email})")
         return {"status": "error", "message": str(e)}

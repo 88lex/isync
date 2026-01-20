@@ -41,13 +41,23 @@ class ExpandUnionRequest(BaseModel):
     new_upstreams: List[str]
 
 
+class TestConnectionRequest(BaseModel):
+    remote_name: str
+    advanced: bool = False
+
+
 # --- Helper Functions ---
 from backend.rclone_utils import (
     get_rclone_config_path,
     parse_rclone_config,
     write_rclone_config,
+    get_rclone_config_path,
+    parse_rclone_config,
+    write_rclone_config,
     add_or_update_remote
 )
+
+from backend.rclone_expander import analyze_union, propose_expansion, UnionAnalysis, ExpansionProposal
 
 
 # --- Local Rclone Endpoints ---
@@ -719,6 +729,49 @@ def search_rclone_remotes(req: SearchRemotesRequest):
     return {"matches": matches, "count": len(matches)}
 
 
+@router.post("/test-connection")
+def api_test_connection(req: TestConnectionRequest):
+    """Test connection to an rclone remote."""
+    import time
+    start = time.time()
+    
+    # Remove trailing colon if user provided it
+    name = req.remote_name.rstrip(':')
+    
+    # Use 'size' with --max-depth 0 as a fast existence/auth test
+    # It checks if we can talk to the provider and see the root metadata.
+    # This is often more reliable and faster than a full listing.
+    cmd = ["rclone", "size", f"{name}:", "--max-depth", "0"]
+    
+    if req.advanced:
+        # Advanced check does a shallow listing
+        cmd = ["rclone", "lsd", f"{name}:", "--max-depth", "1"]
+
+    try:
+        res = subprocess.run(cmd, capture_output=True, text=True, timeout=20)
+        duration = int((time.time() - start) * 1000)
+        
+        if res.returncode == 0:
+            return {
+                "status": "ok",
+                "message": "Connection successful",
+                "duration_ms": duration
+            }
+        else:
+            # Check for common auth errors to provide better messaging
+            stderr = res.stderr.strip()
+            msg = stderr or f"Rclone exited with code {res.returncode}"
+            return {
+                "status": "error",
+                "message": msg,
+                "duration_ms": duration
+            }
+    except subprocess.TimeoutExpired:
+        return {"status": "error", "message": "Connection timed out", "duration_ms": 20000}
+    except Exception as e:
+        return {"status": "error", "message": str(e), "duration_ms": 0}
+
+
 class BatchTestRequest(BaseModel):
     remote_names: List[str]
     server_id: Optional[str] = None
@@ -1089,3 +1142,176 @@ def browse_rclone_content(req: RcloneBrowseRequest):
         return {"status": "success", "dirs": dirs, "path": req.path}
     except Exception as e:
         return {"status": "error", "message": str(e), "dirs": []}
+
+# --- Expand Union Endpoints ---
+
+class AnalyzeUnionRequest(BaseModel):
+    server_id: str
+    union_remote: str
+    
+class ExpansionPlan(BaseModel):
+    analysis: UnionAnalysis
+    proposals: List[ExpansionProposal]
+
+@router.post("/expand/analyze", response_model=ExpansionPlan)
+def api_analyze_union(req: AnalyzeUnionRequest):
+    """Analyze a union remote and propose expansion."""
+    # 1. Fetch Config
+    store = get_store()
+    config = store.get_config()
+    servers = config.get('ssh_servers', [])
+    
+    content = ""
+    if req.server_id == 'local':
+        path = get_rclone_config_path()
+        if os.path.exists(path):
+            with open(path, 'r') as f: content = f.read()
+    else:
+        server = next((s for s in servers if s.get('id') == req.server_id), None)
+        if not server: raise HTTPException(404, "Server not found")
+        
+        target = server.get('alias') or server.get('host')
+        if server.get('user'): target = f"{server['user']}@{target}"
+        
+        cmd = ["ssh", "-o", "StrictHostKeyChecking=no"]
+        if server.get('key_path'): cmd.extend(["-i", server['key_path']])
+        cmd.extend([target, "cat ~/.config/rclone/rclone.conf 2>/dev/null || cat ~/.rclone.conf 2>/dev/null"])
+        
+        try:
+            res = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+            content = res.stdout
+        except Exception as e:
+            raise HTTPException(500, f"Failed to fetch config: {e}")
+
+    remotes_dict = parse_rclone_config(content)
+    
+    try:
+        analysis = analyze_union(remotes_dict, req.union_remote)
+        proposals = propose_expansion(analysis, count=1) # Default to 1, frontend can adjust
+        
+        return ExpansionPlan(analysis=analysis, proposals=proposals)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except Exception as e:
+        logger.error(f"Analysis failed: {e}")
+        raise HTTPException(500, str(e))
+
+
+class ExecuteExpansionRequest(BaseModel):
+    server_id: str
+    union_remote: str
+    proposals: List[ExpansionProposal]
+    
+@router.post("/expand/execute")
+def api_execute_expansion(req: ExecuteExpansionRequest):
+    """
+    Execute the expansion: 
+    1. Create Shared Drives (via DriveManager).
+    2. Add new remotes to rclone config.
+    3. Update union remote.
+    """
+    from backend.drive_manager import create_shared_drive_simplified
+    
+    logs = []
+    created_drives = []
+    
+    try:
+        # 1. Create Shared Drives
+        for prop in req.proposals:
+            logs.append(f"Creating Drive: {prop.new_drive_name}...")
+            
+            res = create_shared_drive_simplified(
+                name=prop.new_drive_name, 
+                copy_perms_from_id=prop.team_drive_id
+            )
+            
+            if res['status'] == 'ok':
+                logs.append(f"  -> Created! ID: {res['drive_id']}")
+                created_drives.append({
+                    "name": prop.new_drive_name, 
+                    "id": res['drive_id'],
+                    "remote_name": prop.new_remote_name
+                })
+            else:
+                logs.append(f"  -> Failed: {res.get('message')}")
+                raise Exception(f"Failed to create drive {prop.new_drive_name}: {res.get('message')}")
+
+        # 2. Update Rclone Config (Local or Remote)
+        store = get_store()
+        config = store.get_config()
+        servers = config.get('ssh_servers', [])
+        
+        content = ""
+        fetch_cmd_prefix = []
+        target = ""
+        
+        if req.server_id == 'local':
+             path = get_rclone_config_path()
+             with open(path, 'r') as f: content = f.read()
+        else:
+             server = next((s for s in servers if s.get('id') == req.server_id), None)
+             target = server.get('alias') or server.get('host')
+             if server.get('user'): target = f"{server['user']}@{target}"
+             fetch_cmd_prefix = ["ssh", "-o", "StrictHostKeyChecking=no"]
+             if server.get('key_path'): fetch_cmd_prefix.extend(["-i", server['key_path']])
+             
+             cmd = fetch_cmd_prefix + [target, "cat ~/.config/rclone/rclone.conf 2>/dev/null || cat ~/.rclone.conf 2>/dev/null"]
+             res = subprocess.run(cmd, capture_output=True, text=True, timeout=30)
+             content = res.stdout
+
+        remotes_dict = parse_rclone_config(content)
+        
+        # Add new remotes
+        for drive in created_drives:
+            prop = next(p for p in req.proposals if p.new_remote_name == drive['remote_name'])
+            
+            # Clone config from based_on_remote
+            if prop.based_on_remote in remotes_dict:
+                new_config = remotes_dict[prop.based_on_remote].copy()
+                new_config['team_drive'] = drive['id'] # Update ID
+                remotes_dict[prop.new_remote_name] = new_config
+                logs.append(f"Added remote config: {prop.new_remote_name}")
+            else:
+                logs.append(f"Warning: Base remote {prop.based_on_remote} not found in config")
+
+        # Update Union
+        if req.union_remote in remotes_dict:
+            union_cfg = remotes_dict[req.union_remote]
+            upstreams = union_cfg.get('upstreams', '')
+            
+            # Naive append
+            new_upstream_str = upstreams
+            for drive in created_drives:
+                 new_upstream_str += f" {drive['remote_name']}:"
+            
+            union_cfg['upstreams'] = new_upstream_str
+            logs.append(f"Updated union {req.union_remote} upstreams")
+            
+        
+        # Save Config
+        lines = []
+        for name, cfg in remotes_dict.items():
+            lines.append(f"[{name}]")
+            for key, value in cfg.items():
+                lines.append(f"{key} = {value}")
+            lines.append("")
+        new_content = '\\n'.join(lines)
+        
+        if req.server_id == 'local':
+             path = get_rclone_config_path()
+             with open(path, 'w') as f:
+                 f.write(new_content)
+        else:
+             # Remote Write
+             remote_write_cmd = fetch_cmd_prefix + [target, "cat > ~/.config/rclone/rclone.conf"]
+             
+             proc = subprocess.run(remote_write_cmd, input=new_content, capture_output=True, text=True, timeout=30)
+             if proc.returncode != 0:
+                 raise Exception(f"Failed to write remote config: {proc.stderr}")
+                 
+        logs.append("Config saved successfully.")
+        return {"status": "ok", "logs": logs}
+        
+    except Exception as e:
+        logger.error(f"Expansion execution failed: {e}")
+        return {"status": "error", "logs": logs, "error": str(e)}

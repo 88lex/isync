@@ -130,8 +130,7 @@ async def api_create_union_remote(request: CreateUnionRequest):
         name=request.name,
         upstreams=request.upstreams,
         action_policy=request.action_policy,
-        create_policy=request.create_policy,
-        sa_file_path=request.sa_file_path
+        create_policy=request.create_policy
     )
     return result
 

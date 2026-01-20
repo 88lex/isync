@@ -745,7 +745,7 @@ const RcloneManagement: React.FC = () => {
                                                 {(() => {
                                                     try {
                                                         const parsed = JSON.parse(newRemoteConfig);
-                                                        return parsed.service_account_file || parsed.service_account_file_path || "Not found";
+                                                        return parsed.service_account_file || "Not found";
                                                     } catch (e) {
                                                         return "Invalid JSON";
                                                     }
@@ -965,8 +965,22 @@ const RcloneManagement: React.FC = () => {
                                 </h3>
 
                                 <div className="mb-4">
-                                    <div className="text-sm text-zinc-400 mb-2">
-                                        Pushing <span className="text-white font-bold">{selectedItems.size}</span> selected Rclone details to:
+                                    <div className="text-sm text-zinc-400 mb-2 flex justify-between items-center">
+                                        <span>Pushing <span className="text-white font-bold">{selectedItems.size}</span> selected Rclone details to:</span>
+                                        <button
+                                            onClick={() => {
+                                                if (pushStatus === 'pushing') return;
+                                                if (targetSshServers.size === servers.length) {
+                                                    setTargetSshServers(new Set());
+                                                } else {
+                                                    setTargetSshServers(new Set(servers.map(s => s.id)));
+                                                }
+                                            }}
+                                            disabled={pushStatus === 'pushing'}
+                                            className="text-[10px] text-cyan-400 hover:text-cyan-300 font-bold uppercase tracking-wider transition disabled:opacity-50"
+                                        >
+                                            {targetSshServers.size === servers.length ? 'Deselect All' : 'Select All'}
+                                        </button>
                                     </div>
                                     <div className="max-h-60 overflow-y-auto bg-zinc-950 border border-zinc-800 rounded p-2 space-y-1">
                                         {servers.map(server => (

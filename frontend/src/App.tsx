@@ -3,9 +3,8 @@ import { APP_VERSION } from './constants/config';
 import { STORAGE_KEYS } from './constants/storageKeys';
 import {
   LayoutDashboard, Settings, Activity, Database, History, Calendar,
-  Users, FileCode, Server, HardDrive, Wrench, ChevronDown, ChevronRight, ShieldAlert, Key // [NEW]
+  Users, FileCode, Server, HardDrive, Wrench, ChevronDown, ChevronRight, ShieldAlert, Key, ArrowLeftRight
 } from 'lucide-react';
-import Dashboard from './pages/Dashboard';
 import UserManagement from './pages/UserManagement';
 import BatchGenerator from './pages/BatchGenerator';
 import ConfigPage from './pages/Config';
@@ -17,14 +16,13 @@ import DriveManager from './pages/DriveManager';
 import PrepCheck from './pages/PrepCheck';
 import RemoteSync from './pages/RemoteSync';
 import RcloneManagement from './pages/RcloneManagement';
-import MonitorPage from './pages/MonitorPage';
 import ManageExcluded from './pages/ManageExcluded';
-import KeyManager from './pages/KeyManager'; // [NEW]
+import KeyManager from './pages/KeyManager';
 import { IsyncDataProvider } from './contexts/IsyncDataContext';
 import ErrorBoundary from './components/ErrorBoundary';
 import { ConfigStatusIndicator } from './components/ConfigStatusIndicator';
 
-type ViewType = 'dashboard' | 'users' | 'batch' | 'config' | 'sync' | 'history' | 'schedules' | 'servers' | 'drives' | 'prep' | 'remotesync' | 'rclone' | 'monitor' | 'excluded' | 'keys';
+type ViewType = 'users' | 'batch' | 'config' | 'sync' | 'history' | 'schedules' | 'servers' | 'drives' | 'prep' | 'remotesync' | 'rclone' | 'excluded' | 'keys';
 
 // Define navigation groups
 interface SubItem {
@@ -70,8 +68,8 @@ const navGroups: NavGroup[] = [
       { id: 'servers', label: 'Remote Servers', icon: Server },
       { id: 'drives', label: 'Drive Manager', icon: HardDrive },
       { id: 'rclone', label: 'Rclone Manager', icon: HardDrive },
-      { id: 'remotesync', label: 'Remote Sync', icon: Database },
-      { id: 'keys', label: 'Manage JSONs', icon: Key }, // [NEW]
+      { id: 'remotesync', label: 'Remote Sync', icon: ArrowLeftRight },
+      { id: 'keys', label: 'Manage JSONs', icon: Key },
       { id: 'excluded', label: 'Manage Excluded', icon: ShieldAlert },
     ]
   },
@@ -79,8 +77,6 @@ const navGroups: NavGroup[] = [
     label: 'Operations',
     defaultOpen: true,
     items: [
-      { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
-      { id: 'monitor', label: 'Capacity Monitor', icon: Activity },
       {
         id: 'schedules',
         label: 'Schedules',
@@ -107,9 +103,9 @@ const navGroups: NavGroup[] = [
 function App() {
   const [view, setView] = useState<ViewType>(() => {
     const saved = localStorage.getItem(STORAGE_KEYS.VIEW);
-    if (saved === 'manual') return 'users';
-    const validViews: ViewType[] = ['dashboard', 'users', 'batch', 'config', 'sync', 'history', 'schedules', 'servers', 'drives', 'prep', 'remotesync', 'rclone', 'monitor', 'excluded', 'keys'];
-    return validViews.includes(saved as ViewType) ? (saved as ViewType) : 'dashboard';
+    if (saved === 'manual' || saved === 'dashboard' || saved === 'monitor') return 'users';
+    const validViews: ViewType[] = ['users', 'batch', 'config', 'sync', 'history', 'schedules', 'servers', 'drives', 'prep', 'remotesync', 'rclone', 'excluded', 'keys'];
+    return validViews.includes(saved as ViewType) ? (saved as ViewType) : 'users';
   });
 
   const [activeSubSection, setActiveSubSection] = useState<string | null>(null);
@@ -226,7 +222,6 @@ function App() {
           {/* Main Content */}
           <main className="flex-1 overflow-auto bg-black/20">
             <ErrorBoundary>
-              {view === 'dashboard' && <Dashboard />}
               {view === 'users' && <UserManagement />}
               {view === 'batch' && <BatchGenerator activeSection={activeSubSection} />}
               {view === 'schedules' && <SchedulesPage activeSection={activeSubSection} />}
@@ -238,7 +233,6 @@ function App() {
               {view === 'prep' && <PrepCheck />}
               {view === 'remotesync' && <RemoteSync />}
               {view === 'rclone' && <RcloneManagement />}
-              {view === 'monitor' && <MonitorPage />}
               {view === 'keys' && <KeyManager />}
               {view === 'excluded' && <ManageExcluded />}
             </ErrorBoundary>

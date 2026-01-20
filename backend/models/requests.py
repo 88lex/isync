@@ -47,6 +47,12 @@ class SyncPair(BaseModel):
     source: str
     dest: str
     domain_reference: Optional[str] = ""
+    source_type: Optional[str] = "LOCAL"
+    source_server_id: Optional[str] = None
+    dest_type: Optional[str] = "LOCAL"
+    dest_server_id: Optional[str] = None
+    meta_server_id: Optional[str] = None
+    meta_execution_mode: Optional[str] = "local"
     
     class Config:
         extra = "ignore"
@@ -145,7 +151,6 @@ class CreateUnionRequest(BaseModel):
     upstreams: List[str]
     action_policy: str = "rand"
     create_policy: str = "eprand"
-    sa_file_path: Optional[str] = None
 
 
 class GenerateSuffixesRequest(BaseModel):

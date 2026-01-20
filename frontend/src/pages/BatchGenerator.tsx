@@ -125,7 +125,7 @@ const BatchGenerator: React.FC<BatchGeneratorProps> = ({ activeSection }) => {
     const [sshServers, setSshServers] = useState<SSHServer[]>([]);
     const [showPushModal, setShowPushModal] = useState(false);
     const [pushTargetType, setPushTargetType] = useState<'batch' | 'group'>('batch');
-    const [pushTargetId, setPushTargetId] = useState('');
+    const [pushTargetIds, setPushTargetIds] = useState<string[]>([]);
     const [selectedServerId, setSelectedServerId] = useState('');
     const [selectedPushServers, setSelectedPushServers] = useState<Set<string>>(new Set());
     const [pushing, setPushing] = useState(false);
@@ -341,11 +341,32 @@ const BatchGenerator: React.FC<BatchGeneratorProps> = ({ activeSection }) => {
         catch (e: any) { alert(`Failed to load: ${e.message}`); }
     };
 
-    const handleOpenPushModal = (type: 'batch' | 'group', id: string) => {
-        setPushTargetType(type); setPushTargetId(id);
-        if (sshServers.length > 0 && selectedPushServers.size === 0) {
-            setSelectedPushServers(new Set([sshServers[0].id]));
+    const handleOpenPushModal = (type: 'batch' | 'group', ids: string | string[]) => {
+        setPushTargetType(type);
+        setPushTargetIds(Array.isArray(ids) ? ids : [ids]);
+
+        let initialServers = new Set<string>();
+
+        // Try to identify preferred server from the batch(es)
+        // If single batch and it comes from a SyncPair with meta_server_id, use it.
+        if (type === 'batch' && !Array.isArray(ids)) {
+            // Find the pair associated with this batch file? 
+            // We have unifiedPairs state which maps SyncPair <-> Batch
+            // ids is filename (targetId)
+            // But handleOpenPushModal is called with filename.
+            // unifiedPairs actually has the batch filename inside `batch` object.
+            const pair = unifiedPairs.find(p => p.batch?.filename === ids);
+            if (pair && pair.meta_server_id) {
+                initialServers.add(pair.meta_server_id);
+            }
         }
+
+        // Fallback to first available server if none selected
+        if (initialServers.size === 0 && sshServers.length > 0) {
+            initialServers.add(sshServers[0].id);
+        }
+
+        setSelectedPushServers(initialServers);
         setShowPushModal(true);
         setPushResults([]);
         setShowPushResults(false);
@@ -370,17 +391,20 @@ const BatchGenerator: React.FC<BatchGeneratorProps> = ({ activeSection }) => {
         try {
             for (const serverId of Array.from(selectedPushServers)) {
                 const serverName = sshServers.find(s => s.id === serverId)?.name || serverId;
-                setPushStatus(`Pushing to ${serverName}...`);
-                try {
-                    let res;
-                    if (pushTargetType === 'batch') {
-                        res = await pushBatch(pushTargetId, serverId);
-                    } else {
-                        res = await pushBatchGroup(pushTargetId, serverId);
+
+                for (const targetId of pushTargetIds) {
+                    setPushStatus(`Pushing ${targetId} to ${serverName}...`);
+                    try {
+                        let res;
+                        if (pushTargetType === 'batch') {
+                            res = await pushBatch(targetId, serverId);
+                        } else {
+                            res = await pushBatchGroup(targetId, serverId);
+                        }
+                        results.push({ target: targetId, server: serverName, status: 'success', message: 'Pushed successfully' });
+                    } catch (e: any) {
+                        results.push({ target: targetId, server: serverName, status: 'error', message: e.message });
                     }
-                    results.push({ server: serverName, status: 'success', message: 'Pushed successfully' });
-                } catch (e: any) {
-                    results.push({ server: serverName, status: 'error', message: e.message });
                 }
             }
             setPushResults(results);
@@ -637,10 +661,24 @@ const BatchGenerator: React.FC<BatchGeneratorProps> = ({ activeSection }) => {
             {showPushModal && (
                 <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-[50]">
                     <div className="bg-zinc-900 border border-zinc-700 p-6 rounded-lg w-[500px] space-y-4 shadow-2xl">
-                        <h3 className="text-lg font-bold text-white">Push {pushTargetType === 'batch' ? 'Batch' : 'Group'} to Remote</h3>
+                        <h3 className="text-lg font-bold text-white">Push {pushTargetType === 'batch' ? (pushTargetIds.length > 1 ? `${pushTargetIds.length} Batches` : 'Batch') : 'Group'} to Remote</h3>
 
                         <div className="space-y-2 max-h-60 overflow-y-auto custom-scrollbar bg-zinc-950 p-3 rounded border border-zinc-800">
-                            <div className="text-xs text-zinc-500 mb-2 uppercase font-bold">Select Target Servers</div>
+                            <div className="text-xs text-zinc-500 mb-2 uppercase font-bold flex justify-between items-center">
+                                <span>Select Target Servers</span>
+                                <button
+                                    onClick={() => {
+                                        if (selectedPushServers.size === sshServers.length) {
+                                            setSelectedPushServers(new Set());
+                                        } else {
+                                            setSelectedPushServers(new Set(sshServers.map(s => s.id)));
+                                        }
+                                    }}
+                                    className="text-[10px] text-cyan-400 hover:text-cyan-300 font-bold uppercase tracking-wider transition"
+                                >
+                                    {selectedPushServers.size === sshServers.length ? 'Deselect All' : 'Select All'}
+                                </button>
+                            </div>
                             {sshServers.map(s => (
                                 <label key={s.id} className={`flex items-center gap-2 px-3 py-2 rounded cursor-pointer transition ${selectedPushServers.has(s.id) ? 'bg-cyan-600/20 border border-cyan-500/50' : 'hover:bg-zinc-900 border border-transparent'}`}>
                                     <input
@@ -659,9 +697,12 @@ const BatchGenerator: React.FC<BatchGeneratorProps> = ({ activeSection }) => {
                             <div className="bg-zinc-950 p-3 rounded border border-zinc-800 max-h-40 overflow-y-auto text-xs space-y-1">
                                 {pushStatus && <div className="text-cyan-400 font-bold mb-2">{pushStatus}</div>}
                                 {pushResults.map((r, i) => (
-                                    <div key={i} className={`flex justify-between ${r.status === 'success' ? 'text-emerald-400' : 'text-red-400'}`}>
-                                        <span>{r.server}</span>
-                                        <span>{r.status === 'success' ? '✓ OK' : '✗ Failed'}</span>
+                                    <div key={i} className={`flex justify-between items-center gap-4 ${r.status === 'success' ? 'text-emerald-400' : 'text-red-400'}`}>
+                                        <div className="flex flex-col">
+                                            <span className="font-medium">{r.server}</span>
+                                            {pushTargetIds.length > 1 && <span className="text-[10px] opacity-70 truncate max-w-[200px]">{r.target}</span>}
+                                        </div>
+                                        <span className="shrink-0">{r.status === 'success' ? '✓ OK' : '✗ Failed'}</span>
                                     </div>
                                 ))}
                             </div>

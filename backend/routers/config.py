@@ -30,6 +30,12 @@ class SyncPair(BaseModel):
     source: str
     dest: str
     domain_reference: Optional[str] = ""
+    source_type: Optional[str] = "LOCAL"
+    source_server_id: Optional[str] = None
+    dest_type: Optional[str] = "LOCAL"
+    dest_server_id: Optional[str] = None
+    meta_server_id: Optional[str] = None
+    meta_execution_mode: Optional[str] = "local" # local, ssh
     
     class Config:
         extra = "ignore"
@@ -44,6 +50,12 @@ class SyncPairCreate(BaseModel):
     source: str
     dest: str
     domain_reference: Optional[str] = None
+    source_type: Optional[str] = "LOCAL"
+    source_server_id: Optional[str] = None
+    dest_type: Optional[str] = "LOCAL"
+    dest_server_id: Optional[str] = None
+    meta_server_id: Optional[str] = None
+    meta_execution_mode: Optional[str] = "local"
     
     class Config:
         extra = "ignore"

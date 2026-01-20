@@ -16,7 +16,7 @@ class AppConfig(Base):
 
 class UnionGroup(Base):
     """
-    Logical grouping of Shared Drives (e.g., 'fcl-ebooks').
+    Logical grouping of Storage Nodes (e.g., 'fcl-ebooks').
     """
     __tablename__ = "union_groups"
 
@@ -27,7 +27,7 @@ class UnionGroup(Base):
     # rclone remote name (e.g., 'fcl-ebooks-union')
     remote_name = Column(String(100), nullable=True)
 
-    drives = relationship("SharedDrive", back_populates="union_group", cascade="all, delete-orphan")
+    nodes = relationship("SharedDrive", back_populates="union_group", cascade="all, delete-orphan")
 
 class SharedDrive(Base):
     """
@@ -36,40 +36,21 @@ class SharedDrive(Base):
     __tablename__ = "shared_drives"
 
     id = Column(Integer, primary_key=True, index=True)
-    drive_id = Column(String(100), unique=True, index=True, nullable=False) # Google Drive ID
+    drive_id = Column(String(100), unique=True, index=True, nullable=False)
     name = Column(String(200), nullable=False)
     
-    # Foreign Key to UnionGroup
+    # Foreign Key to UnionGroup (Optional)
     union_group_id = Column(Integer, ForeignKey("union_groups.id"), nullable=True)
     
-    # Capacity Stats
+    # Stats
     file_count = Column(Integer, default=0)
     size_bytes = Column(Float, default=0.0)
     last_scanned = Column(DateTime, nullable=True)
     
     # Status
-    is_full = Column(Boolean, default=False) # Manually or auto-flagged as full
     status = Column(String(50), default="ACTIVE") # ACTIVE, ARCHIVED, DELETED
 
-    union_group = relationship("UnionGroup", back_populates="drives")
-    alerts = relationship("CapacityAlert", back_populates="drive", cascade="all, delete-orphan")
-
-class CapacityAlert(Base):
-    """
-    Stores "On-Demand" monitoring alerts.
-    """
-    __tablename__ = "capacity_alerts"
-
-    id = Column(Integer, primary_key=True, index=True)
-    drive_id = Column(Integer, ForeignKey("shared_drives.id"), nullable=False)
-    
-    alert_type = Column(String(50), nullable=False) # e.g., 'FILE_COUNT', 'SIZE_QUOTA'
-    message = Column(Text, nullable=False)
-    created_at = Column(DateTime, default=datetime.utcnow)
-    is_resolved = Column(Boolean, default=False)
-    resolved_at = Column(DateTime, nullable=True)
-
-    drive = relationship("SharedDrive", back_populates="alerts")
+    union_group = relationship("UnionGroup", back_populates="nodes")
 
 class WorkspaceUser(Base):
     """
@@ -98,5 +79,35 @@ class SyncPair(Base):
     source = Column(String(500), nullable=False)
     dest = Column(String(500), nullable=False)
     domain_reference = Column(String(100), nullable=True)
+    
+    # Advanced association fields
+    source_type = Column(String(20), default="LOCAL") # LOCAL, SSH, RCLONE
+    source_server_id = Column(String(100), nullable=True)
+    dest_type = Column(String(20), default="LOCAL") # LOCAL, SSH, RCLONE
+    dest_server_id = Column(String(100), nullable=True)
+
+    meta_server_id = Column(String(50), nullable=True)
+    meta_execution_mode = Column(String(20), default="local")
     description = Column(String(200), nullable=True)
     last_run = Column(DateTime, nullable=True)
+
+class NodeStats(Base):
+    """
+    Cache for file system statistics of a specific path (Source or Dest).
+    """
+    __tablename__ = "node_stats"
+
+    id = Column(Integer, primary_key=True, index=True)
+    path = Column(String(500), unique=True, index=True, nullable=False)
+    
+    # Classification
+    location_label = Column(String(100), nullable=True) # e.g. "Local Server", "SSH:zfbak"
+    location_type = Column(String(50), default="UNKNOWN") # LOCAL, SSH, GOOGLE, RCLONE
+    
+    # Stats
+    size_bytes = Column(Float, default=0.0)
+    file_count = Column(Integer, default=0)
+    folder_count = Column(Integer, default=0)
+    
+    last_updated = Column(DateTime, nullable=True)
+    is_calculating = Column(Boolean, default=False)

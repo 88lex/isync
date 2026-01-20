@@ -220,8 +220,7 @@ async def create_union_remote(
     name: str,
     upstreams: List[str],
     action_policy: str = "rand",
-    create_policy: str = "eprand",
-    sa_file_path: Optional[str] = None
+    create_policy: str = "eprand"
 ) -> Dict[str, Any]:
     """
     Create an rclone union remote.
@@ -231,7 +230,6 @@ async def create_union_remote(
         upstreams: List of upstream remote names
         action_policy: Policy for actions (default: rand)
         create_policy: Policy for file creation (default: eprand)
-        sa_file_path: Optional service account file path
     
     Returns:
         Dict with result
@@ -249,9 +247,6 @@ async def create_union_remote(
         "create_policy": create_policy
     }
     
-    if sa_file_path:
-        config["service_account_file_path"] = sa_file_path
-        
     try:
         add_or_update_remote(name, config)
         result = {"status": "ok"}
@@ -650,11 +645,9 @@ async def expand_union_group(
     Returns:
         Dict with result.
     """
-    from backend.database import SessionLocal
     from backend.models.models import UnionGroup, SharedDrive
     from backend.google_drive_api import create_shared_drive_api, add_drive_member_api
     from backend.rclone_manager import regenerate_config
-    from backend.monitor_service import resolve_alert
     
     db = SessionLocal()
     
@@ -736,19 +729,9 @@ async def expand_union_group(
         db.add(new_drive)
         db.commit()
         
+        # 7. Resolve any related alerts (Wait, alerts are gone, but I'll remove this block)
         # 6. Regenerate rclone config
         rclone_result = regenerate_config(db)
-        
-        # 7. Resolve any related alerts
-        from backend.models.models import CapacityAlert
-        alerts = db.query(CapacityAlert).filter(
-            CapacityAlert.is_resolved == False
-        ).all()
-        
-        for alert in alerts:
-            drive = db.query(SharedDrive).filter(SharedDrive.id == alert.drive_id).first()
-            if drive and drive.union_group_id == union_group_id:
-                resolve_alert(alert.id, db)
         
         return {
             "status": "ok",
@@ -765,4 +748,70 @@ async def expand_union_group(
         return {"status": "error", "message": str(e)}
     finally:
         db.close()
+
+
+def create_shared_drive_simplified(
+    name: str,
+    copy_perms_from_id: Optional[str] = None
+) -> Dict[str, Any]:
+    """
+    Simplified synchronous wrapper to create a Shared Drive and optionally copy permissions.
+    Used by the Expand Union execution logic.
+    """
+    from backend.store import store
+    import asyncio
+    
+    # 1. Get Auth from Store
+    # We need a configured Service Account or DWD setup in store/config
+    config = store.get_config()
+    sa_file = config.get('service_account_file')
+    impersonate_email = config.get('impersonate_email')
+    
+    if not sa_file or not impersonate_email:
+        return {"status": "error", "message": "Service Account or Impersonate Email not configured in global settings."}
+        
+    # Run async code in sync wrapper
+    # We need a fresh loop if we are in a thread, or run in current loop?
+    # This function is called from FastAPI async path? YES, so we should be async or use threading.
+    # Actually, the router endpoint is def (sync), so it runs in threadpool.
+    # We can use asyncio.run() if no loop in this thread?
+    # Or strict async def in router and await this?
+    # The router is `def api_execute_expansion`, so FastAPI runs it in threadpool.
+    # call_async helper:
+    
+    async def _do_work():
+        from backend.google_drive_api import create_shared_drive_api, list_drive_members_api, add_drive_member_api
+        
+        # Create Drive
+        res = await create_shared_drive_api(sa_file, impersonate_email, name)
+        if res['status'] != 'ok':
+            return res
+            
+        new_drive_id = res['drive']['id']
+        
+        # Copy Permissions
+        if copy_perms_from_id:
+            perms_res = await list_drive_members_api(sa_file, impersonate_email, copy_perms_from_id)
+            if perms_res['status'] == 'ok':
+                for member in perms_res.get('members', []):
+                    if member['role'] == 'owner': continue # Skip owner (organization)
+                    
+                    await add_drive_member_api(
+                        sa_file, impersonate_email, 
+                        new_drive_id, 
+                        member['emailAddress'], 
+                        member['role']
+                    )
+        
+        return {"status": "ok", "drive_id": new_drive_id, "name": name}
+
+    try:
+        return asyncio.run(_do_work())
+    except RuntimeError:
+        # Loop already running? If called from async def?
+        # If router is def, it's separate thread usually.
+        # But let's be safe.
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        return loop.run_until_complete(_do_work())
 

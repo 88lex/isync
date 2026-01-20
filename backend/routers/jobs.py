@@ -24,6 +24,12 @@ class SyncPair(BaseModel):
     source: str
     dest: str
     domain_reference: Optional[str] = ""
+    source_type: Optional[str] = "LOCAL"
+    source_server_id: Optional[str] = None
+    dest_type: Optional[str] = "LOCAL"
+    dest_server_id: Optional[str] = None
+    meta_server_id: Optional[str] = None
+    meta_execution_mode: Optional[str] = "local" # local, ssh
     
     class Config:
         extra = "ignore"
@@ -211,6 +217,8 @@ def get_sync_pairs_with_batches():
             "source": source,
             "dest": dest,
             "domain_reference": pair.get('domain_reference', ''),
+            "meta_server_id": pair.get('meta_server_id'),
+            "meta_execution_mode": pair.get('meta_execution_mode', 'local'),
             "batch": batch_info
         })
     

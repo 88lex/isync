@@ -496,7 +496,14 @@ class ISyncEngine:
         """Generates a single batch command string for all users in the rotation."""
         source = pair['source']
         dest = pair['dest']
+        dest = pair['dest']
         target_domain = pair.get('domain_reference') or None
+        
+        # Determine execution mode (default to local if not specified)
+        # If 'local', we force skip_ssh_wrapper=True.
+        # If 'ssh', we use defaults (False if SSH enabled).
+        execution_mode = pair.get('meta_execution_mode', 'local')
+        force_skip_wrapper = (execution_mode == 'local')
         
         # Fallback to first configured domain if domain_reference is not specified
         default_domain_cfg = None
@@ -554,7 +561,7 @@ class ISyncEngine:
                 remote_sa_json_path=user_cfg.get('remote_sa_json_path'),
                 keep_open=False,
                 session_suffix=f"_{i}",
-                skip_ssh_wrapper=True
+                skip_ssh_wrapper=force_skip_wrapper
             )
             commands.append(shlex.join(cmd_list))
 

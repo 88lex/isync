@@ -18,7 +18,7 @@ export interface BatchListProps {
     remoteStatusCache: Record<string, Record<string, boolean>>;
     setRemoteStatusCache: React.Dispatch<React.SetStateAction<Record<string, Record<string, boolean>>>>;
     openBatchUsersModal: (filename: string) => void;
-    handleOpenPushModal: (type: 'batch' | 'group', id: string) => void;
+    handleOpenPushModal: (type: 'batch' | 'group', ids: string | string[]) => void;
     batchOperationLoading: string | null;
     setBatchOperationLoading: (val: string | null) => void;
 }
@@ -313,9 +313,19 @@ export const BatchList: React.FC<BatchListProps> = ({
             {savedBatches.length > 0 && (
                 <div className="bg-zinc-900 border border-zinc-800 rounded-lg p-4 mb-6">
                     <div className="flex items-center justify-between mb-4">
-                        <h2 className="text-lg font-bold flex items-center gap-2 text-indigo-400">
-                            <FolderOpen size={18} /> Saved Batches
-                        </h2>
+                        <div className="flex items-center gap-3">
+                            <h2 className="text-lg font-bold flex items-center gap-2 text-indigo-400">
+                                <FolderOpen size={18} /> Saved Batches
+                            </h2>
+                            {selectedBatches.size > 0 && (
+                                <button
+                                    onClick={() => handleOpenPushModal('batch', Array.from(selectedBatches) as string[])}
+                                    className="flex items-center gap-1 px-3 py-1 bg-cyan-600 hover:bg-cyan-500 text-white rounded text-xs font-bold transition shadow-lg shadow-cyan-900/20 animate-in fade-in zoom-in duration-200"
+                                >
+                                    <UploadCloud size={14} /> Push Selected ({selectedBatches.size})
+                                </button>
+                            )}
+                        </div>
                         <div className="flex items-center gap-2 relative group-search-container">
                             <input
                                 type="text"

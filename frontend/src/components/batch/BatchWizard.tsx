@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
-import { X, Folder, Server, HardDrive, Save } from 'lucide-react';
-import { SyncPairWithBatch, Config, SSHServer, createSyncPair, updateSyncPair } from '../../api';
+import { X, Folder, Save, Search, Globe, Shield, HardDrive, Server, ChevronDown } from 'lucide-react';
+import { SyncPairWithBatch, Config, SSHServer, createSyncPair, updateSyncPair, listLocalRemotes, listServerRemotes, RcloneRemote } from '../../api';
 import { FileBrowserModal } from '../FileBrowserModal';
 
 interface BatchWizardProps {
@@ -23,9 +23,18 @@ export const BatchWizard: React.FC<BatchWizardProps> = ({
     const [source, setSource] = useState('');
     const [dest, setDest] = useState('');
     const [domain, setDomain] = useState('');
-    const [sourceServer, setSourceServer] = useState('');
-    const [destServer, setDestServer] = useState('');
+    const [sourceType, setSourceType] = useState<'LOCAL' | 'SSH' | 'RCLONE'>('LOCAL');
+    const [sourceServerId, setSourceServerId] = useState('');
+    const [destType, setDestType] = useState<'LOCAL' | 'SSH' | 'RCLONE'>('LOCAL');
+    const [destServerId, setDestServerId] = useState('');
+    const [executionServerId, setExecutionServerId] = useState('');
+    const [executionMode, setExecutionMode] = useState<'local' | 'ssh'>('local');
     const [isSaving, setIsSaving] = useState(false);
+
+    // Rclone Remotes Cache
+    const [localRemotes, setLocalRemotes] = useState<RcloneRemote[]>([]);
+    const [remoteRemotesCache, setRemoteRemotesCache] = useState<Record<string, RcloneRemote[]>>({});
+    const [loadingRemotes, setLoadingRemotes] = useState(false);
 
     // File Browser State
     const [isFileBrowserOpen, setIsFileBrowserOpen] = useState(false);
@@ -37,27 +46,54 @@ export const BatchWizard: React.FC<BatchWizardProps> = ({
     useEffect(() => {
         if (isOpen) {
             if (editingPair) {
-                // Parse source/dest for server prefixes if needed
-                // Assuming format like "remote:path" for rclone remotes if using that, 
-                // but the UI implies using the server ID separately?
-                // The backend stores explicit strings. The wizard constructs them.
-                // Re-reading logic in parent might be needed, but assuming simple strings for now as per previous code.
                 setSource(editingPair.source);
                 setDest(editingPair.dest);
                 setDomain(editingPair.domain_reference || '');
-                // We don't easily know strictly which server ID it corresponds to without parsing,
-                // but for now let's assume raw paths.
-                setSourceServer(''); // Todo: parse if needed
-                setDestServer('');
+                setSourceType(editingPair.source_type || 'LOCAL');
+                setSourceServerId(editingPair.source_server_id || '');
+                setDestType(editingPair.dest_type || 'LOCAL');
+                setDestServerId(editingPair.dest_server_id || '');
+                setExecutionServerId(editingPair.meta_server_id || '');
+                setExecutionMode(editingPair.meta_execution_mode || 'local');
             } else {
                 setSource('');
                 setDest('');
                 setDomain('');
-                setSourceServer('');
-                setDestServer('');
+                setSourceType('LOCAL');
+                setSourceServerId('');
+                setDestType('LOCAL');
+                setDestServerId('');
+                setExecutionServerId('');
+                setExecutionMode('local');
             }
         }
     }, [isOpen, editingPair]);
+
+    // Fetch Rclone Remotes
+    useEffect(() => {
+        if (!isOpen) return;
+
+        const loadRemotes = async () => {
+            setLoadingRemotes(true);
+            try {
+                // Load local remotes
+                const local = await listLocalRemotes();
+                setLocalRemotes(local.remotes);
+
+                // Load remotes for selected execution server if it exists
+                if (executionServerId && !remoteRemotesCache[executionServerId]) {
+                    const remotes = await listServerRemotes(executionServerId);
+                    setRemoteRemotesCache(prev => ({ ...prev, [executionServerId]: remotes.remotes }));
+                }
+            } catch (e) {
+                console.error("Failed to load remotes", e);
+            } finally {
+                setLoadingRemotes(false);
+            }
+        };
+
+        loadRemotes();
+    }, [isOpen, executionServerId]);
 
     const handleSave = async () => {
         if (!source || !dest) {
@@ -75,13 +111,19 @@ export const BatchWizard: React.FC<BatchWizardProps> = ({
             const payload = {
                 source,
                 dest,
-                domain: domain || undefined
+                domain_reference: domain || undefined,
+                source_type: sourceType,
+                source_server_id: sourceServerId || undefined,
+                dest_type: destType,
+                dest_server_id: destServerId || undefined,
+                meta_server_id: executionServerId || undefined,
+                meta_execution_mode: executionMode
             };
 
             if (editingPair && editingPair.id) {
-                await updateSyncPair(editingPair.id, payload);
+                await updateSyncPair(editingPair.id, payload as any);
             } else {
-                await createSyncPair(payload);
+                await createSyncPair(payload as any);
             }
             await onSuccess();
             onClose();
@@ -95,9 +137,12 @@ export const BatchWizard: React.FC<BatchWizardProps> = ({
     const openFileBrowser = (mode: 'source' | 'dest') => {
         setFileBrowserMode(mode);
         const currentPath = mode === 'source' ? source : dest;
-        const currentServerId = mode === 'source' ? sourceServer : destServer;
-        setFileBrowserPath(currentPath || (currentServerId ? '/' : '')); // Default to root if switching context
-        setFileBrowserServer(sshServers.find(s => s.id === currentServerId));
+        const currentServerId = mode === 'source' ? sourceServerId : destServerId;
+        // Fallback to execution server if local context is selected for browsing but an execution server is set
+        const effectiveServerId = currentServerId || executionServerId;
+
+        setFileBrowserPath(currentPath || (effectiveServerId ? '/' : ''));
+        setFileBrowserServer(sshServers.find(s => s.id === effectiveServerId));
         setIsFileBrowserOpen(true);
     };
 
@@ -118,75 +163,180 @@ export const BatchWizard: React.FC<BatchWizardProps> = ({
 
                 <div className="p-6 space-y-6 overflow-y-auto">
                     {/* Source */}
-                    <div className="bg-zinc-950/50 p-4 rounded-lg border border-zinc-800/50">
-                        <label className="block text-xs font-bold text-orange-400 uppercase tracking-wider mb-2 flex items-center gap-2">
-                            <Folder size={14} /> Source Path
-                        </label>
-                        <div className="flex gap-2 mb-2">
-                            <div className="w-1/3">
-                                <select
-                                    value={sourceServer}
-                                    onChange={(e) => setSourceServer(e.target.value)}
-                                    className="w-full bg-zinc-900 border border-zinc-700 rounded px-3 py-2 text-sm text-zinc-300 focus:border-orange-500 transition"
-                                >
-                                    <option value="">Local Execution Environment</option>
-                                    {sshServers.map(s => (
-                                        <option key={s.id} value={s.id}>{s.name} (SSH)</option>
-                                    ))}
-                                </select>
+                    <div className="bg-zinc-950/50 p-4 rounded-lg border border-zinc-800/50 space-y-4">
+                        <div className="flex items-center justify-between">
+                            <label className="text-xs font-bold text-orange-400 uppercase tracking-wider flex items-center gap-2">
+                                <Folder size={14} /> Source Association
+                            </label>
+                            <div className="flex bg-zinc-900 rounded p-0.5 border border-zinc-800">
+                                {(['LOCAL', 'SSH', 'RCLONE'] as const).map(t => (
+                                    <button
+                                        key={t}
+                                        onClick={() => { setSourceType(t); setSourceServerId(''); }}
+                                        className={`px-3 py-1 text-[10px] font-bold rounded transition ${sourceType === t ? 'bg-orange-600 text-white' : 'text-zinc-500 hover:text-zinc-300'}`}
+                                    >
+                                        {t}
+                                    </button>
+                                ))}
                             </div>
-                            <div className="flex-1 flex gap-2">
-                                <input
-                                    type="text"
-                                    value={source}
-                                    onChange={(e) => setSource(e.target.value)}
-                                    placeholder="/path/to/source"
-                                    className="flex-1 bg-zinc-900 border border-zinc-700 rounded px-3 py-2 text-sm text-white focus:border-orange-500 transition font-mono"
-                                />
-                                <button
-                                    onClick={() => openFileBrowser('source')}
-                                    className="px-3 bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 rounded text-zinc-300 transition"
-                                    title="Browse"
-                                >
-                                    <Folder size={16} />
-                                </button>
+                        </div>
+
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            {sourceType !== 'LOCAL' && (
+                                <div>
+                                    <label className="block text-[10px] text-zinc-500 uppercase font-bold mb-1">
+                                        {sourceType === 'SSH' ? 'SSH Server' : 'Rclone Remote'}
+                                    </label>
+                                    <div className="relative">
+                                        <select
+                                            value={sourceServerId}
+                                            onChange={(e) => setSourceServerId(e.target.value)}
+                                            className="w-full bg-zinc-900 border border-zinc-700 rounded px-3 py-2 text-sm text-zinc-300 focus:border-orange-500 transition appearance-none"
+                                        >
+                                            <option value="">-- Select {sourceType === 'SSH' ? 'Server' : 'Remote'} --</option>
+                                            {sourceType === 'SSH' ? (
+                                                sshServers.map(s => <option key={s.id} value={s.id}>{s.name} ({s.host})</option>)
+                                            ) : (
+                                                (executionServerId ? (remoteRemotesCache[executionServerId] || []) : localRemotes).map(r => (
+                                                    <option key={r.name} value={r.name}>{r.name} ({r.type})</option>
+                                                ))
+                                            )}
+                                        </select>
+                                        <ChevronDown size={14} className="absolute right-3 top-2.5 text-zinc-500 pointer-events-none" />
+                                    </div>
+                                </div>
+                            )}
+                            <div className={sourceType === 'LOCAL' ? 'col-span-1 md:col-span-2' : ''}>
+                                <label className="block text-[10px] text-zinc-500 uppercase font-bold mb-1">Path</label>
+                                <div className="flex gap-2">
+                                    <input
+                                        type="text"
+                                        value={source}
+                                        onChange={(e) => setSource(e.target.value)}
+                                        placeholder={sourceType === 'RCLONE' ? "path/to/folder" : "/path/to/source"}
+                                        className="flex-1 bg-zinc-900 border border-zinc-700 rounded px-3 py-2 text-sm text-white focus:border-orange-500 transition font-mono"
+                                    />
+                                    <button
+                                        onClick={() => openFileBrowser('source')}
+                                        className="px-3 bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 rounded text-zinc-300 transition"
+                                        title="Browse"
+                                    >
+                                        <Folder size={16} />
+                                    </button>
+                                </div>
                             </div>
                         </div>
                     </div>
 
                     {/* Destination */}
-                    <div className="bg-zinc-950/50 p-4 rounded-lg border border-zinc-800/50">
-                        <label className="block text-xs font-bold text-blue-400 uppercase tracking-wider mb-2 flex items-center gap-2">
-                            <HardDrive size={14} /> Destination Path
+                    <div className="bg-zinc-950/50 p-4 rounded-lg border border-zinc-800/50 space-y-4">
+                        <div className="flex items-center justify-between">
+                            <label className="text-xs font-bold text-blue-400 uppercase tracking-wider flex items-center gap-2">
+                                <HardDrive size={14} /> Destination Association
+                            </label>
+                            <div className="flex bg-zinc-900 rounded p-0.5 border border-zinc-800">
+                                {(['LOCAL', 'SSH', 'RCLONE'] as const).map(t => (
+                                    <button
+                                        key={t}
+                                        onClick={() => { setDestType(t); setDestServerId(''); }}
+                                        className={`px-3 py-1 text-[10px] font-bold rounded transition ${destType === t ? 'bg-blue-600 text-white' : 'text-zinc-500 hover:text-zinc-300'}`}
+                                    >
+                                        {t}
+                                    </button>
+                                ))}
+                            </div>
+                        </div>
+
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                            {destType !== 'LOCAL' && (
+                                <div>
+                                    <label className="block text-[10px] text-zinc-500 uppercase font-bold mb-1">
+                                        {destType === 'SSH' ? 'SSH Server' : 'Rclone Remote'}
+                                    </label>
+                                    <div className="relative">
+                                        <select
+                                            value={destServerId}
+                                            onChange={(e) => setDestServerId(e.target.value)}
+                                            className="w-full bg-zinc-900 border border-zinc-700 rounded px-3 py-2 text-sm text-zinc-300 focus:border-blue-500 transition appearance-none"
+                                        >
+                                            <option value="">-- Select {destType === 'SSH' ? 'Server' : 'Remote'} --</option>
+                                            {destType === 'SSH' ? (
+                                                sshServers.map(s => <option key={s.id} value={s.id}>{s.name} ({s.host})</option>)
+                                            ) : (
+                                                (executionServerId ? (remoteRemotesCache[executionServerId] || []) : localRemotes).map(r => (
+                                                    <option key={r.name} value={r.name}>{r.name} ({r.type})</option>
+                                                ))
+                                            )}
+                                        </select>
+                                        <ChevronDown size={14} className="absolute right-3 top-2.5 text-zinc-500 pointer-events-none" />
+                                    </div>
+                                </div>
+                            )}
+                            <div className={destType === 'LOCAL' ? 'col-span-1 md:col-span-2' : ''}>
+                                <label className="block text-[10px] text-zinc-500 uppercase font-bold mb-1">Path</label>
+                                <div className="flex gap-2">
+                                    <input
+                                        type="text"
+                                        value={dest}
+                                        onChange={(e) => setDest(e.target.value)}
+                                        placeholder={destType === 'RCLONE' ? "path/to/folder" : "remote:/path/to/dest"}
+                                        className="flex-1 bg-zinc-900 border border-zinc-700 rounded px-3 py-2 text-sm text-white focus:border-blue-500 transition font-mono"
+                                    />
+                                    <button
+                                        onClick={() => openFileBrowser('dest')}
+                                        className="px-3 bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 rounded text-zinc-300 transition"
+                                        title="Browse"
+                                    >
+                                        <Folder size={16} />
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    {/* Execution Context */}
+                    <div className="bg-zinc-950/50 p-4 rounded-lg border border-zinc-800/50 space-y-4">
+                        <label className="block text-xs font-bold text-zinc-400 uppercase tracking-wider flex items-center gap-2">
+                            <Server size={14} /> Execution Context
                         </label>
-                        <div className="flex gap-2 mb-2">
-                            <div className="w-1/3">
+
+                        <div className="grid grid-cols-2 gap-4">
+                            <div>
+                                <label className="block text-[10px] text-zinc-500 uppercase font-bold mb-1">Execution Server</label>
                                 <select
-                                    value={destServer}
-                                    onChange={(e) => setDestServer(e.target.value)}
-                                    className="w-full bg-zinc-900 border border-zinc-700 rounded px-3 py-2 text-sm text-zinc-300 focus:border-blue-500 transition"
+                                    value={executionServerId}
+                                    onChange={(e) => setExecutionServerId(e.target.value)}
+                                    className="w-full bg-zinc-900 border border-zinc-700 rounded px-3 py-2 text-sm text-zinc-300 focus:border-indigo-500 transition"
                                 >
-                                    <option value="">Local Execution Environment</option>
+                                    <option value="">Local / None</option>
                                     {sshServers.map(s => (
                                         <option key={s.id} value={s.id}>{s.name} (SSH)</option>
                                     ))}
                                 </select>
+                                <p className="text-[10px] text-zinc-600 mt-1">Server where this batch will be pushed/run.</p>
                             </div>
-                            <div className="flex-1 flex gap-2">
-                                <input
-                                    type="text"
-                                    value={dest}
-                                    onChange={(e) => setDest(e.target.value)}
-                                    placeholder="remote:/path/to/dest"
-                                    className="flex-1 bg-zinc-900 border border-zinc-700 rounded px-3 py-2 text-sm text-white focus:border-blue-500 transition font-mono"
-                                />
-                                <button
-                                    onClick={() => openFileBrowser('dest')}
-                                    className="px-3 bg-zinc-800 hover:bg-zinc-700 border border-zinc-700 rounded text-zinc-300 transition"
-                                    title="Browse"
-                                >
-                                    <Folder size={16} />
-                                </button>
+
+                            <div>
+                                <label className="block text-[10px] text-zinc-500 uppercase font-bold mb-1">Command Syntax</label>
+                                <div className="flex bg-zinc-900 rounded p-1 border border-zinc-700">
+                                    <button
+                                        onClick={() => setExecutionMode('local')}
+                                        className={`flex-1 py-1 text-xs font-medium rounded transition ${executionMode === 'local' ? 'bg-zinc-700 text-white' : 'text-zinc-500 hover:text-zinc-300'}`}
+                                    >
+                                        Local (Direct)
+                                    </button>
+                                    <button
+                                        onClick={() => setExecutionMode('ssh')}
+                                        className={`flex-1 py-1 text-xs font-medium rounded transition ${executionMode === 'ssh' ? 'bg-indigo-600 text-white' : 'text-zinc-500 hover:text-zinc-300'}`}
+                                    >
+                                        Remote (SSH)
+                                    </button>
+                                </div>
+                                <p className="text-[10px] text-zinc-600 mt-1">
+                                    {executionMode === 'local'
+                                        ? "Generates 'rclone copy ...' (Run ON remote)"
+                                        : "Generates 'ssh user@host ...' (Run FROM here)"}
+                                </p>
                             </div>
                         </div>
                     </div>
