@@ -273,6 +273,82 @@ class RemoteSyncItemsRequest(BaseModel):
     item_type: str  # 'batch', 'group', 'key', 'remote', 'cron'
 
 
+class FastPushRequest(BaseModel):
+    """Request for fast rsync-based push."""
+    server_ids: List[str]  # Support multiple servers
+    items: List[str]
+    item_type: str  # 'batch', 'group', 'key'
+
+
+@router.post("/remote/fast-push")
+def fast_push_items(req: FastPushRequest):
+    """
+    Fast push using rsync batching.
+    Much faster than individual scp calls due to:
+    - Single SSH connection per server
+    - Compression
+    - Parallel multi-server push
+    """
+    import os
+    from backend.ssh_transfer import rsync_push_files, parallel_push_to_servers, ensure_remote_directory
+    
+    base_path = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    
+    # Resolve local paths based on item_type
+    local_paths = []
+    if req.item_type == 'batch':
+        subdir = 'batch'
+        for item in req.items:
+            local_paths.append(os.path.join(base_path, "batch", item))
+    elif req.item_type == 'group':
+        subdir = 'batch/groups'
+        for item in req.items:
+            local_paths.append(os.path.join(base_path, "batch", "groups", item))
+    elif req.item_type == 'key':
+        subdir = 'keys'
+        for item in req.items:
+            local_paths.append(os.path.join(base_path, "keys", item))
+    else:
+        return {"status": "error", "message": f"Unknown item_type: {req.item_type}"}
+    
+    # Get server configs
+    servers = []
+    for sid in req.server_ids:
+        try:
+            server = get_server_by_id(sid)
+            servers.append(server)
+        except Exception as e:
+            logger.warning(f"Server {sid} not found: {e}")
+    
+    if not servers:
+        return {"status": "error", "message": "No valid servers found"}
+    
+    # Ensure remote directories exist
+    for server in servers:
+        host = server.get('alias') or server.get('host')
+        user = server.get('user')
+        remote_base = server.get('remote_path', '/opt/isync')
+        ensure_remote_directory(host, f"{remote_base}/{subdir}", user, server.get('key_path'))
+    
+    # Use parallel push if multiple servers
+    if len(servers) > 1:
+        result = parallel_push_to_servers(local_paths, servers, subdir)
+    else:
+        # Single server - direct rsync
+        server = servers[0]
+        host = server.get('alias') or server.get('host')
+        remote_base = server.get('remote_path', '/opt/isync')
+        result = rsync_push_files(
+            local_paths=local_paths,
+            remote_host=host,
+            remote_dir=f"{remote_base}/{subdir}",
+            user=server.get('user'),
+            key_path=server.get('key_path')
+        )
+    
+    return result
+
+
 def get_server_by_id(server_id: str):
     """Helper to get server config by ID."""
     store = get_store()

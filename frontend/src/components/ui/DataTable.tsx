@@ -76,7 +76,7 @@ export function DataTable<T extends Record<string, any>>({
                     <thead className="sticky top-0 z-10">
                         <tr className="border-b border-zinc-800 bg-zinc-900 shadow-sm">
                             {(onToggleItem || renderExpansion) && (
-                                <th className={`${compact ? 'px-2 py-1' : 'p-4'} w-12`}>
+                                <th className={`${compact ? 'px-1.5 py-0.5' : 'px-2 py-1.5'} w-10`}>
                                     <div className="flex items-center gap-2">
                                         {onToggleItem && (
                                             <>
@@ -104,7 +104,7 @@ export function DataTable<T extends Record<string, any>>({
                             {columns.map((col) => (
                                 <th
                                     key={col.key}
-                                    className={`${compact ? 'px-2 py-1' : 'p-4'} text-xs font-bold text-zinc-400 uppercase tracking-wider ${col.headerClassName || ''}`}
+                                    className={`${compact ? 'px-1.5 py-0.5' : 'px-2 py-1.5'} text-[10px] font-bold text-zinc-400 uppercase tracking-wider ${col.headerClassName || ''}`}
                                     style={col.width ? { width: col.width } : {}}
                                 >
                                     <div className="flex items-center">
@@ -162,8 +162,8 @@ export function DataTable<T extends Record<string, any>>({
                                             onClick={(e) => onToggleItem ? onToggleItem(id, e) : (renderExpansion ? toggleExpand(id, e) : null)}
                                         >
                                             {(onToggleItem || renderExpansion) && (
-                                                <td className={`${compact ? 'px-2 py-1' : 'p-4'}`} onClick={(e) => e.stopPropagation()}>
-                                                    <div className="flex items-center gap-3">
+                                                <td className={`${compact ? 'px-1.5 py-0.5' : 'px-2 py-1.5'}`} onClick={(e) => e.stopPropagation()}>
+                                                    <div className="flex items-center gap-2">
                                                         {onToggleItem && (
                                                             <div
                                                                 onClick={(e) => onToggleItem(id, e)}
@@ -187,7 +187,7 @@ export function DataTable<T extends Record<string, any>>({
                                             {columns.map((col) => (
                                                 <td
                                                     key={col.key}
-                                                    className={`${compact ? 'px-2 py-1' : 'p-4'} text-sm text-zinc-300 min-w-0 ${col.cellClassName || ''}`}
+                                                    className={`${compact ? 'px-1.5 py-0.5' : 'px-2 py-1.5'} text-sm text-zinc-300 min-w-0 ${col.cellClassName || ''}`}
                                                     style={col.width ? { width: col.width } : {}}
                                                 >
                                                     {col.render ? col.render(item[col.key], item) : String(item[col.key] ?? '')}
