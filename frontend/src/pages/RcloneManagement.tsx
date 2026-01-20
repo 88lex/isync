@@ -19,6 +19,7 @@ import { Card } from '../components/Card';
 import { DataTable, ColumnConfig } from '../components/ui/DataTable';
 import { useSortableData } from '../hooks/useSortableData';
 import { useIsyncData } from '../contexts/IsyncDataContext';
+import { CacheStatus } from '../components/CacheStatus';
 // Consolidated lucide-react imports above
 
 const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:8000/api';
@@ -30,8 +31,8 @@ interface RcloneRemote {
 }
 
 const RcloneManagement: React.FC = () => {
-    const { rcloneManager, setRcloneManager } = useIsyncData();
-    const { source, servers, selectedServer, remotes, searchFilter, statusFilter } = rcloneManager;
+    const { rcloneManager, setRcloneManager, setCached } = useIsyncData();
+    const { source, servers, selectedServer, remotes, searchFilter, statusFilter, lastUpdated } = rcloneManager;
 
     const [loading, setLoading] = useState(remotes.length === 0);
     const [message, setMessage] = useState('');
@@ -123,6 +124,9 @@ const RcloneManagement: React.FC = () => {
             } else {
                 setRemotes([]);
             }
+            // Persist to cache
+            const contextKey = source === 'local' ? 'local' : selectedServer;
+            setCached('rclone_remotes', contextKey, remotes, source === 'local' ? 'local_rclone' : `ssh_${selectedServer}`);
         } catch (e: any) {
             console.error(e);
             setMessage(`Error: ${e.message} `);
@@ -435,6 +439,13 @@ const RcloneManagement: React.FC = () => {
                         Refresh
                     </button>
 
+                    <CacheStatus
+                        dataType="rclone_remotes"
+                        contextKey={source === 'local' ? 'local' : selectedServer}
+                        onRefresh={() => loadRemotes(true)}
+                        compact
+                    />
+
                     <button
                         onClick={handleBulkExclude}
                         disabled={selectedItems.size === 0}
@@ -647,7 +658,7 @@ const RcloneManagement: React.FC = () => {
                                         {source === 'local' ? (
                                             <>
                                                 <button
-                                                    onClick={(e) => { e.stopPropagation(); handleEdit(item); }}
+                                                    onClick={(e) => { e.stopPropagation(); handleEdit(item as RcloneRemote); }}
                                                     className="p-1.5 text-zinc-400 hover:text-white hover:bg-zinc-700 rounded transition"
                                                     title="Edit Config"
                                                 >

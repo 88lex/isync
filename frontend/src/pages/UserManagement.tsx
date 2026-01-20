@@ -9,13 +9,18 @@ import { PageHeader } from '../components/PageHeader';
 import { Dropdown } from '../components/Dropdown';
 import { DataTable, ColumnConfig } from '../components/ui/DataTable';
 import { useDataTable } from '../hooks/useDataTable';
+import { CacheStatus } from '../components/CacheStatus';
+import { useIsyncData } from '../contexts/IsyncDataContext';
 
 const UserManagement = () => {
+    const { getCached, setCached } = useIsyncData();
     const [config, setConfig] = useState<Config>({});
     const [selectedDomains, setSelectedDomains] = useState<Set<string>>(() => {
         const saved = sessionStorage.getItem(SESSION_KEYS.SELECTED_DOMAINS);
         return saved ? new Set(JSON.parse(saved)) : new Set();
     });
+
+    // Use cached users or fallback to session storage
     const [users, setUsers] = useState<any[]>(() => {
         const saved = sessionStorage.getItem(SESSION_KEYS.USERS);
         return saved ? JSON.parse(saved) : [];
@@ -202,6 +207,11 @@ const UserManagement = () => {
                 }
             }
             setUsers(allUsers);
+            // Persist to cache for each domain
+            for (const domain of Array.from(selectedDomains)) {
+                const domainUsers = allUsers.filter(u => u._sourceDomain === domain);
+                setCached('users', domain, domainUsers, 'google_workspace_api');
+            }
             if (errors.length > 0) alert(`Loaded with errors:\n${errors.join("\n")}`);
             else setOpStatus(`Loaded ${allUsers.length} users from ${selectedDomains.size} domains.`);
         } catch (e: any) {
@@ -323,10 +333,20 @@ const UserManagement = () => {
                         />
                     </div>
 
-                    <button onClick={fetchUsers} disabled={loadingUsers} className="bg-indigo-600 hover:bg-indigo-500 text-white font-bold py-2 px-4 rounded-lg transition flex items-center justify-center gap-2 shadow-lg shadow-indigo-900/20">
-                        {loadingUsers ? <RefreshCw className="animate-spin" size={18} /> : <Terminal size={18} />}
-                        {loadingUsers ? "Fetching..." : "List Users"}
-                    </button>
+                    <div className="flex items-center gap-3">
+                        <button onClick={fetchUsers} disabled={loadingUsers} className="bg-indigo-600 hover:bg-indigo-500 text-white font-bold py-2 px-4 rounded-lg transition flex items-center justify-center gap-2 shadow-lg shadow-indigo-900/20">
+                            {loadingUsers ? <RefreshCw className="animate-spin" size={18} /> : <Terminal size={18} />}
+                            {loadingUsers ? "Fetching..." : "List Users"}
+                        </button>
+                        {selectedDomains.size === 1 && (
+                            <CacheStatus
+                                dataType="users"
+                                contextKey={Array.from(selectedDomains)[0]}
+                                onRefresh={fetchUsers}
+                                compact
+                            />
+                        )}
+                    </div>
                 </div>
 
                 {opStatus && (

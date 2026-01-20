@@ -15,6 +15,7 @@ from backend.routers.batch_groups import router as batch_groups_router
 from backend.routers.crontab import router as crontab_router
 from backend.routers.rclone import router as rclone_router
 from backend.routers.keys import router as keys_router
+from backend.routers.cache import router as cache_router
 
 # Export all routers for easy import in main.py
 __all__ = [
@@ -31,4 +32,5 @@ __all__ = [
     "crontab_router",
     "rclone_router",
     "keys_router",
+    "cache_router",
 ]

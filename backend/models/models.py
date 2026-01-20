@@ -111,3 +111,18 @@ class NodeStats(Base):
     
     last_updated = Column(DateTime, nullable=True)
     is_calculating = Column(Boolean, default=False)
+
+
+class DataCache(Base):
+    """
+    Generic cache for storing fetched data with timestamps.
+    Enables local-first data access with manual refresh control.
+    """
+    __tablename__ = "data_cache"
+
+    id = Column(String(200), primary_key=True)  # e.g., 'users_domain_example.com'
+    data_type = Column(String(50), nullable=False, index=True)  # 'users', 'remotes', 'drives', etc.
+    context_key = Column(String(100), nullable=False, index=True)  # 'domain_example.com', 'server_abc123', 'local'
+    payload = Column(Text, nullable=False)  # JSON blob of the data
+    fetched_at = Column(DateTime, default=datetime.utcnow)
+    source_info = Column(String(200), nullable=True)  # Optional: origin info
