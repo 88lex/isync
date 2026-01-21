@@ -257,8 +257,15 @@ const WorkspaceManager = () => {
 
     const fetchAll = async (domain = selectedDomain, force = false) => {
         if (!domain) return;
-        if (!force && workspaceCache.hasData) return;
 
+        // Skip redundant network scans if we have data or are already loading it.
+        // workspaceCache.lastFetched indicates that the backend has a cached version available.
+        if (!force && (workspaceCache.hasData || workspaceCache.isLoading || workspaceCache.lastFetched)) {
+            console.log(`[WorkspaceManager] Skipping network scan for ${domain} as cache metadata exists.`);
+            return;
+        }
+
+        console.log(`[WorkspaceManager] Initiating network scan for ${domain}...`);
         setIsScanning(true);
         setCacheLoading('workspace_summary', domain, true);
         try {
