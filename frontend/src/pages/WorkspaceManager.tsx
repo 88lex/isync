@@ -11,6 +11,7 @@ import {
     fetchWorkspaceSummary,
     WorkspaceSummary,
     fetchSharedDriveStats,
+    fetchStorageOverview,
     triggerStorageAudit,
     scheduleStorageAudit,
     SSHServer
