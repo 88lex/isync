@@ -32,6 +32,8 @@ import {
 } from '../api';
 import { DataTable, ColumnConfig } from '../components/ui/DataTable';
 import { useDataTable } from '../hooks/useDataTable';
+import { useIsyncData, useCacheStatus } from '../contexts/IsyncDataContext';
+import { CacheStatus } from '../components/CacheStatus';
 
 // Common cron presets
 const CRON_PRESETS = [
@@ -72,14 +74,23 @@ const SchedulesPage: React.FC<SchedulesPageProps> = ({ activeSection }) => {
     const [formDryRun, setFormDryRun] = useState(false);
     const [formSubmitting, setFormSubmitting] = useState(false);
 
+    // Data Context
+    const { setCached, setLoading: setCacheLoading } = useIsyncData();
+    const serverCache = useCacheStatus('ssh_servers');
+    const fileCache = useCacheStatus('batch_files');
+    const groupCache = useCacheStatus('batch_groups');
+
     // Remote Crontab State
-    const [showRemoteSection, setShowRemoteSection] = useState(true);
-    const [servers, setServers] = useState<SSHServer[]>([]);
     const [selectedServer, setSelectedServer] = useState<SSHServer | null>(null);
-    const [serverCrontab, setServerCrontab] = useState<CrontabConfig | null>(null);
+    const crontabCache = useCacheStatus('crontab_entries', selectedServer?.id || 'none');
+
+    const servers = serverCache.data as SSHServer[];
+    const savedBatches = fileCache.data as BatchFile[];
+    const batchGroups = groupCache.data as BatchGroup[];
+    const serverCrontab = crontabCache.data[0] as any; // The whole config is cached as the first element of an array
+
+    const [showRemoteSection, setShowRemoteSection] = useState(true);
     const [cronPresets, setCronPresets] = useState<CronPreset[]>([]);
-    const [savedBatches, setSavedBatches] = useState<BatchFile[]>([]);
-    const [batchGroups, setBatchGroups] = useState<BatchGroup[]>([]);
     const [remoteCronLoading, setRemoteCronLoading] = useState(false);
 
     // New crontab entry form
@@ -89,30 +100,57 @@ const SchedulesPage: React.FC<SchedulesPageProps> = ({ activeSection }) => {
     const [cronEntryCron, setCronEntryCron] = useState('0 0 * * *');
     const [cronEntryAnnotation, setCronEntryAnnotation] = useState('');
 
-    const loadRemoteData = async () => {
+    const loadRemoteData = async (force: boolean = false) => {
+        await Promise.all([
+            loadServers(force),
+            loadSavedBatches(force),
+            loadBatchGroups(force),
+            loadCronPresets()
+        ]);
+    };
+
+    const loadServers = async (force: boolean = false) => {
+        if (!force && serverCache.hasData) return;
+        setCacheLoading('ssh_servers', 'local', true);
         try {
             const srvs = await fetchSSHServers();
-            setServers(srvs || []);
+            setCached('ssh_servers', 'local', srvs, 'ssh_api');
         } catch (e) { console.error('Failed to load servers', e); }
+        finally { setCacheLoading('ssh_servers', 'local', false); }
+    };
 
+    const loadCronPresets = async () => {
         try {
             const presets = await getCronPresets();
             setCronPresets(presets.presets || []);
         } catch (e) { console.error('Failed to load cron presets', e); }
-
-        try {
-            const batches = await listSavedBatches();
-            setSavedBatches(batches || []);
-        } catch (e) { console.error('Failed to load saved batches', e); }
-
-        try {
-            const groups = await listBatchGroups();
-            setBatchGroups(groups || []);
-        } catch (e) { console.error('Failed to load batch groups', e); }
     };
 
-    const loadServerCrontab = async (server: SSHServer) => {
+    const loadSavedBatches = async (force: boolean = false) => {
+        if (!force && fileCache.hasData) return;
+        setCacheLoading('batch_files', 'local', true);
+        try {
+            const batches = await listSavedBatches();
+            setCached('batch_files', 'local', batches, 'files_api');
+        } catch (e) { console.error('Failed to load saved batches', e); }
+        finally { setCacheLoading('batch_files', 'local', false); }
+    };
+
+    const loadBatchGroups = async (force: boolean = false) => {
+        if (!force && groupCache.hasData) return;
+        setCacheLoading('batch_groups', 'local', true);
+        try {
+            const groups = await listBatchGroups();
+            setCached('batch_groups', 'local', groups, 'groups_api');
+        } catch (e) { console.error('Failed to load batch groups', e); }
+        finally { setCacheLoading('batch_groups', 'local', false); }
+    };
+
+    const loadServerCrontab = async (server: SSHServer, force: boolean = false) => {
         setSelectedServer(server);
+        if (!force && crontabCache.hasData) return;
+
+        setCacheLoading('crontab_entries', server.id, true);
         setRemoteCronLoading(true);
         try {
             let config = await getServerCrontab(server.id);
@@ -120,11 +158,12 @@ const SchedulesPage: React.FC<SchedulesPageProps> = ({ activeSection }) => {
                 await initServerCrontab(server.id, server.name);
                 config = await getServerCrontab(server.id);
             }
-            setServerCrontab(config);
+            setCached('crontab_entries', server.id, [config], 'ssh_api');
         } catch (e: any) {
             console.error('Failed to load crontab', e);
         } finally {
             setRemoteCronLoading(false);
+            setCacheLoading('crontab_entries', server.id, false);
         }
     };
 

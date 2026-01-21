@@ -1757,3 +1757,289 @@ export const extractKeyAttributes = async (filename: string): Promise<KeyAttribu
     const res = await axios.post(`${API_BASE}/keys/${filename}/attributes`);
     return res.data;
 };
+
+// --- Workspace Manager ---
+
+// Domain information with verification status
+export interface WorkspaceDomain {
+    domain_name: string;
+    is_primary: boolean;
+    verified: boolean;
+    creation_time?: string;
+}
+
+// Domain alias information
+export interface WorkspaceDomainAlias {
+    alias: string;
+    parent_domain: string;
+    verified: boolean;
+    creation_time?: string;
+}
+
+// Admin user information
+export interface WorkspaceAdmin {
+    email: string;
+    name: string;
+    is_delegated: boolean;
+    is_super?: boolean;
+    last_login?: string;
+    suspended?: boolean;
+}
+
+// Custom admin role
+export interface WorkspaceCustomRole {
+    role_name: string;
+    role_id: string;
+    description: string;
+}
+
+export interface WorkspaceMetadata {
+    customer_id?: string;
+    customer_domain?: string;
+    primary_domain?: string;
+    org_id?: string;
+    domains?: WorkspaceDomain[];
+    domain_aliases?: WorkspaceDomainAlias[];
+    admins?: WorkspaceAdmin[];
+    custom_roles?: WorkspaceCustomRole[];
+    customer_creation_time?: string;
+    phone_number?: string;
+    postal_address?: any;
+    language?: string;
+    error?: string;
+}
+
+// User statistics
+export interface WorkspaceUserStats {
+    total: number;
+    active: number;
+    suspended: number;
+    archived: number;
+    never_logged_in: number;
+    active_last_30_days: number;
+}
+
+// Group settings
+export interface WorkspaceGroupSettings {
+    who_can_join?: string;
+    who_can_view_membership?: string;
+    who_can_view_group?: string;
+    who_can_post_message?: string;
+    allow_external_members?: boolean;
+    is_archived?: boolean;
+}
+
+// Group information
+export interface WorkspaceGroup {
+    id: string;
+    email: string;
+    name: string;
+    description: string;
+    direct_members: number;
+    admin_created?: boolean;
+    settings?: WorkspaceGroupSettings;
+}
+
+export interface WorkspaceInventory {
+    user_stats?: WorkspaceUserStats;
+    groups?: WorkspaceGroup[];
+    group_count?: number;
+    error?: string;
+}
+
+// Storage quota information
+export interface WorkspaceQuotaInfo {
+    total_quota_mb: number;
+    drive_used_mb: number;
+    gmail_used_mb: number;
+    total_used_mb: number;
+}
+
+// Drive activity metrics
+export interface WorkspaceDriveActivity {
+    items_created: number;
+    items_edited: number;
+    items_viewed: number;
+    items_shared_externally: number;
+    items_trashed: number;
+}
+
+export interface WorkspaceStorage {
+    date?: string;
+    usage?: Record<string, number>;
+    shared_drive_storage_mb?: number;
+    quota_info?: WorkspaceQuotaInfo;
+    activity?: WorkspaceDriveActivity;
+    status?: string;
+    message?: string;
+    error?: string;
+}
+
+// Shared Drive restrictions
+export interface SharedDriveRestrictions {
+    domain_users_only?: boolean;
+    drive_members_only?: boolean;
+    copy_requires_writer?: boolean;
+    admin_managed_restrictions?: boolean;
+    sharing_folders_requires_organizer?: boolean;
+}
+
+// Shared Drive permission
+export interface SharedDrivePermission {
+    id: string;
+    type: string;  // user, group, domain, anyone
+    email?: string;
+    role: string;  // organizer, fileOrganizer, writer, commenter, reader
+    display_name?: string;
+    deleted?: boolean;
+}
+
+// Shared Drive organizer
+export interface SharedDriveOrganizer {
+    email?: string;
+    name?: string;
+    type: string;
+}
+
+// Permission summary counts
+export interface SharedDrivePermissionSummary {
+    organizers: number;
+    file_organizers: number;
+    writers: number;
+    commenters: number;
+    readers: number;
+}
+
+// Shared Drive information
+export interface SharedDriveInfo {
+    id: string;
+    name: string;
+    created_time?: string;
+    hidden?: boolean;
+    theme_id?: string;
+    restrictions?: SharedDriveRestrictions;
+    permissions?: SharedDrivePermission[];
+    organizers?: SharedDriveOrganizer[];
+    permission_count?: number;
+    permission_summary?: SharedDrivePermissionSummary;
+    permissions_error?: string;
+    createdTime?: string; // Legacy compatibility
+    size_bytes?: number;
+    file_count?: number;
+    last_scanned?: string;
+}
+
+// Shared Drives summary stats
+export interface SharedDrivesSummary {
+    total_drives: number;
+    restricted_to_domain: number;
+    open_to_external: number;
+    total_organizers: number;
+    hidden_drives: number;
+}
+
+export interface WorkspaceDrives {
+    drives?: SharedDriveInfo[];
+    count?: number;
+    summary?: SharedDrivesSummary;
+    error?: string;
+}
+
+// Auth & Authorization check result
+export interface WorkspaceAuthCheck {
+    name: string;
+    status: 'active' | 'failed';
+    error: string | null;
+}
+
+// Auth & Authorization information
+export interface WorkspaceAuth {
+    service_account_email: string;
+    client_id: string;
+    project_id: string;
+    impersonating: string;
+    scopes: string[];
+    checks: WorkspaceAuthCheck[];
+    error?: string;
+}
+
+export interface WorkspaceSummary {
+    auth?: WorkspaceAuth;
+    metadata: WorkspaceMetadata;
+    inventory: WorkspaceInventory;
+    storage: WorkspaceStorage;
+    drives: WorkspaceDrives;
+}
+
+export interface SharedDriveStats {
+    id: number;
+    drive_id: string;
+    name: string;
+    size_bytes: number;
+    file_count: number;
+    last_scanned: string | null;
+}
+
+export interface AuditResponse {
+    status: string;
+    message: string;
+}
+
+export const fetchWorkspaceMetadata = async (domain: string): Promise<WorkspaceMetadata> => {
+    const res = await axios.get(`${API_BASE}/workspace/metadata`, { params: { domain } });
+    return res.data;
+};
+
+export const fetchWorkspaceInventory = async (domain: string): Promise<WorkspaceInventory> => {
+    const res = await axios.get(`${API_BASE}/workspace/inventory`, { params: { domain } });
+    return res.data;
+};
+
+export const fetchWorkspaceStorage = async (domain: string): Promise<WorkspaceStorage> => {
+    const res = await axios.get(`${API_BASE}/workspace/storage`, { params: { domain } });
+    return res.data;
+};
+
+export const fetchWorkspaceDrives = async (domain: string): Promise<WorkspaceDrives> => {
+    const res = await axios.get(`${API_BASE}/workspace/shared-drives`, { params: { domain } });
+    return res.data;
+};
+
+export const fetchWorkspaceSummary = async (domain: string): Promise<WorkspaceSummary> => {
+    const res = await axios.get(`${API_BASE}/workspace/summary`, { params: { domain } });
+    return res.data;
+};
+
+export interface DomainStats {
+    domain: string;
+    total_quota_gb: number;
+    total_used_gb: number;
+    user_count: number;
+    group_count: number;
+    last_updated: string;
+}
+
+export const fetchStorageOverview = async (): Promise<DomainStats[]> => {
+    const res = await axios.get(`${API_BASE}/workspace/storage-overview`);
+    return res.data;
+};
+
+export const fetchSharedDriveStats = async (): Promise<SharedDriveStats[]> => {
+    const res = await axios.get(`${API_BASE}/storage/shared-drives-stats`);
+    return res.data.drives;
+};
+
+export const triggerStorageAudit = async (req: { drive_id?: number, domain?: string, server_id?: string }): Promise<AuditResponse> => {
+    const res = await axios.post(`${API_BASE}/storage/audit`, req);
+    return res.data;
+};
+
+export const scheduleStorageAudit = async (req: { domain: string, server_id: string, cron_expression: string, name?: string }): Promise<any> => {
+    const res = await axios.post(`${API_BASE}/storage/schedule`, req);
+    return res.data;
+};
+
+export const calculatePathSize = async (req: { path: string, location_type: string, server_id?: string }): Promise<any> => {
+    const res = await axios.post(`${API_BASE}/storage/calculate-size`, req);
+    return res.data;
+};

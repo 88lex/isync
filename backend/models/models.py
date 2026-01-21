@@ -126,3 +126,22 @@ class DataCache(Base):
     payload = Column(Text, nullable=False)  # JSON blob of the data
     fetched_at = Column(DateTime, default=datetime.utcnow)
     source_info = Column(String(200), nullable=True)  # Optional: origin info
+
+class DomainStats(Base):
+    """
+    Relational cache for domain-wide statistics.
+    Enables rapid overview of multiple domains without hitting external APIs.
+    """
+    __tablename__ = "domain_stats"
+
+    domain = Column(String(100), primary_key=True)
+    
+    # Storage (in GB)
+    total_quota_gb = Column(Float, default=0.0)
+    total_used_gb = Column(Float, default=0.0)
+    
+    # Inventory
+    user_count = Column(Integer, default=0)
+    group_count = Column(Integer, default=0)
+    
+    last_updated = Column(DateTime, default=datetime.utcnow)

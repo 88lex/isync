@@ -18,11 +18,12 @@ import RemoteSync from './pages/RemoteSync';
 import RcloneManagement from './pages/RcloneManagement';
 import ManageExcluded from './pages/ManageExcluded';
 import KeyManager from './pages/KeyManager';
+import WorkspaceManager from './pages/WorkspaceManager';
 import { IsyncDataProvider } from './contexts/IsyncDataContext';
 import ErrorBoundary from './components/ErrorBoundary';
 import { ConfigStatusIndicator } from './components/ConfigStatusIndicator';
 
-type ViewType = 'users' | 'batch' | 'config' | 'sync' | 'history' | 'schedules' | 'servers' | 'drives' | 'prep' | 'remotesync' | 'rclone' | 'excluded' | 'keys';
+type ViewType = 'users' | 'batch' | 'config' | 'sync' | 'history' | 'schedules' | 'servers' | 'drives' | 'prep' | 'remotesync' | 'rclone' | 'excluded' | 'keys' | 'workspace';
 
 // Define navigation groups
 interface SubItem {
@@ -69,6 +70,7 @@ const navGroups: NavGroup[] = [
       { id: 'drives', label: 'Drive Manager', icon: HardDrive },
       { id: 'rclone', label: 'Rclone Manager', icon: HardDrive },
       { id: 'remotesync', label: 'Remote Sync', icon: ArrowLeftRight },
+      { id: 'workspace', label: 'Workspace Manager', icon: Activity },
       { id: 'keys', label: 'Manage JSONs', icon: Key },
       { id: 'excluded', label: 'Manage Excluded', icon: ShieldAlert },
     ]
@@ -104,7 +106,7 @@ function App() {
   const [view, setView] = useState<ViewType>(() => {
     const saved = localStorage.getItem(STORAGE_KEYS.VIEW);
     if (saved === 'manual' || saved === 'dashboard' || saved === 'monitor') return 'users';
-    const validViews: ViewType[] = ['users', 'batch', 'config', 'sync', 'history', 'schedules', 'servers', 'drives', 'prep', 'remotesync', 'rclone', 'excluded', 'keys'];
+    const validViews: ViewType[] = ['users', 'batch', 'config', 'sync', 'history', 'schedules', 'servers', 'drives', 'prep', 'remotesync', 'rclone', 'excluded', 'keys', 'workspace'];
     return validViews.includes(saved as ViewType) ? (saved as ViewType) : 'users';
   });
 
@@ -234,6 +236,7 @@ function App() {
               {view === 'remotesync' && <RemoteSync />}
               {view === 'rclone' && <RcloneManagement />}
               {view === 'keys' && <KeyManager />}
+              {view === 'workspace' && <WorkspaceManager />}
               {view === 'excluded' && <ManageExcluded />}
             </ErrorBoundary>
           </main>

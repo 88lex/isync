@@ -34,6 +34,8 @@ from backend.routers import (
     keys_router,
     cache_router,
     backup_router,
+    workspace_router,
+    storage_router,
 )
 
 logger = get_logger("isync.api")
@@ -79,6 +81,8 @@ app.include_router(rclone_router)
 app.include_router(keys_router)
 app.include_router(cache_router)
 app.include_router(backup_router)
+app.include_router(workspace_router)
+app.include_router(storage_router)
 
 
 from backend.database import init_db

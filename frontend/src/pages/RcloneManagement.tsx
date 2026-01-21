@@ -18,7 +18,7 @@ import { PageHeader } from '../components/PageHeader';
 import { Card } from '../components/Card';
 import { DataTable, ColumnConfig } from '../components/ui/DataTable';
 import { useSortableData } from '../hooks/useSortableData';
-import { useIsyncData } from '../contexts/IsyncDataContext';
+import { useIsyncData, useCacheStatus } from '../contexts/IsyncDataContext';
 import { CacheStatus } from '../components/CacheStatus';
 // Consolidated lucide-react imports above
 
@@ -31,8 +31,15 @@ interface RcloneRemote {
 }
 
 const RcloneManagement: React.FC = () => {
-    const { rcloneManager, setRcloneManager, setCached } = useIsyncData();
-    const { source, servers, selectedServer, remotes, searchFilter, statusFilter, lastUpdated } = rcloneManager;
+    const { rcloneManager, setRcloneManager, setCached, setLoading: setCacheLoading } = useIsyncData();
+    const { source, selectedServer, searchFilter, statusFilter } = rcloneManager;
+
+    const serverCache = useCacheStatus('ssh_servers');
+    const contextKey = source === 'local' ? 'local' : selectedServer;
+    const remoteCache = useCacheStatus('rclone_remotes', contextKey);
+
+    const servers = serverCache.data as SSHServer[];
+    const remotes = remoteCache.data as any[];
 
     const [loading, setLoading] = useState(remotes.length === 0);
     const [message, setMessage] = useState('');
@@ -96,42 +103,49 @@ const RcloneManagement: React.FC = () => {
         fetchConfig().then(c => setExcludedRemotes(c.excluded_remotes || [])).catch(console.error);
     }, [source, selectedServer]);
 
-    const loadServers = async () => {
+    const loadServers = async (force: boolean = false) => {
+        if (!force && serverCache.hasData) return;
+        setCacheLoading('ssh_servers', 'local', true);
         try {
             const s = await fetchSSHServers();
-            setServers(s);
-            if (s.length > 0) {
+            setCached('ssh_servers', 'local', s, 'ssh_api');
+            if (s.length > 0 && !selectedServer) {
                 setSelectedServer(s[0].id);
             }
         } catch (e) {
             console.error(e);
+        } finally {
+            setCacheLoading('ssh_servers', 'local', false);
         }
     };
 
     const loadRemotes = async (force: boolean = false) => {
-        if (!force && rcloneManager.lastUpdated > 0 && remotes.length > 0) return;
+        if (!force && remoteCache.hasData) return;
 
+        setCacheLoading('rclone_remotes', contextKey, true);
         setLoading(true);
         setSelectedItems(new Set());
 
         try {
+            let res;
             if (source === 'local') {
-                const res = await listRemotesWithFlags();
-                setRemotes(res.remotes);
+                res = await listRemotesWithFlags();
             } else if (selectedServer) {
-                const res = await listRemotesWithFlags(selectedServer);
-                setRemotes(res.remotes);
+                res = await listRemotesWithFlags(selectedServer);
             } else {
-                setRemotes([]);
+                res = { remotes: [] };
             }
-            // Persist to cache
-            const contextKey = source === 'local' ? 'local' : selectedServer;
-            setCached('rclone_remotes', contextKey, remotes, source === 'local' ? 'local_rclone' : `ssh_${selectedServer}`);
+
+            setCached('rclone_remotes', contextKey, res.remotes, source === 'local' ? 'local_rclone' : `ssh_${selectedServer}`);
+
+            // Legacy support sync
+            setRcloneManager(prev => ({ ...prev, remotes: res.remotes, lastUpdated: Date.now() }));
         } catch (e: any) {
             console.error(e);
             setMessage(`Error: ${e.message} `);
         } finally {
             setLoading(false);
+            setCacheLoading('rclone_remotes', contextKey, false);
         }
     };
 

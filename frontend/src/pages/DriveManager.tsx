@@ -16,7 +16,8 @@ import { Card } from '../components/Card';
 import { Dropdown } from '../components/Dropdown';
 import { useDataTable } from '../hooks/useDataTable';
 import { DataTable } from '../components/ui/DataTable';
-import { useIsyncData } from '../contexts/IsyncDataContext';
+import { useIsyncData, useCacheStatus } from '../contexts/IsyncDataContext';
+import { CacheStatus } from '../components/CacheStatus';
 
 // Collapsible Panel Component
 const Panel = ({
@@ -467,9 +468,6 @@ const DriveManager = () => {
     const [methodsAvailable, setMethodsAvailable] = useState<MethodsResponse | null>(null);
     const [sshServers, setSshServers] = useState<SSHServer[]>([]);
     const [knownGroups, setKnownGroups] = useState<string[]>([]);
-    const { driveManager, setDriveManager } = useIsyncData();
-    const localRemotes = driveManager.localRemotes;
-    const existingDrives = driveManager.drives;
 
     // Persistence - Load from Session Storage
     const [method, setMethod] = useState<DriveMethod>(() => {
@@ -492,6 +490,14 @@ const DriveManager = () => {
         const saved = sessionStorage.getItem(SESSION_KEYS.DRIVE_MANAGER_BUILDER_STATE);
         return saved ? JSON.parse(saved).gdriveRemote : '';
     });
+
+    const { setDriveManager, setCached, setLoading: setCacheLoading } = useIsyncData();
+    const domainKey = selectedDomain?.domain_name || 'unknown';
+    const driveCache = useCacheStatus('shared_drives', domainKey);
+    const remoteCache = useCacheStatus('rclone_remotes', 'local');
+
+    const localRemotes = remoteCache.data as RcloneRemote[];
+    const existingDrives = driveCache.data as DriveInfo[];
 
     // Builder state - Drive Names
     const [baseName, setBaseName] = useState(() => {
@@ -837,17 +843,19 @@ const DriveManager = () => {
 
     const refreshManagerData = async (force: boolean = false) => {
         if (!selectedDomain) return;
-        // If not forced and data exists and is relatively fresh (e.g. < 5 mins? or just exists), skip?
-        // User said "until a new scan ... is initiated".
-        // The buttons call this function.
-        // The useEffect calls this function.
-        // We will pass `force=true` from buttons, and `force=false` from useEffect.
-        if (!force && driveManager.lastUpdated > 0) return;
 
+        // If not forced and we already have data in cache, skip
+        if (!force && driveCache.hasData) return;
+
+        setCacheLoading('shared_drives', domainKey, true);
+        setCacheLoading('rclone_remotes', 'local', true);
         setExistingLoading(true);
+
         try {
             // Refresh Remotes
             const remotesRes = await listLocalRemotes().catch(e => ({ remotes: [] }));
+            setCached('rclone_remotes', 'local', remotesRes.remotes || [], 'rclone_api');
+
             // Refresh Drives
             const sa = serviceAccountFile || keys[0]?.path;
             const imp = impersonateEmail || selectedDomain?.admin_email;
@@ -860,6 +868,9 @@ const DriveManager = () => {
                 prefix: managerQuery || undefined
             });
 
+            setCached('shared_drives', domainKey, res.drives || [], 'google_api');
+
+            // Legacy support sync (optional but good for stability)
             setDriveManager(prev => ({
                 ...prev,
                 localRemotes: remotesRes.remotes || [],
@@ -869,8 +880,10 @@ const DriveManager = () => {
 
         } catch (e: any) {
             console.error(e);
-            setManualLog(`Refresh failed: ${e.message} `); // Optional log
+            setManualLog(`Refresh failed: ${e.message} `);
         } finally {
+            setCacheLoading('shared_drives', domainKey, false);
+            setCacheLoading('rclone_remotes', 'local', false);
             setExistingLoading(false);
         }
     };
@@ -1981,13 +1994,16 @@ const DriveManager = () => {
                             {/* Domain Selector */}
                             <div className="flex justify-between items-center mb-1 pr-1">
                                 <label className="text-xs font-bold text-zinc-500 uppercase tracking-wider">Domain</label>
-                                <button
-                                    onClick={() => refreshManagerData(true)}
-                                    className="text-zinc-500 hover:text-violet-400 transition-colors p-1"
-                                    title="Refresh Drives & Remotes"
-                                >
-                                    <RefreshCw size={12} className={existingLoading ? 'animate-spin' : ''} />
-                                </button>
+                                <div className="flex items-center gap-2">
+                                    <CacheStatus dataType="shared_drives" contextKey={domainKey} onRefresh={() => refreshManagerData(true)} />
+                                    <button
+                                        onClick={() => refreshManagerData(true)}
+                                        className="text-zinc-500 hover:text-violet-400 transition-colors p-1"
+                                        title="Refresh Drives & Remotes"
+                                    >
+                                        <RefreshCw size={12} className={existingLoading ? 'animate-spin' : ''} />
+                                    </button>
+                                </div>
                             </div>
                             <select
                                 value={selectedDomain?.domain_name || ''}

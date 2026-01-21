@@ -31,9 +31,11 @@ class ScheduledJob:
         domain_reference: Optional[str] = None,
         dry_run: bool = False,
         enabled: bool = True,
-        created_at: Optional[datetime] = None,
         last_run: Optional[datetime] = None,
-        next_run: Optional[datetime] = None
+        next_run: Optional[datetime] = None,
+        job_type: str = "sync", # or "task"
+        task_name: Optional[str] = None,
+        task_args: Optional[Dict[str, Any]] = None
     ):
         self.id = id
         self.name = name
@@ -46,6 +48,9 @@ class ScheduledJob:
         self.created_at = created_at or datetime.utcnow()
         self.last_run = last_run
         self.next_run = next_run
+        self.job_type = job_type
+        self.task_name = task_name
+        self.task_args = task_args or {}
     
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -60,6 +65,9 @@ class ScheduledJob:
             "created_at": self.created_at.isoformat() if self.created_at else None,
             "last_run": self.last_run.isoformat() if self.last_run else None,
             "next_run": self.next_run.isoformat() if self.next_run else None,
+            "job_type": self.job_type,
+            "task_name": self.task_name,
+            "task_args": self.task_args,
         }
     
     @classmethod
@@ -173,8 +181,28 @@ class ISyncScheduler:
         job.last_run = datetime.utcnow()
         self._save_metadata()
         
-        # Execute via job manager if available
-        if self.job_manager:
+        if job.job_type == "task":
+            if job.task_name == "storage_audit":
+                from backend.storage_service import StorageAuditService
+                logger.info(f"[Scheduler] Executing Storage Audit task for {job.domain_reference}")
+                try:
+                    # Run the async audit in a synchronous wrapper since APScheduler uses threads
+                    import asyncio
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+                    loop.run_until_complete(
+                        StorageAuditService.audit_all_drives_for_domain(
+                            job.domain_reference or "all", 
+                            job.task_args.get("server_id", "local")
+                        )
+                    )
+                    loop.close()
+                except Exception as e:
+                    logger.error(f"[Scheduler] Storage Audit failed: {e}")
+            else:
+                logger.warning(f"[Scheduler] Unknown task type: {job.task_name}")
+        
+        elif self.job_manager:
             try:
                 pair = {
                     "source": job.source,
@@ -194,7 +222,10 @@ class ISyncScheduler:
         dest: str,
         cron_expression: str,
         domain_reference: Optional[str] = None,
-        dry_run: bool = False
+        dry_run: bool = False,
+        job_type: str = "sync",
+        task_name: Optional[str] = None,
+        task_args: Optional[Dict[str, Any]] = None
     ) -> ScheduledJob:
         """
         Add a new scheduled job.
@@ -228,7 +259,10 @@ class ISyncScheduler:
             cron_expression=cron_expression,
             domain_reference=domain_reference,
             dry_run=dry_run,
-            enabled=True
+            enabled=True,
+            job_type=job_type,
+            task_name=task_name,
+            task_args=task_args
         )
         
         # Add to APScheduler

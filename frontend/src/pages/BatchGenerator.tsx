@@ -10,6 +10,8 @@ import {
     getGroupScript, regenerateBatch, getSyncPairsWithBatches, bulkGenerateBatches, SyncPairWithBatch,
     checkGroupRemote, pullGroupRemote, deleteGroupRemote
 } from '../api';
+import { useIsyncData, useCacheStatus } from '../contexts/IsyncDataContext';
+import { CacheStatus } from '../components/CacheStatus';
 import { SESSION_KEYS } from '../constants/storageKeys';
 import { PageHeader } from '../components/PageHeader';
 import { Card } from '../components/Card';
@@ -36,9 +38,20 @@ const BatchGenerator: React.FC<BatchGeneratorProps> = ({ activeSection }) => {
         }
     }, [activeSection]);
 
-    // Data State
+    // Data Context
+    const { setCached, setLoading: setCacheLoading } = useIsyncData();
+    const pairCache = useCacheStatus('sync_pairs');
+    const fileCache = useCacheStatus('batch_files');
+    const groupCache = useCacheStatus('batch_groups');
+    const serverCache = useCacheStatus('ssh_servers');
+
+    const unifiedPairs = pairCache.data as SyncPairWithBatch[];
+    const savedBatches = fileCache.data as BatchFile[];
+    const batchGroups = groupCache.data as BatchGroup[];
+    const sshServers = serverCache.data as SSHServer[];
+
+    // Config State
     const [config, setConfig] = useState<Config>({});
-    const [unifiedPairs, setUnifiedPairs] = useState<SyncPairWithBatch[]>([]);
 
     // Shared States
     const [selectedUsers] = useState<Set<string>>(() => {
@@ -78,7 +91,6 @@ const BatchGenerator: React.FC<BatchGeneratorProps> = ({ activeSection }) => {
     const [saving, setSaving] = useState(false);
 
     // Saved Batches State
-    const [savedBatches, setSavedBatches] = useState<BatchFile[]>([]);
     const [batchContentCache, setBatchContentCache] = useState<Record<string, string>>({});
     const [remoteStatusCache, setRemoteStatusCache] = useState<Record<string, Record<string, boolean>>>({});
     const [batchOperationLoading, setBatchOperationLoading] = useState<string | null>(null);
@@ -110,7 +122,6 @@ const BatchGenerator: React.FC<BatchGeneratorProps> = ({ activeSection }) => {
     const [randomBatchResult, setRandomBatchResult] = useState<RandomBatchResponse | null>(null);
 
     // Groups
-    const [batchGroups, setBatchGroups] = useState<BatchGroup[]>([]);
     const [showCreateGroupModal, setShowCreateGroupModal] = useState(false);
     const [newGroupName, setNewGroupName] = useState('');
     const [newGroupDescription, setNewGroupDescription] = useState('');
@@ -122,7 +133,6 @@ const BatchGenerator: React.FC<BatchGeneratorProps> = ({ activeSection }) => {
     const [groupOperationLoading, setGroupOperationLoading] = useState<string | null>(null);
 
     // SSH
-    const [sshServers, setSshServers] = useState<SSHServer[]>([]);
     const [showPushModal, setShowPushModal] = useState(false);
     const [pushTargetType, setPushTargetType] = useState<'batch' | 'group'>('batch');
     const [pushTargetIds, setPushTargetIds] = useState<string[]>([]);
@@ -139,38 +149,59 @@ const BatchGenerator: React.FC<BatchGeneratorProps> = ({ activeSection }) => {
     useEffect(() => { localStorage.setItem('isync_random_order', String(randomOrder)); }, [randomOrder]);
 
     // Initial Load
-    const loadData = async () => {
-        const c = await fetchConfig();
-        setConfig(c);
-        await loadBatchGroups();
-        await loadUnifiedPairs();
+    const loadData = async (force: boolean = false) => {
+        try {
+            const c = await fetchConfig();
+            setConfig(c);
+        } catch (e) { console.error('Failed to load config', e); }
+
+        await Promise.all([
+            loadUnifiedPairs(force),
+            loadSavedBatches(force),
+            loadBatchGroups(force),
+            loadServers(force)
+        ]);
+    };
+
+    const loadServers = async (force: boolean = false) => {
+        if (!force && serverCache.hasData) return;
+        setCacheLoading('ssh_servers', 'local', true);
         try {
             const s = await fetchSSHServers();
-            setSshServers(s);
+            setCached('ssh_servers', 'local', s, 'ssh_api');
             if (s.length > 0) setSelectedServerId(s[0].id);
         } catch (e) { console.error(e) }
-        await loadSavedBatches();
+        finally { setCacheLoading('ssh_servers', 'local', false); }
     };
 
-    const loadUnifiedPairs = async () => {
+    const loadUnifiedPairs = async (force: boolean = false) => {
+        if (!force && pairCache.hasData) return;
+        setCacheLoading('sync_pairs', 'local', true);
         try {
             const data = await getSyncPairsWithBatches();
-            setUnifiedPairs(data.pairs);
+            setCached('sync_pairs', 'local', data.pairs, 'config_api');
         } catch (e) { console.error('Failed to load unified pairs', e); }
+        finally { setCacheLoading('sync_pairs', 'local', false); }
     };
 
-    const loadSavedBatches = async () => {
+    const loadSavedBatches = async (force: boolean = false) => {
+        if (!force && fileCache.hasData) return;
+        setCacheLoading('batch_files', 'local', true);
         try {
             const files = await listSavedBatches();
-            setSavedBatches(files);
+            setCached('batch_files', 'local', files, 'files_api');
         } catch (e) { console.error('Failed to load saved batches', e); }
+        finally { setCacheLoading('batch_files', 'local', false); }
     };
 
-    const loadBatchGroups = async () => {
+    const loadBatchGroups = async (force: boolean = false) => {
+        if (!force && groupCache.hasData) return;
+        setCacheLoading('batch_groups', 'local', true);
         try {
             const groups = await listBatchGroups();
-            setBatchGroups(groups);
+            setCached('batch_groups', 'local', groups, 'groups_api');
         } catch (e) { console.error('Failed to load batch groups', e); }
+        finally { setCacheLoading('batch_groups', 'local', false); }
     };
 
     useEffect(() => { loadData(); }, []);

@@ -15,10 +15,15 @@ import {
 import { PageHeader } from '../components/PageHeader';
 import { Card } from '../components/Card';
 import { useDataTable } from '../hooks/useDataTable';
+import { useIsyncData, useCacheStatus } from '../contexts/IsyncDataContext';
+import { CacheStatus } from '../components/CacheStatus';
 
 const RemoteServers = () => {
-    const [servers, setServers] = useState<SSHServer[]>([]);
-    const [loading, setLoading] = useState(true);
+    const { setCached, setLoading: setCacheLoading } = useIsyncData();
+    const serverCache = useCacheStatus('ssh_servers');
+    const servers = serverCache.data as SSHServer[];
+    const loading = serverCache.isLoading;
+    const [localLoading, setLocalLoading] = useState(false);
     const [showAddModal, setShowAddModal] = useState(false);
     const [editingServer, setEditingServer] = useState<SSHServer | null>(null);
     const [serverStatuses, setServerStatuses] = useState<Record<string, SSHServerStatus>>({});
@@ -95,15 +100,17 @@ const RemoteServers = () => {
         loadServers();
     }, []);
 
-    const loadServers = async () => {
-        setLoading(true);
+    const loadServers = async (force: boolean = false) => {
+        if (!force && serverCache.hasData) return;
+
+        setCacheLoading('ssh_servers', 'local', true);
         try {
             const data = await fetchSSHServers();
-            setServers(data);
+            setCached('ssh_servers', 'local', data, 'ssh_api');
         } catch (e) {
             console.error('Failed to load servers', e);
         } finally {
-            setLoading(false);
+            setCacheLoading('ssh_servers', 'local', false);
         }
     };
 
@@ -486,6 +493,19 @@ const RemoteServers = () => {
                                     </button>
                                 </>
                             )}
+                            <button
+                                onClick={() => loadServers(true)}
+                                className="text-zinc-500 hover:text-cyan-400 transition-colors p-1"
+                                title="Refresh Servers List"
+                            >
+                                <RefreshCw size={14} className={loading && !servers.length ? 'animate-spin' : ''} />
+                            </button>
+
+                            <CacheStatus
+                                dataType="ssh_servers"
+                                contextKey="local"
+                                onRefresh={() => loadServers(true)}
+                            />
                         </>
                     )}
                 </div>

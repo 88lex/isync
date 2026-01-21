@@ -28,11 +28,13 @@ export function useSortableData<T extends Record<string, any>>({
             if (aVal == null) return 1;
             if (bVal == null) return -1;
 
-            // Convert to strings for comparison
-            const aStr = String(aVal);
-            const bStr = String(bVal);
+            let comparison = 0;
+            if (typeof aVal === 'number' && typeof bVal === 'number') {
+                comparison = aVal - bVal;
+            } else {
+                comparison = String(aVal).localeCompare(String(bVal));
+            }
 
-            const comparison = aStr.localeCompare(bStr);
             return sortDirection === 'asc' ? comparison : -comparison;
         });
     }, [data, sortColumn, sortDirection]);

@@ -25,7 +25,9 @@ export type DataType =
     | 'batch_files'
     | 'batch_groups'
     | 'schedules'
-    | 'crontab_entries';
+    | 'crontab_entries'
+    | 'workspace_summary'
+    | 'storage_overview';
 
 export interface CacheState {
     users: Record<string, CacheEntry<any>>;            // Keyed by domain
@@ -38,6 +40,8 @@ export interface CacheState {
     batch_groups: CacheEntry<any>;                     // Singleton
     schedules: CacheEntry<any>;                        // Singleton
     crontab_entries: Record<string, CacheEntry<any>>;  // Keyed by server ID
+    workspace_summary: Record<string, CacheEntry<any>>;// Keyed by domain
+    storage_overview: CacheEntry<any>;                 // Singleton
 }
 
 interface IsyncDataContextType {
@@ -52,6 +56,7 @@ interface IsyncDataContextType {
     setDriveManager: React.Dispatch<React.SetStateAction<{ drives: any[]; localRemotes: any[]; lastUpdated: number }>>;
     rcloneManager: any;
     setRcloneManager: React.Dispatch<React.SetStateAction<any>>;
+    loadPayload: (dataType: DataType, contextKey?: string) => Promise<void>;
 }
 
 // --- Initial State ---
@@ -73,6 +78,8 @@ const initialCacheState: CacheState = {
     batch_groups: createEmptyEntry(),
     schedules: createEmptyEntry(),
     crontab_entries: {},
+    workspace_summary: {},
+    storage_overview: createEmptyEntry(),
 };
 
 // --- Context ---
@@ -104,12 +111,14 @@ export const IsyncDataProvider: React.FC<{ children: ReactNode }> = ({ children 
                 // Populate cache state from backend
                 setCache(prev => {
                     const newCache = { ...prev };
+                    const singletonTypes = ['ssh_servers', 'keys', 'sync_pairs', 'batch_files', 'batch_groups', 'schedules', 'storage_overview'];
+
                     entries.forEach((entry: any) => {
                         const { data_type, context_key, payload_size } = entry;
-                        // We just mark that we have data; actual payload is fetched on demand
                         if (payload_size > 0) {
-                            // For keyed types
-                            if (['users', 'rclone_remotes', 'shared_drives', 'crontab_entries'].includes(data_type)) {
+                            if (singletonTypes.includes(data_type)) {
+                                (newCache as any)[data_type] = { data: [], lastFetched: Date.now(), isLoading: false };
+                            } else if (['users', 'rclone_remotes', 'shared_drives', 'crontab_entries', 'workspace_summary'].includes(data_type)) {
                                 (newCache as any)[data_type] = {
                                     ...(newCache as any)[data_type],
                                     [context_key]: { data: [], lastFetched: Date.now(), isLoading: false }
@@ -132,8 +141,8 @@ export const IsyncDataProvider: React.FC<{ children: ReactNode }> = ({ children 
         const typeData = (cache as any)[dataType];
         if (!typeData) return null;
 
-        // Singleton types
-        if (['ssh_servers', 'keys', 'sync_pairs', 'batch_files', 'batch_groups', 'schedules'].includes(dataType)) {
+        const singletonTypes = ['ssh_servers', 'keys', 'sync_pairs', 'batch_files', 'batch_groups', 'schedules', 'storage_overview'];
+        if (singletonTypes.includes(dataType)) {
             return typeData as CacheEntry<T>;
         }
 
@@ -147,8 +156,8 @@ export const IsyncDataProvider: React.FC<{ children: ReactNode }> = ({ children 
         setCache(prev => {
             const newCache = { ...prev };
 
-            // Singleton types
-            if (['ssh_servers', 'keys', 'sync_pairs', 'batch_files', 'batch_groups', 'schedules'].includes(dataType)) {
+            const singletonTypes = ['ssh_servers', 'keys', 'sync_pairs', 'batch_files', 'batch_groups', 'schedules', 'storage_overview'];
+            if (singletonTypes.includes(dataType)) {
                 (newCache as any)[dataType] = { data, lastFetched: now, isLoading: false };
             } else {
                 // Keyed types
@@ -171,8 +180,9 @@ export const IsyncDataProvider: React.FC<{ children: ReactNode }> = ({ children 
     const setLoading = useCallback((dataType: DataType, contextKey: string, isLoading: boolean) => {
         setCache(prev => {
             const newCache = { ...prev };
+            const singletonTypes = ['ssh_servers', 'keys', 'sync_pairs', 'batch_files', 'batch_groups', 'schedules', 'storage_overview'];
 
-            if (['ssh_servers', 'keys', 'sync_pairs', 'batch_files', 'batch_groups', 'schedules'].includes(dataType)) {
+            if (singletonTypes.includes(dataType)) {
                 (newCache as any)[dataType] = { ...(newCache as any)[dataType], isLoading };
             } else {
                 const existing = (newCache as any)[dataType][contextKey] || createEmptyEntry();
@@ -186,11 +196,46 @@ export const IsyncDataProvider: React.FC<{ children: ReactNode }> = ({ children 
         });
     }, []);
 
+    const loadPayload = useCallback(async (dataType: DataType, contextKey: string = 'local') => {
+        const singletonTypes = ['ssh_servers', 'keys', 'sync_pairs', 'batch_files', 'batch_groups', 'schedules', 'storage_overview'];
+
+        // Don't load if already loading
+        const current = getCached(dataType, contextKey);
+        if (current?.isLoading || (current?.data && current.data.length > 0)) return;
+
+        setLoading(dataType, contextKey, true);
+        try {
+            const res = await axios.get(`${API_BASE}/cache/${dataType}/${contextKey}`);
+            if (res.data && res.data.payload) {
+                const payload = res.data.payload;
+                const data = Array.isArray(payload) ? payload : [payload];
+                const fetchedAt = new Date(res.data.fetched_at).getTime();
+
+                setCache(prev => {
+                    const newCache = { ...prev };
+                    if (singletonTypes.includes(dataType)) {
+                        (newCache as any)[dataType] = { data, lastFetched: fetchedAt, isLoading: false };
+                    } else {
+                        (newCache as any)[dataType] = {
+                            ...(newCache as any)[dataType],
+                            [contextKey]: { data, lastFetched: fetchedAt, isLoading: false }
+                        };
+                    }
+                    return newCache;
+                });
+            }
+        } catch (e) {
+            console.error(`Failed to load payload for ${dataType}/${contextKey}`, e);
+        } finally {
+            setLoading(dataType, contextKey, false);
+        }
+    }, [getCached, setLoading]);
+
     const invalidate = useCallback((dataType: DataType, contextKey?: string) => {
         setCache(prev => {
             const newCache = { ...prev };
 
-            if (['ssh_servers', 'keys', 'sync_pairs', 'batch_files', 'batch_groups', 'schedules'].includes(dataType)) {
+            if (['ssh_servers', 'keys', 'sync_pairs', 'batch_files', 'batch_groups', 'schedules', 'storage_overview'].includes(dataType)) {
                 (newCache as any)[dataType] = createEmptyEntry();
             } else if (contextKey) {
                 const typeData = { ...(newCache as any)[dataType] };
@@ -234,6 +279,7 @@ export const IsyncDataProvider: React.FC<{ children: ReactNode }> = ({ children 
             setDriveManager,
             rcloneManager,
             setRcloneManager,
+            loadPayload,
         }}>
             {children}
         </IsyncDataContext.Provider>
@@ -252,9 +298,16 @@ export const useIsyncData = () => {
 
 // --- Utility Hook for Cache Status ---
 
-export const useCacheStatus = (dataType: DataType, contextKey: string = 'local') => {
-    const { getCached, setLoading } = useIsyncData();
-    const entry = getCached(dataType, contextKey);
+export const useCacheStatus = <T,>(dataType: DataType, contextKey: string = 'local') => {
+    const { getCached, loadPayload } = useIsyncData();
+    const entry = getCached<T>(dataType, contextKey);
+
+    useEffect(() => {
+        // If we have a hint that data exists (lastFetched is set) but no actual data in memory, load it
+        if (entry && entry.lastFetched && (!entry.data || entry.data.length === 0) && !entry.isLoading) {
+            loadPayload(dataType, contextKey);
+        }
+    }, [dataType, contextKey, entry?.lastFetched, entry?.data?.length, entry?.isLoading, loadPayload]);
 
     const getTimeAgo = (timestamp: number | null): string => {
         if (!timestamp) return 'Never';
