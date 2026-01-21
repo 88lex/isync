@@ -74,6 +74,60 @@ async def get_cache_entry(
     cache_id = f"{data_type}_{context_key}"
     entry = db.query(DataCache).filter(DataCache.id == cache_id).first()
     
+    # --- Auto-Populate on Miss ---
+    if not entry:
+        payload = None
+        source_info = "auto-populated"
+        try:
+            # 1. Sync Pairs
+            if data_type == 'sync_pairs' and context_key == 'local':
+                from backend.repositories.sync_pairs import SyncPairRepository
+                payload = SyncPairRepository(db).list_all()
+                
+            # 2. SSH Servers
+            elif data_type == 'ssh_servers' and context_key == 'local':
+                from backend.repositories.ssh_servers import SSHServerRepository
+                payload = SSHServerRepository(db).list_all()
+
+            # 3. Batch Files
+            elif data_type == 'batch_files' and context_key == 'local':
+                from backend.routers.jobs import list_saved_batches
+                res = list_saved_batches()
+                payload = res.get("files", []) if isinstance(res, dict) else []
+
+            # 4. Batch Groups
+            elif data_type == 'batch_groups' and context_key == 'local':
+                from backend.routers.batch_groups import list_batch_groups
+                payload = list_batch_groups(db=db)
+
+            # 5. Rclone Remotes (Local)
+            elif data_type == 'rclone_remotes' and context_key == 'local':
+                from backend.routers.rclone import list_local_remotes
+                res = list_local_remotes()
+                payload = res.get("remotes", []) if isinstance(res, dict) else []
+                
+        except Exception as e:
+            # Log failure but continue (return None => 404/Empty)
+            print(f"Failed to auto-populate cache for {cache_id}: {e}")
+            pass
+
+        if payload is not None:
+            # Create and Save Cache Entry
+            now = datetime.utcnow()
+            payload_json = json.dumps(payload)
+            entry = DataCache(
+                id=cache_id,
+                data_type=data_type,
+                context_key=context_key,
+                payload=payload_json,
+                fetched_at=now,
+                source_info=source_info
+            )
+            db.add(entry)
+            db.commit()
+            db.refresh(entry)
+            
+    # Re-check entry
     if not entry:
         return None
     

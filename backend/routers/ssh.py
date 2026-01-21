@@ -39,93 +39,133 @@ class SSHServerUpdate(BaseModel):
     is_default: Optional[bool] = None
 
 
-# --- SSH Server CRUD ---
+# --- SSH Server CRUD (Database-backed) ---
+from fastapi import Depends
+from sqlalchemy.orm import Session
+from backend.database import get_db
+from backend.models.models import SSHServer
+from datetime import datetime
+
 @router.get("/servers")
-def list_ssh_servers():
-    """List all configured SSH servers."""
-    store = get_store()
-    config = store.get_config()
-    return config.get('ssh_servers', [])
+def list_ssh_servers(db: Session = Depends(get_db)):
+    """List all configured SSH servers from database."""
+    servers = db.query(SSHServer).all()
+    return [
+        {
+            "id": s.id,
+            "name": s.name,
+            "alias": s.alias,
+            "host": s.host,
+            "port": s.port,
+            "user": s.user,
+            "key_path": s.key_path,
+            "remote_path": s.remote_path,
+            "is_default": s.is_default
+        }
+        for s in servers
+    ]
 
 
 @router.post("/servers")
-def create_ssh_server(server: SSHServerCreate):
-    """Create a new SSH server configuration."""
-    store = get_store()
-    config = store.get_config()
-    servers = config.get('ssh_servers', [])
-    
+def create_ssh_server(server: SSHServerCreate, db: Session = Depends(get_db)):
+    """Create a new SSH server configuration in database."""
     # Check for duplicate name
-    for s in servers:
-        if s.get('name') == server.name:
-            raise HTTPException(status_code=409, detail="Server with this name already exists")
+    existing = db.query(SSHServer).filter(SSHServer.name == server.name).first()
+    if existing:
+        raise HTTPException(status_code=409, detail="Server with this name already exists")
     
-    new_server = server.dict()
-    new_server['id'] = str(uuid.uuid4())[:8]
+    new_id = str(uuid.uuid4())[:8]
     
     # Handle is_default
     if server.is_default:
-        for s in servers:
-            s['is_default'] = False
+        db.query(SSHServer).update({SSHServer.is_default: False})
     
-    servers.append(new_server)
-    config['ssh_servers'] = servers
-    store.save_config(config)
+    new_server = SSHServer(
+        id=new_id,
+        name=server.name,
+        alias=server.alias,
+        host=server.host,
+        port=server.port,
+        user=server.user,
+        key_path=server.key_path,
+        remote_path=server.remote_path,
+        is_default=server.is_default,
+        created_at=datetime.utcnow()
+    )
+    db.add(new_server)
+    db.commit()
+    db.refresh(new_server)
     
-    return {"status": "ok", "server": new_server}
+    return {
+        "status": "ok",
+        "server": {
+            "id": new_server.id,
+            "name": new_server.name,
+            "alias": new_server.alias,
+            "host": new_server.host,
+            "port": new_server.port,
+            "user": new_server.user,
+            "key_path": new_server.key_path,
+            "remote_path": new_server.remote_path,
+            "is_default": new_server.is_default
+        }
+    }
 
 
 @router.put("/servers/{server_id}")
-def update_ssh_server(server_id: str, update: SSHServerUpdate):
-    """Update an SSH server configuration."""
-    store = get_store()
-    config = store.get_config()
-    servers = config.get('ssh_servers', [])
+def update_ssh_server(server_id: str, update: SSHServerUpdate, db: Session = Depends(get_db)):
+    """Update an SSH server configuration in database."""
+    server = db.query(SSHServer).filter(SSHServer.id == server_id).first()
     
-    server_idx = None
-    for i, s in enumerate(servers):
-        if s.get('id') == server_id:
-            server_idx = i
-            break
-    
-    if server_idx is None:
+    if not server:
         raise HTTPException(status_code=404, detail="Server not found")
     
     update_dict = {k: v for k, v in update.dict().items() if v is not None}
     
     # Handle is_default
     if update_dict.get('is_default'):
-        for s in servers:
-            s['is_default'] = False
+        db.query(SSHServer).update({SSHServer.is_default: False})
     
-    servers[server_idx].update(update_dict)
-    config['ssh_servers'] = servers
-    store.save_config(config)
+    for key, value in update_dict.items():
+        setattr(server, key, value)
     
-    return {"status": "ok", "server": servers[server_idx]}
+    db.commit()
+    db.refresh(server)
+    
+    return {
+        "status": "ok",
+        "server": {
+            "id": server.id,
+            "name": server.name,
+            "alias": server.alias,
+            "host": server.host,
+            "port": server.port,
+            "user": server.user,
+            "key_path": server.key_path,
+            "remote_path": server.remote_path,
+            "is_default": server.is_default
+        }
+    }
 
 
 @router.delete("/servers/{server_id}")
-def delete_ssh_server(server_id: str):
-    """Delete an SSH server configuration."""
-    store = get_store()
-    config = store.get_config()
-    servers = config.get('ssh_servers', [])
+def delete_ssh_server(server_id: str, db: Session = Depends(get_db)):
+    """Delete an SSH server configuration from database."""
+    server = db.query(SSHServer).filter(SSHServer.id == server_id).first()
     
-    server_idx = None
-    for i, s in enumerate(servers):
-        if s.get('id') == server_id:
-            server_idx = i
-            break
-    
-    if server_idx is None:
+    if not server:
         raise HTTPException(status_code=404, detail="Server not found")
     
-    removed = servers.pop(server_idx)
-    config['ssh_servers'] = servers
-    store.save_config(config)
+    removed_data = {
+        "id": server.id,
+        "name": server.name,
+        "alias": server.alias
+    }
     
-    return {"status": "ok", "removed": removed}
+    db.delete(server)
+    db.commit()
+    
+    return {"status": "ok", "removed": removed_data}
 
 
 @router.post("/servers/{server_id}/test")
@@ -350,14 +390,27 @@ def fast_push_items(req: FastPushRequest):
 
 
 def get_server_by_id(server_id: str):
-    """Helper to get server config by ID."""
-    store = get_store()
-    config = store.get_config()
-    servers = config.get('ssh_servers', [])
-    server = next((s for s in servers if s.get('id') == server_id), None)
-    if not server:
-        raise HTTPException(status_code=404, detail="Server not found")
-    return server
+    """Helper to get server config by ID from database."""
+    from backend.database import SessionLocal
+    db = SessionLocal()
+    try:
+        server = db.query(SSHServer).filter(SSHServer.id == server_id).first()
+        if not server:
+            raise HTTPException(status_code=404, detail="Server not found")
+        # Return as dict for compatibility with existing code
+        return {
+            "id": server.id,
+            "name": server.name,
+            "alias": server.alias,
+            "host": server.host,
+            "port": server.port,
+            "user": server.user,
+            "key_path": server.key_path,
+            "remote_path": server.remote_path,
+            "is_default": server.is_default
+        }
+    finally:
+        db.close()
 
 
 def get_ssh_command(server):

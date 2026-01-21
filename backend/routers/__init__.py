@@ -19,6 +19,7 @@ from backend.routers.cache import router as cache_router
 from backend.routers.backup import router as backup_router
 from backend.routers.workspace import router as workspace_router
 from backend.routers.storage import router as storage_router
+from backend.routers.dashboard import router as dashboard_router
 
 # Export all routers for easy import in main.py
 __all__ = [
@@ -39,4 +40,5 @@ __all__ = [
     "backup_router",
     "workspace_router",
     "storage_router",
+    "dashboard_router",
 ]

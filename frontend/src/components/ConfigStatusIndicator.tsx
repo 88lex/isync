@@ -46,8 +46,8 @@ export const ConfigStatusIndicator: React.FC<ConfigStatusIndicatorProps> = ({ co
     }, []);
 
     // Determine health status
-    const isHealthy = status?.config_file.exists && status?.synclist_file.exists;
-    const hasData = status && (status.in_memory.config_keys > 0 || status.in_memory.domains > 0);
+    const isHealthy = status?.config_file?.exists && status?.synclist_file?.exists;
+    const hasData = status && (status.in_memory?.config_keys > 0 || status.in_memory?.domains > 0);
 
     if (loading && !status) {
         return (
@@ -61,18 +61,17 @@ export const ConfigStatusIndicator: React.FC<ConfigStatusIndicatorProps> = ({ co
     // Compact mode for sidebar
     if (compact) {
         return (
-            <div 
+            <div
                 className="relative cursor-pointer"
                 onClick={() => setShowDetails(!showDetails)}
             >
-                <div className={`flex items-center gap-2 px-2 py-1 rounded-lg text-xs transition ${
-                    error ? 'text-red-400 bg-red-500/10' :
+                <div className={`flex items-center gap-2 px-2 py-1 rounded-lg text-xs transition ${error ? 'text-red-400 bg-red-500/10' :
                     !isHealthy ? 'text-yellow-400 bg-yellow-500/10' :
-                    'text-emerald-400 bg-emerald-500/10'
-                }`}>
+                        'text-emerald-400 bg-emerald-500/10'
+                    }`}>
                     {error ? <AlertTriangle size={14} /> :
-                     !isHealthy ? <AlertTriangle size={14} /> :
-                     <CheckCircle size={14} />}
+                        !isHealthy ? <AlertTriangle size={14} /> :
+                            <CheckCircle size={14} />}
                     <span>Config {isHealthy ? 'OK' : 'Issue'}</span>
                 </div>
 
@@ -81,10 +80,10 @@ export const ConfigStatusIndicator: React.FC<ConfigStatusIndicatorProps> = ({ co
                     <>
                         <div className="fixed inset-0 z-40" onClick={() => setShowDetails(false)} />
                         <div className="absolute left-0 bottom-full mb-2 w-72 bg-zinc-900 border border-zinc-700 rounded-xl shadow-2xl z-50 p-4">
-                            <ConfigDetails 
-                                status={status} 
-                                error={error} 
-                                onReload={handleReload} 
+                            <ConfigDetails
+                                status={status}
+                                error={error}
+                                onReload={handleReload}
                                 reloading={reloading}
                                 onRefresh={checkStatus}
                             />
@@ -97,10 +96,10 @@ export const ConfigStatusIndicator: React.FC<ConfigStatusIndicatorProps> = ({ co
 
     // Full mode
     return (
-        <ConfigDetails 
-            status={status} 
-            error={error} 
-            onReload={handleReload} 
+        <ConfigDetails
+            status={status}
+            error={error}
+            onReload={handleReload}
             reloading={reloading}
             onRefresh={checkStatus}
         />
@@ -148,7 +147,7 @@ const ConfigDetails: React.FC<ConfigDetailsProps> = ({ status, error, onReload, 
 
     if (!status) return null;
 
-    const isHealthy = status.config_file.exists && status.synclist_file.exists;
+    const isHealthy = status.config_file?.exists && status.synclist_file?.exists;
 
     return (
         <div className="space-y-3">
@@ -157,7 +156,7 @@ const ConfigDetails: React.FC<ConfigDetailsProps> = ({ status, error, onReload, 
                     <Database size={16} className="text-zinc-400" />
                     <span className="font-medium text-white text-sm">Config Status</span>
                 </div>
-                <button 
+                <button
                     onClick={onRefresh}
                     className="p-1 hover:bg-zinc-800 rounded transition text-zinc-400 hover:text-white"
                 >
@@ -172,8 +171,8 @@ const ConfigDetails: React.FC<ConfigDetailsProps> = ({ status, error, onReload, 
                         <HardDrive size={12} className="text-zinc-500" />
                         <span className="text-zinc-400">config.yaml</span>
                     </div>
-                    <div className={`flex items-center gap-1 ${status.config_file.exists ? 'text-emerald-400' : 'text-red-400'}`}>
-                        {status.config_file.exists ? (
+                    <div className={`flex items-center gap-1 ${status.config_file?.exists ? 'text-emerald-400' : 'text-red-400'}`}>
+                        {status.config_file?.exists ? (
                             <>
                                 <CheckCircle size={12} />
                                 <span>{formatBytes(status.config_file.size)}</span>
@@ -192,8 +191,8 @@ const ConfigDetails: React.FC<ConfigDetailsProps> = ({ status, error, onReload, 
                         <HardDrive size={12} className="text-zinc-500" />
                         <span className="text-zinc-400">synclist.yaml</span>
                     </div>
-                    <div className={`flex items-center gap-1 ${status.synclist_file.exists ? 'text-emerald-400' : 'text-yellow-400'}`}>
-                        {status.synclist_file.exists ? (
+                    <div className={`flex items-center gap-1 ${status.synclist_file?.exists ? 'text-emerald-400' : 'text-yellow-400'}`}>
+                        {status.synclist_file?.exists ? (
                             <>
                                 <CheckCircle size={12} />
                                 <span>{formatBytes(status.synclist_file.size)}</span>

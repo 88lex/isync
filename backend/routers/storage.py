@@ -12,6 +12,8 @@ router = APIRouter(prefix="/api/storage", tags=["Storage"])
 
 class AuditRequest(BaseModel):
     drive_id: Optional[int] = None
+    drive_resource_id: Optional[str] = None
+    drive_name: Optional[str] = None
     domain: Optional[str] = None
     server_id: Optional[str] = "local" # id of the ssh server to execute on
 
@@ -31,9 +33,17 @@ async def trigger_audit(req: AuditRequest, background_tasks: BackgroundTasks):
     """Trigger a storage audit for a specific drive or all drives."""
     if req.drive_id:
         # Sync audit for a single drive (if small/fast enough) or background?
-        # User said "manually", let's do it in background if they want to wait or just return task started.
         background_tasks.add_task(StorageAuditService.audit_shared_drive, req.drive_id, req.server_id)
         return {"status": "started", "message": f"Audit started for drive id {req.drive_id}"}
+    elif req.drive_resource_id and req.drive_name:
+         # Audit by resource ID (creates/finds DB record first)
+        background_tasks.add_task(
+            StorageAuditService.audit_shared_drive_by_resource_id, 
+            req.drive_resource_id, 
+            req.drive_name, 
+            req.server_id
+        )
+        return {"status": "started", "message": f"Audit started for drive {req.drive_name}"}
     elif req.domain:
         background_tasks.add_task(StorageAuditService.audit_all_drives_for_domain, req.domain, req.server_id)
         return {"status": "started", "message": f"Background audit started for domain {req.domain}"}

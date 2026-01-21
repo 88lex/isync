@@ -1,11 +1,214 @@
 import { useEffect, useState } from 'react';
-import { Save, RefreshCw, Server, Shield, Globe, Terminal, Upload, Download, Trash2, Plus, Activity, CheckCircle, Settings } from 'lucide-react';
+import { Save, RefreshCw, Server, Shield, Globe, Terminal, Upload, Download, Trash2, Plus, Activity, CheckCircle, Settings, Database, HardDrive, AlertCircle } from 'lucide-react';
 import { approveSSH, fetchConfig, updateConfig, Config, DomainConfig, listProfiles, loadProfile, saveProfile, resetProfile, testSSH, testDomainAuth } from '../api';
 import { Button, Input as UIInput, Select as UISelect, Textarea } from '../components/ui';
+import axios from 'axios';
 
-type ConfigTab = 'general' | 'rclone' | 'domains' | 'advanced';
+const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:8000/api';
+
+type ConfigTab = 'general' | 'rclone' | 'domains' | 'advanced' | 'database';
+
+// Database Maintenance Tab Component
+interface DbStats {
+    database_file: string;
+    file_size_bytes: number;
+    tables: Record<string, number>;
+    last_modified: string;
+}
+
+interface MaintenanceResult {
+    status: string;
+    message?: string;
+    [key: string]: any;
+}
+
+const DatabaseMaintenanceTab = () => {
+    const [stats, setStats] = useState<DbStats | null>(null);
+    const [loading, setLoading] = useState(false);
+    const [actionLoading, setActionLoading] = useState<string | null>(null);
+    const [lastResult, setLastResult] = useState<MaintenanceResult | null>(null);
+    const [logDays, setLogDays] = useState(30);
+
+    useEffect(() => {
+        loadStats();
+    }, []);
+
+    const loadStats = async () => {
+        setLoading(true);
+        try {
+            const res = await axios.get(`${API_BASE}/admin/maintenance/stats`);
+            setStats(res.data);
+        } catch (e: any) {
+            console.error('Failed to load stats:', e);
+        } finally {
+            setLoading(false);
+        }
+    };
+
+    const runAction = async (action: string, params?: any) => {
+        setActionLoading(action);
+        setLastResult(null);
+        try {
+            let res;
+            if (action === 'check') {
+                res = await axios.post(`${API_BASE}/admin/maintenance/check`);
+            } else if (action === 'vacuum') {
+                res = await axios.post(`${API_BASE}/admin/maintenance/vacuum`);
+            } else if (action === 'clean-logs') {
+                res = await axios.post(`${API_BASE}/admin/maintenance/clean-logs?days=${logDays}`);
+            } else if (action === 'clean-cache') {
+                res = await axios.post(`${API_BASE}/admin/maintenance/clean-cache`);
+            } else if (action === 'validate') {
+                res = await axios.post(`${API_BASE}/admin/maintenance/validate`);
+            } else if (action === 'full') {
+                res = await axios.post(`${API_BASE}/admin/maintenance/full?days=${logDays}`);
+            }
+            setLastResult(res?.data);
+            await loadStats();
+        } catch (e: any) {
+            setLastResult({ status: 'error', message: e.message });
+        } finally {
+            setActionLoading(null);
+        }
+    };
+
+    const formatBytes = (bytes: number) => {
+        if (bytes < 1024) return `${bytes} B`;
+        if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+        return `${(bytes / (1024 * 1024)).toFixed(2)} MB`;
+    };
+
+    return (
+        <div className="space-y-4">
+            {/* Stats Card */}
+            <section className="card">
+                <div className="card-header">
+                    <h2 className="card-title flex items-center gap-1.5">
+                        <HardDrive size={14} className="text-blue-400" /> Database Statistics
+                    </h2>
+                    <Button variant="ghost" size="xs" onClick={loadStats} loading={loading} icon={<RefreshCw size={10} />}>Refresh</Button>
+                </div>
+                {stats ? (
+                    <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                        <div className="bg-zinc-800/50 p-3 rounded">
+                            <div className="text-xs text-zinc-500">File Size</div>
+                            <div className="text-lg font-bold text-white">{formatBytes(stats.file_size_bytes)}</div>
+                        </div>
+                        <div className="bg-zinc-800/50 p-3 rounded">
+                            <div className="text-xs text-zinc-500">SSH Servers</div>
+                            <div className="text-lg font-bold text-cyan-400">{stats.tables.ssh_servers || 0}</div>
+                        </div>
+                        <div className="bg-zinc-800/50 p-3 rounded">
+                            <div className="text-xs text-zinc-500">Schedules</div>
+                            <div className="text-lg font-bold text-purple-400">{stats.tables.schedules || 0}</div>
+                        </div>
+                        <div className="bg-zinc-800/50 p-3 rounded">
+                            <div className="text-xs text-zinc-500">Cache Entries</div>
+                            <div className="text-lg font-bold text-amber-400">{stats.tables.data_cache || 0}</div>
+                        </div>
+                        <div className="col-span-2 md:col-span-4 text-xs text-zinc-500">
+                            Last Modified: {stats.last_modified ? new Date(stats.last_modified).toLocaleString() : 'N/A'}
+                        </div>
+                    </div>
+                ) : (
+                    <div className="text-zinc-500 text-sm">Loading...</div>
+                )}
+            </section>
+
+            {/* Maintenance Actions */}
+            <section className="card">
+                <div className="card-header">
+                    <h2 className="card-title flex items-center gap-1.5">
+                        <Activity size={14} className="text-green-400" /> Maintenance Actions
+                    </h2>
+                </div>
+                <div className="grid grid-cols-2 md:grid-cols-3 gap-3">
+                    <Button
+                        variant="secondary"
+                        size="sm"
+                        onClick={() => runAction('check')}
+                        loading={actionLoading === 'check'}
+                        icon={<CheckCircle size={12} />}
+                    >
+                        Integrity Check
+                    </Button>
+                    <Button
+                        variant="secondary"
+                        size="sm"
+                        onClick={() => runAction('validate')}
+                        loading={actionLoading === 'validate'}
+                        icon={<AlertCircle size={12} />}
+                    >
+                        Validate References
+                    </Button>
+                    <Button
+                        variant="secondary"
+                        size="sm"
+                        onClick={() => runAction('vacuum')}
+                        loading={actionLoading === 'vacuum'}
+                        icon={<HardDrive size={12} />}
+                    >
+                        Vacuum DB
+                    </Button>
+                    <Button
+                        variant="secondary"
+                        size="sm"
+                        onClick={() => runAction('clean-cache')}
+                        loading={actionLoading === 'clean-cache'}
+                        icon={<Trash2 size={12} />}
+                    >
+                        Clean Cache
+                    </Button>
+                    <div className="flex items-center gap-2">
+                        <input
+                            type="number"
+                            value={logDays}
+                            onChange={e => setLogDays(parseInt(e.target.value) || 30)}
+                            className="input w-16 text-center"
+                            min={1}
+                        />
+                        <Button
+                            variant="secondary"
+                            size="sm"
+                            onClick={() => runAction('clean-logs')}
+                            loading={actionLoading === 'clean-logs'}
+                            icon={<Trash2 size={12} />}
+                        >
+                            Clean Logs ({logDays}d)
+                        </Button>
+                    </div>
+                    <Button
+                        variant="primary"
+                        size="sm"
+                        onClick={() => runAction('full')}
+                        loading={actionLoading === 'full'}
+                        icon={<Activity size={12} />}
+                    >
+                        Full Maintenance
+                    </Button>
+                </div>
+            </section>
+
+            {/* Result Display */}
+            {lastResult && (
+                <section className="card">
+                    <div className="card-header">
+                        <h2 className={`card-title flex items-center gap-1.5 ${lastResult.status === 'healthy' || lastResult.status === 'success' ? 'text-green-400' : 'text-amber-400'}`}>
+                            {lastResult.status === 'healthy' || lastResult.status === 'success' ? <CheckCircle size={14} /> : <AlertCircle size={14} />}
+                            Result: {lastResult.status}
+                        </h2>
+                    </div>
+                    <pre className="bg-zinc-950 p-3 rounded text-xs font-mono text-zinc-300 overflow-x-auto max-h-48 overflow-y-auto">
+                        {JSON.stringify(lastResult, null, 2)}
+                    </pre>
+                </section>
+            )}
+        </div>
+    );
+};
 
 const ConfigPage = () => {
+
     const [config, setConfig] = useState<Config>({});
     const [dirty, setDirty] = useState(false);
     const [saving, setSaving] = useState(false);
@@ -152,7 +355,9 @@ const ConfigPage = () => {
         { id: 'rclone', label: 'Rclone', icon: <Terminal size={14} /> },
         { id: 'domains', label: 'Domains', icon: <Globe size={14} /> },
         { id: 'advanced', label: 'Advanced', icon: <Settings size={14} /> },
+        { id: 'database', label: 'Database', icon: <Database size={14} /> },
     ];
+
 
     return (
         <div className="page-container pb-16">
@@ -380,7 +585,11 @@ const ConfigPage = () => {
                         </div>
                     </section>
                 )}
+
+                {/* Database Tab */}
+                {activeTab === 'database' && <DatabaseMaintenanceTab />}
             </div>
+
 
             {/* Floating Save Bar */}
             {dirty && (

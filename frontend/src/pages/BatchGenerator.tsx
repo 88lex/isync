@@ -45,7 +45,9 @@ const BatchGenerator: React.FC<BatchGeneratorProps> = ({ activeSection }) => {
     const groupCache = useCacheStatus('batch_groups');
     const serverCache = useCacheStatus('ssh_servers');
 
-    const unifiedPairs = pairCache.data as SyncPairWithBatch[];
+    // Local State for Unified Pairs (Isolated from Dashboard Cache conflicts)
+    const [unifiedPairs, setUnifiedPairs] = useState<SyncPairWithBatch[]>([]);
+
     const savedBatches = fileCache.data as BatchFile[];
     const batchGroups = groupCache.data as BatchGroup[];
     const sshServers = serverCache.data as SSHServer[];
@@ -175,11 +177,14 @@ const BatchGenerator: React.FC<BatchGeneratorProps> = ({ activeSection }) => {
     };
 
     const loadUnifiedPairs = async (force: boolean = false) => {
-        if (!force && pairCache.hasData) return;
+        // Always fetch to ensure we have batch info (global cache often has simple pairs from Dashboard)
+        if (!force && unifiedPairs.length > 0) return;
+
         setCacheLoading('sync_pairs', 'local', true);
         try {
             const data = await getSyncPairsWithBatches();
-            setCached('sync_pairs', 'local', data.pairs, 'config_api');
+            setUnifiedPairs(data.pairs);
+            // Do NOT setCached to avoid polluting global cache with specialized objects
         } catch (e) { console.error('Failed to load unified pairs', e); }
         finally { setCacheLoading('sync_pairs', 'local', false); }
     };

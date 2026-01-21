@@ -1,5 +1,5 @@
 from datetime import datetime
-from sqlalchemy import Column, Integer, String, Boolean, DateTime, ForeignKey, Text, Float
+from sqlalchemy import Column, Integer, String, Boolean, DateTime, ForeignKey, Text, Float, Index
 from sqlalchemy.orm import relationship
 from backend.database import Base
 
@@ -74,6 +74,12 @@ class SyncPair(Base):
     Saved source/dest pairs for jobs (replaces synclist.yaml).
     """
     __tablename__ = "sync_pairs"
+    
+    # Add composite indices for common queries
+    __table_args__ = (
+        Index('ix_sync_pair_source_dest', 'source', 'dest'),
+        Index('ix_sync_pair_domain', 'domain_reference'),
+    )
 
     id = Column(Integer, primary_key=True, index=True)
     source = Column(String(500), nullable=False)
@@ -90,6 +96,18 @@ class SyncPair(Base):
     meta_execution_mode = Column(String(20), default="local")
     description = Column(String(200), nullable=True)
     last_run = Column(DateTime, nullable=True)
+
+    # Dashboard Stats & Scan Config
+    scan_source_server_id = Column(String(50), nullable=True) # ID of server to scan source on
+    scan_dest_server_id = Column(String(50), nullable=True)   # ID of server to scan dest on
+    
+    source_size_bytes = Column(Float, default=0.0) # Using Float for large numbers consistency
+    source_file_count = Column(Integer, default=0)
+    source_scanned_at = Column(DateTime, nullable=True)
+    
+    dest_size_bytes = Column(Float, default=0.0)
+    dest_file_count = Column(Integer, default=0)
+    dest_scanned_at = Column(DateTime, nullable=True)
 
 class NodeStats(Base):
     """
@@ -119,6 +137,11 @@ class DataCache(Base):
     Enables local-first data access with manual refresh control.
     """
     __tablename__ = "data_cache"
+    
+    # Composite index for common query pattern
+    __table_args__ = (
+        Index('ix_data_cache_type_key', 'data_type', 'context_key'),
+    )
 
     id = Column(String(200), primary_key=True)  # e.g., 'users_domain_example.com'
     data_type = Column(String(50), nullable=False, index=True)  # 'users', 'remotes', 'drives', etc.
@@ -145,3 +168,79 @@ class DomainStats(Base):
     group_count = Column(Integer, default=0)
     
     last_updated = Column(DateTime, default=datetime.utcnow)
+
+
+# =============================================================================
+# Phase 1: Database Schema Consolidation - New Models
+# =============================================================================
+
+class SSHServer(Base):
+    """
+    SSH Server configuration.
+    Replaces ssh_servers list in config.yaml.
+    """
+    __tablename__ = "ssh_servers"
+
+    id = Column(String(20), primary_key=True)  # Short UUID like '07a3e081'
+    name = Column(String(100), unique=True, index=True, nullable=False)
+    alias = Column(String(100), nullable=True)  # SSH config alias
+    host = Column(String(255), nullable=True)   # IP or hostname
+    port = Column(Integer, default=22)
+    user = Column(String(100), nullable=True)
+    key_path = Column(String(500), nullable=True)
+    remote_path = Column(String(500), default="/opt/isync")
+    is_default = Column(Boolean, default=False)
+    
+    created_at = Column(DateTime, default=datetime.utcnow)
+    last_connected_at = Column(DateTime, nullable=True)
+    
+    # Relationships
+    schedules = relationship("Schedule", back_populates="target_server", cascade="all, delete-orphan")
+
+
+class BatchGroup(Base):
+    """
+    Named group of batch files that execute in order.
+    Replaces .batch_groups.json file.
+    """
+    __tablename__ = "batch_groups"
+
+    id = Column(String(50), primary_key=True)  # UUID
+    name = Column(String(100), unique=True, index=True, nullable=False)
+    description = Column(String(500), nullable=True)
+    batch_files = Column(Text, nullable=False)  # JSON array of filenames
+    
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+
+class Schedule(Base):
+    """
+    Unified schedule for local APScheduler jobs and remote crontab entries.
+    Replaces scheduled_jobs.json and .crontab_configs.json.
+    """
+    __tablename__ = "schedules"
+
+    id = Column(String(50), primary_key=True)  # e.g., 'schedule_abc123'
+    name = Column(String(200), nullable=False)
+    cron_expression = Column(String(100), nullable=False)  # e.g., '0 2 * * *'
+    
+    # What to run
+    command_type = Column(String(20), nullable=False)  # 'sync', 'batch', 'group', 'task'
+    command = Column(Text, nullable=True)  # JSON with details (source, dest, task_args, etc.)
+    
+    # Where to run
+    execution_context = Column(String(20), default="LOCAL")  # LOCAL, SSH
+    target_server_id = Column(String(20), ForeignKey("ssh_servers.id"), nullable=True)
+    
+    # Status
+    enabled = Column(Boolean, default=True)
+    last_run = Column(DateTime, nullable=True)
+    next_run = Column(DateTime, nullable=True)
+    last_result = Column(String(50), nullable=True)  # 'success', 'error', 'skipped'
+    
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+    
+    # Relationships
+    target_server = relationship("SSHServer", back_populates="schedules")

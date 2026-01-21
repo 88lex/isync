@@ -129,3 +129,68 @@ def get_system_info():
         "pid": os.getpid(),
         "cwd": os.getcwd()
     }
+
+
+# =============================================================================
+# Database Maintenance Endpoints
+# =============================================================================
+
+from pydantic import BaseModel
+from typing import Optional
+from fastapi import Depends
+from sqlalchemy.orm import Session
+from backend.database import get_db
+
+
+class MaintenanceRequest(BaseModel):
+    action: str  # 'check', 'vacuum', 'clean_logs', 'clean_cache', 'validate', 'full'
+    days: Optional[int] = 30  # For log cleanup
+
+
+@router.get("/maintenance/stats")
+def get_database_stats(db: Session = Depends(get_db)):
+    """Get database statistics."""
+    from backend.maintenance_service import DatabaseMaintenanceService
+    return DatabaseMaintenanceService.get_database_stats(db)
+
+
+@router.post("/maintenance/check")
+def run_integrity_check():
+    """Run database integrity check."""
+    from backend.maintenance_service import DatabaseMaintenanceService
+    return DatabaseMaintenanceService.run_integrity_check()
+
+
+@router.post("/maintenance/vacuum")
+def run_vacuum():
+    """Run VACUUM to optimize database."""
+    from backend.maintenance_service import DatabaseMaintenanceService
+    return DatabaseMaintenanceService.run_vacuum()
+
+
+@router.post("/maintenance/clean-logs")
+def clean_old_logs(days: int = 30):
+    """Clean job logs older than specified days."""
+    from backend.maintenance_service import DatabaseMaintenanceService
+    return DatabaseMaintenanceService.clean_old_logs(days)
+
+
+@router.post("/maintenance/clean-cache")
+def clean_orphaned_cache(db: Session = Depends(get_db)):
+    """Clean stale cache entries."""
+    from backend.maintenance_service import DatabaseMaintenanceService
+    return DatabaseMaintenanceService.clean_orphaned_cache(db)
+
+
+@router.post("/maintenance/validate")
+def validate_references(db: Session = Depends(get_db)):
+    """Validate referential integrity."""
+    from backend.maintenance_service import DatabaseMaintenanceService
+    return DatabaseMaintenanceService.validate_references(db)
+
+
+@router.post("/maintenance/full")
+def run_full_maintenance(days: int = 30):
+    """Run complete maintenance cycle."""
+    from backend.maintenance_service import DatabaseMaintenanceService
+    return DatabaseMaintenanceService.run_full_maintenance(days)

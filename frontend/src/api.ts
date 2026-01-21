@@ -1,3 +1,22 @@
+// --- DASHBOARD API ---
+export interface ScanRequest {
+    pair_id: string;
+    side: "source" | "dest";
+    server_id?: string;
+    timeout?: number;
+}
+
+export interface ScanResult {
+    bytes: number;
+    count: number;
+    scanned_at: string;
+}
+
+export const scanPath = async (req: ScanRequest): Promise<{ status: string, result: ScanResult }> => {
+    const res = await axios.post(`${API_BASE}/dashboard/scan`, req);
+    return res.data;
+};
+
 import axios from 'axios';
 import { API_BASE } from './constants/config';
 
@@ -62,6 +81,16 @@ export interface SyncPair {
     dest_server_id?: string;
     meta_server_id?: string;
     meta_execution_mode?: 'local' | 'ssh';
+
+    // Dashboard Stats
+    scan_source_server_id?: string;
+    scan_dest_server_id?: string;
+    source_size_bytes?: number;
+    source_file_count?: number;
+    source_scanned_at?: string;
+    dest_size_bytes?: number;
+    dest_file_count?: number;
+    dest_scanned_at?: string;
 }
 
 export interface JobRequest {
@@ -2029,7 +2058,7 @@ export const fetchSharedDriveStats = async (): Promise<SharedDriveStats[]> => {
     return res.data.drives;
 };
 
-export const triggerStorageAudit = async (req: { drive_id?: number, domain?: string, server_id?: string }): Promise<AuditResponse> => {
+export const triggerStorageAudit = async (req: { drive_id?: number, drive_resource_id?: string, drive_name?: string, domain?: string, server_id?: string }): Promise<AuditResponse> => {
     const res = await axios.post(`${API_BASE}/storage/audit`, req);
     return res.data;
 };

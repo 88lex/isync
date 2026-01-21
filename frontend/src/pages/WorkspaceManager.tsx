@@ -129,16 +129,16 @@ const WorkspaceManager = () => {
                 <button
                     onClick={(e) => {
                         e.stopPropagation();
-                        if (drive.db_id) runStorageAudit(drive.db_id);
+                        runStorageAudit(drive);
                     }}
                     disabled={!!auditLoading}
-                    className={`p-1.5 rounded border transition-all ${auditLoading === `drive-${drive.db_id}`
+                    className={`p-1.5 rounded border transition-all ${auditLoading === (drive.db_id ? `drive-${drive.db_id}` : `drive-${drive.id}`)
                         ? 'bg-orange-500 text-white border-orange-400'
                         : 'bg-orange-600/10 hover:bg-orange-600/40 text-orange-500 border-orange-500/20 shadow-sm'
                         }`}
                     title="Run Storage Audit"
                 >
-                    <BarChart size={14} className={auditLoading === `drive-${drive.db_id}` ? 'animate-pulse' : ''} />
+                    <BarChart size={14} className={auditLoading === (drive.db_id ? `drive-${drive.db_id}` : `drive-${drive.id}`) ? 'animate-pulse' : ''} />
                 </button>
             )
         }
@@ -190,14 +190,30 @@ const WorkspaceManager = () => {
         }
     };
 
-    const runStorageAudit = async (driveId?: number) => {
-        setAuditLoading(driveId ? `drive-${driveId}` : 'all');
+    const runStorageAudit = async (drive?: any) => {
+        let loadKey = 'all';
+        if (drive) {
+            loadKey = drive.db_id ? `drive-${drive.db_id}` : `drive-${drive.id}`;
+        }
+        setAuditLoading(loadKey);
+
         try {
-            const res = await triggerStorageAudit({
-                drive_id: driveId,
-                domain: driveId ? undefined : selectedDomain,
+            const payload: any = {
                 server_id: selectedAuditServer
-            });
+            };
+
+            if (drive) {
+                if (drive.db_id) {
+                    payload.drive_id = drive.db_id;
+                } else {
+                    payload.drive_resource_id = drive.id;
+                    payload.drive_name = drive.name;
+                }
+            } else {
+                payload.domain = selectedDomain;
+            }
+
+            const res = await triggerStorageAudit(payload);
             alert(res.message);
 
             // Refresh stats after a short delay (background task might take time)

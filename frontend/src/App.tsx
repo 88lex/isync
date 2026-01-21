@@ -18,12 +18,14 @@ import RemoteSync from './pages/RemoteSync';
 import RcloneManagement from './pages/RcloneManagement';
 import ManageExcluded from './pages/ManageExcluded';
 import KeyManager from './pages/KeyManager';
-import WorkspaceManager from './pages/WorkspaceManager';
+import WorkspaceManager from './pages/WorkspaceManager'; // Restored
+import DashboardPage from './pages/Dashboard'; // Added
+
 import { IsyncDataProvider } from './contexts/IsyncDataContext';
 import ErrorBoundary from './components/ErrorBoundary';
 import { ConfigStatusIndicator } from './components/ConfigStatusIndicator';
 
-type ViewType = 'users' | 'batch' | 'config' | 'sync' | 'history' | 'schedules' | 'servers' | 'drives' | 'prep' | 'remotesync' | 'rclone' | 'excluded' | 'keys' | 'workspace';
+type ViewType = 'dashboard' | 'users' | 'batch' | 'config' | 'sync' | 'history' | 'schedules' | 'servers' | 'drives' | 'prep' | 'remotesync' | 'rclone' | 'excluded' | 'keys' | 'workspace';
 
 // Define navigation groups
 interface SubItem {
@@ -49,6 +51,7 @@ const navGroups: NavGroup[] = [
     label: 'Main',
     defaultOpen: true,
     items: [
+      { id: 'dashboard', label: 'Dashboard', icon: LayoutDashboard },
       { id: 'users', label: 'User Manager', icon: Users },
       {
         id: 'batch',
@@ -105,9 +108,9 @@ const navGroups: NavGroup[] = [
 function App() {
   const [view, setView] = useState<ViewType>(() => {
     const saved = localStorage.getItem(STORAGE_KEYS.VIEW);
-    if (saved === 'manual' || saved === 'dashboard' || saved === 'monitor') return 'users';
-    const validViews: ViewType[] = ['users', 'batch', 'config', 'sync', 'history', 'schedules', 'servers', 'drives', 'prep', 'remotesync', 'rclone', 'excluded', 'keys', 'workspace'];
-    return validViews.includes(saved as ViewType) ? (saved as ViewType) : 'users';
+    if (saved === 'manual' || saved === 'monitor') return 'dashboard';
+    const validViews: ViewType[] = ['dashboard', 'users', 'batch', 'config', 'sync', 'history', 'schedules', 'servers', 'drives', 'prep', 'remotesync', 'rclone', 'excluded', 'keys', 'workspace'];
+    return validViews.includes(saved as ViewType) ? (saved as ViewType) : 'dashboard';
   });
 
   const [activeSubSection, setActiveSubSection] = useState<string | null>(null);
@@ -224,6 +227,7 @@ function App() {
           {/* Main Content */}
           <main className="flex-1 overflow-auto bg-black/20">
             <ErrorBoundary>
+              {view === 'dashboard' && <DashboardPage />}
               {view === 'users' && <UserManagement />}
               {view === 'batch' && <BatchGenerator activeSection={activeSubSection} />}
               {view === 'schedules' && <SchedulesPage activeSection={activeSubSection} />}

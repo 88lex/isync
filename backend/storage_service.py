@@ -40,10 +40,13 @@ class StorageAuditService:
                     host=server.get('alias') or server.get('host'),
                     user=server.get('user'),
                     key_path=server.get('key_path'),
-                    timeout=300 # Long timeout for large drives
+                    timeout=1200 # 20m timeout for large drives
                 )
                 
-                result = exec_remote_command(req, cmd)
+                # Run blocking I/O in thread executor to avoid blocking event loop
+                loop = asyncio.get_event_loop()
+                result = await loop.run_in_executor(None, lambda: exec_remote_command(req, cmd))
+                
                 if result["status"] == "success":
                     data = json.loads(result["stdout"])
                     return {
@@ -103,6 +106,53 @@ class StorageAuditService:
                 return {"status": "ok", "drive": drive.name, "size_bytes": drive.size_bytes, "file_count": drive.file_count}
             else:
                 return result
+        finally:
+            db.close()
+
+    @staticmethod
+    async def audit_shared_drive_by_resource_id(drive_resource_id: str, drive_name: str, server_id: Optional[str] = None):
+        """
+        Audits a shared drive by its Resource ID (0A...). 
+        Creates or updates the DB record as needed.
+        """
+        db = SessionLocal()
+        try:
+            # Check if drive exists in DB
+            drive = db.query(SharedDrive).filter(SharedDrive.drive_id == drive_resource_id).first()
+            if not drive:
+                logger.info(f"Drive {drive_name} ({drive_resource_id}) not found in DB. Creating...")
+                drive = SharedDrive(
+                    drive_id=drive_resource_id,
+                    name=drive_name,
+                    status='ACTIVE', # Assume active if we are auditing
+                    size_bytes=0,
+                    file_count=0
+                )
+                db.add(drive)
+                db.commit()
+                db.refresh(drive)
+            
+            # Use rclone name format: drive_name:
+            # Optimization: pass drive_resource_id if we have a way to use it genericly, 
+            # but usually we rely on config. For now, try name-based remote.
+            remote_name = drive.name.replace(" ", "-").lower()
+            
+            # Start audit
+            result = await StorageAuditService.get_path_size(remote_name, "RCLONE", server_id)
+            
+            if result["status"] == "ok":
+                drive.size_bytes = float(result["bytes"])
+                drive.file_count = int(result["count"])
+                drive.last_scanned = datetime.utcnow()
+                db.commit()
+                logger.info(f"Audit complete for {drive.name}: {drive.size_bytes} bytes")
+                return {"status": "ok", "drive": drive.name, "size_bytes": drive.size_bytes, "file_count": drive.file_count}
+            else:
+                logger.error(f"Audit failed for {drive.name}: {result.get('message')}")
+                return result
+        except Exception as e:
+             logger.error(f"Error in audit_shared_drive_by_resource_id: {e}")
+             return {"status": "error", "message": str(e)}
         finally:
             db.close()
 
