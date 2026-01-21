@@ -5,6 +5,7 @@ from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 from datetime import datetime, timedelta
+import asyncio
 
 logger = logging.getLogger("isync_api")
 
@@ -532,26 +533,33 @@ class WorkspaceService:
     async def get_shared_drives(self, include_permissions: bool = True) -> Dict[str, Any]:
         """
         Section 4: Shared Drives (Team Drives)
-        
-        Retrieves:
-        - All Shared Drive names and IDs
-        - Permissions/ACLs per drive (Managers, Content Managers, Viewers)
-        - Organizers
-        - Restrictions (external sharing, etc.)
+        Optimized with concurrent permission fetching.
         """
         try:
-            drives = []
+            raw_drives = []
             page_token = None
             
+            # 1. Fetch all drive objects first (paginated)
             while True:
-                res = self.drive.drives().list(
-                    useDomainAdminAccess=True,
-                    pageToken=page_token,
-                    pageSize=100,
-                    fields="nextPageToken, drives(id, name, restrictions, createdTime, hidden, backgroundImageLink, themeId)"
-                ).execute()
-                
-                for d in res.get('drives', []):
+                res = await asyncio.to_thread(
+                    self.drive.drives().list(
+                        useDomainAdminAccess=True,
+                        pageToken=page_token,
+                        pageSize=100,
+                        fields="nextPageToken, drives(id, name, restrictions, createdTime, hidden, themeId)"
+                    ).execute
+                )
+                raw_drives.extend(res.get('drives', []))
+                page_token = res.get('nextPageToken')
+                if not page_token:
+                    break
+            
+            # 2. Preparation for parallel permission fetching
+            drives = []
+            semaphore = asyncio.Semaphore(10) # Limit concurrency
+            
+            async def process_drive(d):
+                async with semaphore:
                     drive_info = {
                         "id": d['id'],
                         "name": d['name'],
@@ -567,24 +575,26 @@ class WorkspaceService:
                         }
                     }
                     
-                    # Get permissions for this drive if requested
                     if include_permissions:
                         try:
-                            perms_res = self.drive.permissions().list(
-                                fileId=d['id'],
-                                useDomainAdminAccess=True,
-                                supportsAllDrives=True,
-                                fields="permissions(id, type, emailAddress, role, displayName, deleted)"
-                            ).execute()
+                            # Use thread-pool for synchronous request
+                            perms_res = await asyncio.to_thread(
+                                self.drive.permissions().list(
+                                    fileId=d['id'],
+                                    useDomainAdminAccess=True,
+                                    supportsAllDrives=True,
+                                    fields="permissions(id, type, emailAddress, role, displayName, deleted)"
+                                ).execute
+                            )
                             
                             permissions = []
                             organizers = []
                             for perm in perms_res.get('permissions', []):
                                 perm_info = {
                                     "id": perm.get('id'),
-                                    "type": perm.get('type'),  # user, group, domain, anyone
+                                    "type": perm.get('type'),
                                     "email": perm.get('emailAddress'),
-                                    "role": perm.get('role'),  # organizer, fileOrganizer, writer, commenter, reader
+                                    "role": perm.get('role'),
                                     "display_name": perm.get('displayName'),
                                     "deleted": perm.get('deleted', False),
                                 }
@@ -602,12 +612,13 @@ class WorkspaceService:
                             drive_info['permission_count'] = len(permissions)
                             
                             # Summary counts
+                            roles = [p['role'] for p in permissions if not p['deleted']]
                             drive_info['permission_summary'] = {
-                                "organizers": len([p for p in permissions if p['role'] == 'organizer' and not p['deleted']]),
-                                "file_organizers": len([p for p in permissions if p['role'] == 'fileOrganizer' and not p['deleted']]),
-                                "writers": len([p for p in permissions if p['role'] == 'writer' and not p['deleted']]),
-                                "commenters": len([p for p in permissions if p['role'] == 'commenter' and not p['deleted']]),
-                                "readers": len([p for p in permissions if p['role'] == 'reader' and not p['deleted']]),
+                                "organizers": roles.count('organizer'),
+                                "file_organizers": roles.count('fileOrganizer'),
+                                "writers": roles.count('writer'),
+                                "commenters": roles.count('commenter'),
+                                "readers": roles.count('reader'),
                             }
                             
                         except HttpError as e:
@@ -615,32 +626,28 @@ class WorkspaceService:
                                 drive_info['permissions_error'] = "No permission to view ACLs"
                             else:
                                 drive_info['permissions_error'] = str(e)
+                        except Exception as e:
+                            drive_info['permissions_error'] = str(e)
                     
-                    drives.append(drive_info)
-                
-                page_token = res.get('nextPageToken')
-                if not page_token:
-                    break
+                    return drive_info
+
+            # Execute all drive processing tasks in parallel
+            drives = await asyncio.gather(*[process_drive(d) for d in raw_drives])
             
             # Sort drives by name
             drives.sort(key=lambda x: x['name'].lower())
             
-            # Calculate summary stats
-            total_organizer_count = sum(
-                d.get('permission_summary', {}).get('organizers', 0) for d in drives
-            )
-            restricted_drives = len([d for d in drives if d['restrictions'].get('domain_users_only')])
+            # 3. Calculate summary stats
+            inventory_summary = {
+                "total_drives": len(drives),
+                "total_managers": sum(d.get('permission_summary', {}).get('organizers', 0) for d in drives),
+                "total_permissions": sum(d.get('permission_count', 0) for d in drives),
+                "managed_externally": len([d for d in drives if not d.get('restrictions', {}).get('domain_users_only')]),
+            }
             
             return {
                 "drives": drives,
-                "count": len(drives),
-                "summary": {
-                    "total_drives": len(drives),
-                    "restricted_to_domain": restricted_drives,
-                    "open_to_external": len(drives) - restricted_drives,
-                    "total_organizers": total_organizer_count,
-                    "hidden_drives": len([d for d in drives if d.get('hidden')]),
-                }
+                "summary": inventory_summary
             }
         except HttpError as e:
             logger.error(f"HTTP Error fetching shared drives: {e.resp.status} - {e.content}")

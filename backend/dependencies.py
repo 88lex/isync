@@ -8,6 +8,7 @@ from functools import lru_cache
 from backend.store import store
 from backend.job_manager import job_manager
 from backend.logging_config import get_logger
+from backend.database import get_db
 
 logger = get_logger("isync.dependencies")
 

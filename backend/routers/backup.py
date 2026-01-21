@@ -9,7 +9,7 @@ from backend.backup_service import (
     list_backups, create_backup, restore_backup, delete_backup, get_backup_stats
 )
 
-router = APIRouter(prefix="/backup", tags=["Backup"])
+router = APIRouter(prefix="/api/backup", tags=["Backup"])
 
 
 class RestoreRequest(BaseModel):

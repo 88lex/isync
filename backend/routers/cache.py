@@ -12,7 +12,7 @@ import json
 from backend.database import get_db
 from backend.models.models import DataCache
 
-router = APIRouter(prefix="/cache", tags=["Cache"])
+router = APIRouter(prefix="/api/cache", tags=["Cache"])
 
 
 # --- Pydantic Models ---

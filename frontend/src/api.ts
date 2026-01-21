@@ -2005,8 +2005,8 @@ export const fetchWorkspaceDrives = async (domain: string): Promise<WorkspaceDri
     return res.data;
 };
 
-export const fetchWorkspaceSummary = async (domain: string): Promise<WorkspaceSummary> => {
-    const res = await axios.get(`${API_BASE}/workspace/summary`, { params: { domain } });
+export const fetchWorkspaceSummary = async (domain: string, refresh: boolean = false): Promise<WorkspaceSummary> => {
+    const res = await axios.get(`${API_BASE}/workspace/summary`, { params: { domain, refresh } });
     return res.data;
 };
 

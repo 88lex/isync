@@ -269,7 +269,7 @@ const WorkspaceManager = () => {
         setIsScanning(true);
         setCacheLoading('workspace_summary', domain, true);
         try {
-            const result = await fetchWorkspaceSummary(domain);
+            const result = await fetchWorkspaceSummary(domain, force);
             setCached('workspace_summary', domain, [result], 'workspace_api');
         } catch (e) {
             console.error("Failed to fetch workspace data", e);

@@ -3,10 +3,12 @@ from typing import Dict, Any, Optional
 from backend.dependencies import get_store, get_db
 from sqlalchemy.orm import Session
 from fastapi import Depends
-from backend.models.models import DomainStats
+from backend.models.models import DomainStats, DataCache
 from backend.workspace_service import WorkspaceService
 from backend.logging_config import get_logger
 from datetime import datetime
+import json
+import asyncio
 
 logger = get_logger("isync.routers.workspace")
 
@@ -80,55 +82,66 @@ async def get_workspace_auth_status(domain: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/summary")
-async def get_workspace_summary(domain: str, db: Session = Depends(get_db)):
-    """Combined summary for all sections (for landing page)"""
+async def get_workspace_summary(domain: str, refresh: bool = False, db: Session = Depends(get_db)):
+    """
+    Combined summary for all sections.
+    Implements cache-first logic to prevent redundant external API hits.
+    """
+    cache_id = f"workspace_summary_{domain}"
+    
+    # 1. Check local cache first unless refresh is requested
+    if not refresh:
+        existing_cache = db.query(DataCache).filter(DataCache.id == cache_id).first()
+        if existing_cache and existing_cache.payload:
+            try:
+                logger.info(f"Returning cached workspace summary for domain: {domain}")
+                return json.loads(existing_cache.payload)
+            except Exception as e:
+                logger.warning(f"Failed to parse cached summary for {domain}: {e}")
+
+    # 2. Perform fresh scan concurrently
     try:
         service = _get_ws_service(domain)
-        logger.info(f"Fetching workspace summary for domain: {domain}")
+        logger.info(f"Performing fresh concurrent workspace scan for domain: {domain}")
         
-        # Section-wise partial success model
-        try:
-            auth = await service.get_auth_status()
-        except Exception as e:
-            logger.error(f"Failed to get auth status for {domain}: {e}")
-            auth = {"error": str(e)}
-
-        try:
-            meta = await service.get_identity_metadata(domain)
-        except Exception as e:
-            logger.error(f"Failed to get metadata for {domain}: {e}")
-            meta = {"error": str(e)}
-            
-        try:
-            inv = await service.get_inventory_stats(domain)
-        except Exception as e:
-            logger.error(f"Failed to get inventory for {domain}: {e}")
-            inv = {"error": str(e)}
-            
-        try:
-            storage = await service.get_storage_usage(domain)
-        except Exception as e:
-            logger.error(f"Failed to get storage for {domain}: {e}")
-            storage = {"error": str(e)}
-            
-        try:
-            drives = await service.get_shared_drives()
-        except Exception as e:
-            logger.error(f"Failed to get drives for {domain}: {e}")
-            drives = {"error": str(e)}
+        # Map section names to co-routines
+        tasks = {
+            "auth": service.get_auth_status(),
+            "metadata": service.get_identity_metadata(domain),
+            "inventory": service.get_inventory_stats(domain),
+            "storage": service.get_storage_usage(domain),
+            "drives": service.get_shared_drives()
+        }
         
-        # Update DomainStats in DB
+        # Execute all tasks in parallel
+        ordered_keys = list(tasks.keys())
+        ordered_tasks = [tasks[k] for k in ordered_keys]
+        
+        responses = await asyncio.gather(*ordered_tasks, return_exceptions=True)
+        
+        results = {}
+        for i, key in enumerate(ordered_keys):
+            res = responses[i]
+            if isinstance(res, Exception):
+                logger.error(f"Concurrent task '{key}' failed for {domain}: {res}")
+                results[key] = {"error": str(res)}
+            else:
+                results[key] = res
+        
+        # 3. Update DomainStats in DB
         try:
             d_stats = db.query(DomainStats).filter(DomainStats.domain == domain).first()
             if not d_stats:
                 d_stats = DomainStats(domain=domain)
                 db.add(d_stats)
             
+            storage = results.get("storage", {})
             if "error" not in storage:
                 q = storage.get("quota_info", {})
                 d_stats.total_quota_gb = q.get("total_quota_gb", 0)
                 d_stats.total_used_gb = q.get("total_used_gb", 0)
             
+            inv = results.get("inventory", {})
             if "error" not in inv:
                 s = inv.get("user_stats", {})
                 d_stats.user_count = s.get("total", 0)
@@ -140,13 +153,31 @@ async def get_workspace_summary(domain: str, db: Session = Depends(get_db)):
             logger.error(f"Failed to update DomainStats for {domain}: {db_err}")
             db.rollback()
 
-        return {
-            "auth": auth,
-            "metadata": meta,
-            "inventory": inv,
-            "storage": storage,
-            "drives": drives
-        }
+        # 4. Update DataCache in DB
+        try:
+            now = datetime.utcnow()
+            payload_json = json.dumps(results)
+            cache_entry = db.query(DataCache).filter(DataCache.id == cache_id).first()
+            
+            if cache_entry:
+                cache_entry.payload = payload_json
+                cache_entry.fetched_at = now
+            else:
+                cache_entry = DataCache(
+                    id=cache_id,
+                    data_type="workspace_summary",
+                    context_key=domain,
+                    payload=payload_json,
+                    fetched_at=now
+                )
+                db.add(cache_entry)
+            db.commit()
+        except Exception as cache_err:
+            logger.error(f"Failed to update DataCache for {domain}: {cache_err}")
+            db.rollback()
+
+        return results
+
     except HTTPException:
         raise
     except Exception as e:
