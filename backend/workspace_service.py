@@ -30,6 +30,8 @@ class WorkspaceService:
         'https://www.googleapis.com/auth/admin.directory.customer.readonly',
         'https://www.googleapis.com/auth/admin.directory.domain.readonly',
         'https://www.googleapis.com/auth/admin.reports.usage.readonly',
+        'https://www.googleapis.com/auth/apps.groups.settings',
+        'https://www.googleapis.com/auth/admin.directory.rolemanagement.readonly',
     ]
 
     def __init__(self, sa_json_path: str, admin_email: str):

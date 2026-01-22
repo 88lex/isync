@@ -64,7 +64,9 @@ To use ISync, you must configure a Google Cloud Project (GCP) and authorize it w
     *   **Admin SDK API** (Critical: For User/Group management)
     *   **Google Drive API** (Critical: For data transfer)
     *   **Google Sheets API** (Optional: For logs/exports)
-    *   **Cloud Resource Manager API** (Critical: For permission verification)
+    *   **Cloud Resource Manager API** (Critical: For project/hierarchy verification)
+    *   **IAM API** (Identity and Access Management API: Required for permission checks)
+    *   **Service Usage API** (Required for API discovery and quota management)
     *   **Cloud Identity API**
     *   **Groups Settings API**
 
@@ -96,27 +98,34 @@ This phase authorizes the Service Account to act on behalf of your users.
     *   Go to **Security > Access and data control > API controls**.
     *   Click **Manage Domain-wide Delegation**.
     *   Click **Add new**.
-    *   **Client ID**: Paste the numeric ID from your JSON key.
-    *   **OAuth Scopes**: Copy and paste the entire comma-separated list below:
+    *   **Client ID**: Paste the numeric ID from your JSON key (e.g., `11223344556677889900`).
+    *   **OAuth Scopes**: Copy and paste the entire comma-separated list below (Triple-click to select all):
 
     ```text
-    https://www.googleapis.com/auth/admin.directory.user,https://www.googleapis.com/auth/admin.directory.group,https://www.googleapis.com/auth/admin.directory.group.member,https://www.googleapis.com/auth/drive,https://www.googleapis.com/auth/spreadsheets,https://www.googleapis.com/auth/cloud-platform,https://www.googleapis.com/auth/cloud-identity,https://www.googleapis.com/auth/admin.directory.customer.readonly,https://www.googleapis.com/auth/admin.directory.domain.readonly,https://www.googleapis.com/auth/admin.reports.usage.readonly
+    https://www.googleapis.com/auth/admin.directory.user,https://www.googleapis.com/auth/admin.directory.group,https://www.googleapis.com/auth/admin.directory.group.member,https://www.googleapis.com/auth/drive,https://www.googleapis.com/auth/spreadsheets,https://www.googleapis.com/auth/cloud-platform,https://www.googleapis.com/auth/cloud-identity,https://www.googleapis.com/auth/admin.directory.customer.readonly,https://www.googleapis.com/auth/admin.directory.domain.readonly,https://www.googleapis.com/auth/admin.reports.usage.readonly,https://www.googleapis.com/auth/apps.groups.settings,https://www.googleapis.com/auth/admin.directory.rolemanagement.readonly
     ```
 
-3.  **Verify Scopes**:
+3.  **Verify Scopes (Feature Checklist)**:
     | Scope | Feature Enabled |
     | :--- | :--- |
     | `admin.directory.user` | Identifying Admins & listing users for migration. |
     | `admin.directory.group` | Managing migration permission groups. |
     | `drive` | Core data transfer & Shared Drive management. |
     | `admin.reports.usage.readonly` | Storage statistics & activity dashboards. |
-    | `cloud-platform` | Cross-service GCP integration. |
+    | `apps.groups.settings` | Advanced group security & posting policies. |
+    | `admin.directory.rolemanagment` | Verification of admin roles & custom permissions. |
+    | `cloud-platform` | Cross-service GCP integration for automation. |
     | `admin.directory.customer.readonly` | Retrieving your Workspace Organization ID. |
 
 ### Phase 3: Final Linkage
 
-1.  **Admin Email**: You must choose a **Super Admin** email from your Workspace (e.g., `admin@yourdomain.com`). ISync uses this to impersonate the authority needed for Directory lookups.
-2.  **Config**: Add these details to the **Configuration** page in the ISync UI or directly in `config.yaml`.
+1.  **Select a Super Admin**: You must choose a **Super Admin** email from your Workspace (e.g., `admin@yourdomain.com`). The Service Account will impersonate this user to perform directory lookups.
+2.  **Add to Configuration**: 
+    *   Go to the **Configuration** page in the ISync UI.
+    *   Add a new Domain.
+    *   Input your **Domain**, **Admin Email**, and the path to your **JSON Key**.
+    *   **Save**.
+3.  **Run Prep Check**: Navigate to the **Prep Check** page to verify that all APIs and DWD credentials are valid and active.
 
 ---
 
