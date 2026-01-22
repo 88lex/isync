@@ -58,3 +58,10 @@ CODE_REVIEW_AND_IMPROVEMENTS.md
 DB_REFACTOR_PLAN.md
 FUTURE_ENHANCEMENTS_PLAN.md
 WORKSPACE_REFRESH_FIX.md
+
+# --- Temporary Dev Scripts ---
+check_migration.py
+complete_migration.py
+update_db_schema.py
+test_imports.py
+verify_sync.py
