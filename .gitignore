@@ -52,3 +52,9 @@ frontend/dist/
 frontend/.env
 frontend/.env.local
 
+
+# --- Planning Documents (Antigravity) ---
+CODE_REVIEW_AND_IMPROVEMENTS.md
+DB_REFACTOR_PLAN.md
+FUTURE_ENHANCEMENTS_PLAN.md
+WORKSPACE_REFRESH_FIX.md

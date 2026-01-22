@@ -31,6 +31,7 @@ const WorkspaceManager = () => {
     const [config, setConfig] = useState<Config>({});
     const [selectedDomain, setSelectedDomain] = useState<string>('');
     const [isScanning, setIsScanning] = useState(false);
+    const [scanningDomains, setScanningDomains] = useState<Set<string>>(new Set());
     const [storageStats, setStorageStats] = useState<any[]>([]);
     const [auditLoading, setAuditLoading] = useState<string | null>(null);
     const [selectedAuditServer, setSelectedAuditServer] = useState<string>("local");
@@ -250,7 +251,7 @@ const WorkspaceManager = () => {
             const domain = d.domain_name;
             setCacheLoading('workspace_summary', domain, true);
             try {
-                const result = await fetchWorkspaceSummary(domain);
+                const result = await fetchWorkspaceSummary(domain, true, true);
                 setCached('workspace_summary', domain, [result], 'workspace_api');
             } catch (e) {
                 console.error(`Failed to fetch ${domain}`, e);
@@ -295,9 +296,32 @@ const WorkspaceManager = () => {
         }
     };
 
+    const scanSingleDomain = async (domain: string) => {
+        setScanningDomains(prev => new Set(prev).add(domain));
+        setCacheLoading('workspace_summary', domain, true);
+        try {
+            const result = await fetchWorkspaceSummary(domain, true);
+            setCached('workspace_summary', domain, [result], 'workspace_api');
+
+            // Update storage overview after scan
+            const overview = await fetchStorageOverview();
+            setCached('storage_overview', 'local', overview, 'db_cache');
+        } catch (e) {
+            console.error(`Failed to fetch ${domain}`, e);
+        } finally {
+            setScanningDomains(prev => {
+                const next = new Set(prev);
+                next.delete(domain);
+                return next;
+            });
+            setCacheLoading('workspace_summary', domain, false);
+        }
+    };
+
     useEffect(() => {
         if (selectedDomain) {
-            fetchAll(selectedDomain);
+            // Only load from cache, don't force refresh on domain selection
+            fetchAll(selectedDomain, false);
         }
     }, [selectedDomain]);
 
@@ -477,31 +501,42 @@ const WorkspaceManager = () => {
         const stats = config.domains.map(d => {
             const domain = d.domain_name;
             const entry = (cache as any).workspace_summary[domain];
+            // Rename to avoid shadowing and check global state
+            const isRowScanning = scanningDomains.has(domain) || isScanning;
+
+            // detailed result from latest scan (if available)
+            const summaryResult = entry?.data?.[0];
+            const hasAuthError = summaryResult?.auth?.error || summaryResult?.storage?.error;
 
             // Try to use overview data first
             const overviewEntry = overviewData.find(o => o.domain === domain);
 
             if (overviewEntry) {
+                // If we have a fresh auth error in the detailed result, show it instead of stale overview data status
+                const status = isRowScanning ? 'Scanning...' : (hasAuthError ? 'Auth Error' : 'Ready');
                 return {
                     domain,
                     used: (overviewEntry.total_used_gb / 1024) || 0,
                     quota: (overviewEntry.total_quota_gb / 1024) || 0,
                     percentage: (overviewEntry.total_used_gb / overviewEntry.total_quota_gb * 100) || 0,
-                    status: 'Ready'
+                    status
                 };
             }
 
             // Fallback to full summary cache
-            const s = entry?.data?.[0]?.storage;
+            const s = summaryResult?.storage;
             const quotaInfo = (s as any)?.quota_info;
 
             if (!quotaInfo) {
+                let status = isRowScanning || storageOverviewCache.isLoading || entry?.isLoading ? 'Scanning...' : 'No Data';
+                if (hasAuthError && !isRowScanning) status = 'Auth Error';
+
                 return {
                     domain,
                     used: 0,
                     quota: 0,
                     percentage: 0,
-                    status: storageOverviewCache.isLoading || entry?.isLoading ? 'Loading...' : 'No Data'
+                    status
                 };
             }
 
@@ -509,7 +544,8 @@ const WorkspaceManager = () => {
             const quota = quotaInfo.total_quota_tb || (quotaInfo.total_quota_gb / 1024) || 0;
             const percentage = quotaInfo.percentage_used || 0;
 
-            return { domain, used, quota, percentage, status: 'Ready' };
+            const status = isRowScanning ? 'Scanning...' : (hasAuthError ? 'Auth Error' : 'Ready');
+            return { domain, used, quota, percentage, status };
         });
 
         const { sortedData: sortedStats, handleSort, sortColumn, sortDirection } = useSortableData({
@@ -582,6 +618,17 @@ const WorkspaceManager = () => {
                                             >
                                                 {s.domain}
                                             </button>
+                                            <button
+                                                onClick={(e) => {
+                                                    e.stopPropagation();
+                                                    scanSingleDomain(s.domain);
+                                                }}
+                                                disabled={scanningDomains.has(s.domain)}
+                                                className="p-1.5 rounded-lg bg-cyan-600/10 hover:bg-cyan-600/30 text-cyan-400 border border-cyan-500/20 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+                                                title="Refresh data from Google Workspace"
+                                            >
+                                                <RefreshCw size={12} className={scanningDomains.has(s.domain) ? 'animate-spin' : ''} />
+                                            </button>
                                         </div>
                                     </td>
                                     <td className="px-6 py-2.5 text-right">
@@ -607,8 +654,9 @@ const WorkspaceManager = () => {
                                     </td>
                                     <td className="px-6 py-2.5 text-right">
                                         <span className={`text-[9px] px-2.5 py-0.5 rounded-full uppercase font-black tracking-widest border shadow-sm ${s.status === 'Ready' ? 'bg-emerald-950/40 text-emerald-400 border-emerald-500/30' :
-                                            s.status === 'Loading...' ? 'bg-cyan-950/40 text-cyan-400 border-cyan-500/30 animate-pulse' :
-                                                'bg-zinc-800 text-zinc-500 border-zinc-700'
+                                            (s.status === 'Loading...' || s.status === 'Scanning...') ? 'bg-cyan-950/40 text-cyan-400 border-cyan-500/30 animate-pulse' :
+                                                s.status === 'Auth Error' ? 'bg-red-950/40 text-red-400 border-red-500/30' :
+                                                    'bg-zinc-800 text-zinc-500 border-zinc-700'
                                             }`}>
                                             {s.status}
                                         </span>

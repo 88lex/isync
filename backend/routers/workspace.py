@@ -82,10 +82,15 @@ async def get_workspace_auth_status(domain: str):
         raise HTTPException(status_code=500, detail=str(e))
 
 @router.get("/summary")
-async def get_workspace_summary(domain: str, refresh: bool = False, db: Session = Depends(get_db)):
+async def get_workspace_summary(domain: str, refresh: bool = False, quick: bool = False, db: Session = Depends(get_db)):
     """
     Combined summary for all sections.
     Implements cache-first logic to prevent redundant external API hits.
+    
+    Args:
+        domain: The domain to scan
+        refresh: Force a fresh scan ignoring cache
+        quick: valid only with refresh=True, skips heavy permission scanning
     """
     cache_id = f"workspace_summary_{domain}"
     
@@ -102,7 +107,7 @@ async def get_workspace_summary(domain: str, refresh: bool = False, db: Session 
     # 2. Perform fresh scan concurrently
     try:
         service = _get_ws_service(domain)
-        logger.info(f"Performing fresh concurrent workspace scan for domain: {domain}")
+        logger.info(f"Performing fresh concurrent workspace scan for domain: {domain} (quick={quick})")
         
         # Map section names to co-routines
         tasks = {
@@ -110,7 +115,7 @@ async def get_workspace_summary(domain: str, refresh: bool = False, db: Session 
             "metadata": service.get_identity_metadata(domain),
             "inventory": service.get_inventory_stats(domain),
             "storage": service.get_storage_usage(domain),
-            "drives": service.get_shared_drives()
+            "drives": service.get_shared_drives(include_permissions=not quick)
         }
         
         # Execute all tasks in parallel

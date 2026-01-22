@@ -19,20 +19,40 @@ class WorkspaceService:
     """
     
     # Comprehensive list of scopes authorized via Domain-Wide Delegation
-    SCOPES = [
+    
+    # Granular Scopes
+    SCOPES_DIRECTORY = [
         'https://www.googleapis.com/auth/admin.directory.user',
         'https://www.googleapis.com/auth/admin.directory.group',
         'https://www.googleapis.com/auth/admin.directory.group.member',
-        'https://www.googleapis.com/auth/drive',
-        'https://www.googleapis.com/auth/spreadsheets',
-        'https://www.googleapis.com/auth/cloud-platform',
-        'https://www.googleapis.com/auth/cloud-identity',
         'https://www.googleapis.com/auth/admin.directory.customer.readonly',
         'https://www.googleapis.com/auth/admin.directory.domain.readonly',
-        'https://www.googleapis.com/auth/admin.reports.usage.readonly',
-        'https://www.googleapis.com/auth/apps.groups.settings',
-        'https://www.googleapis.com/auth/admin.directory.rolemanagement.readonly',
+        'https://www.googleapis.com/auth/admin.directory.rolemanagement.readonly'
     ]
+    
+    SCOPES_DRIVE = [
+        'https://www.googleapis.com/auth/drive'
+    ]
+    
+    SCOPES_REPORTS = [
+        'https://www.googleapis.com/auth/admin.reports.usage.readonly'
+    ]
+
+    SCOPES_GROUPS_SETTINGS = [
+        'https://www.googleapis.com/auth/apps.groups.settings'
+    ]
+    
+    SCOPES_SHEETS = [
+        'https://www.googleapis.com/auth/spreadsheets'
+    ]
+    
+    SCOPES_CLOUD = [
+        'https://www.googleapis.com/auth/cloud-platform',
+        'https://www.googleapis.com/auth/cloud-identity'
+    ]
+
+    # Combined for legacy checks or auth status
+    SCOPES = SCOPES_DIRECTORY + SCOPES_DRIVE + SCOPES_REPORTS + SCOPES_GROUPS_SETTINGS + SCOPES_SHEETS + SCOPES_CLOUD
 
     def __init__(self, sa_json_path: str, admin_email: str):
         self.sa_json_path = sa_json_path
@@ -45,46 +65,46 @@ class WorkspaceService:
         self._crm_service = None
         self._identity_service = None
 
-    def _get_credentials(self):
+    def _get_credentials(self, scopes: List[str]):
         creds = service_account.Credentials.from_service_account_file(
-            self.sa_json_path, scopes=self.SCOPES
+            self.sa_json_path, scopes=scopes
         )
         return creds.with_subject(self.admin_email)
 
     @property
     def directory(self):
         if not self._directory_service:
-            self._directory_service = build('admin', 'directory_v1', credentials=self._get_credentials())
+            self._directory_service = build('admin', 'directory_v1', credentials=self._get_credentials(self.SCOPES_DIRECTORY))
         return self._directory_service
 
     @property
     def reports(self):
         if not self._reports_service:
-            self._reports_service = build('admin', 'reports_v1', credentials=self._get_credentials())
+            self._reports_service = build('admin', 'reports_v1', credentials=self._get_credentials(self.SCOPES_REPORTS))
         return self._reports_service
 
     @property
     def drive(self):
         if not self._drive_service:
-            self._drive_service = build('drive', 'v3', credentials=self._get_credentials())
+            self._drive_service = build('drive', 'v3', credentials=self._get_credentials(self.SCOPES_DRIVE))
         return self._drive_service
     
     @property
     def sheets(self):
         if not self._sheets_service:
-            self._sheets_service = build('sheets', 'v4', credentials=self._get_credentials())
+            self._sheets_service = build('sheets', 'v4', credentials=self._get_credentials(self.SCOPES_SHEETS))
         return self._sheets_service
     
     @property
     def cloud_resource_manager(self):
         if not self._crm_service:
-            self._crm_service = build('cloudresourcemanager', 'v3', credentials=self._get_credentials())
+            self._crm_service = build('cloudresourcemanager', 'v3', credentials=self._get_credentials(self.SCOPES_CLOUD))
         return self._crm_service
 
     @property
     def cloud_identity(self):
         if not self._identity_service:
-            self._identity_service = build('cloudidentity', 'v1', credentials=self._get_credentials())
+            self._identity_service = build('cloudidentity', 'v1', credentials=self._get_credentials(self.SCOPES_CLOUD))
         return self._identity_service
 
     @property
@@ -92,7 +112,7 @@ class WorkspaceService:
         """Group Settings API for advanced group configuration details."""
         if not self._groupssettings_service:
             try:
-                self._groupssettings_service = build('groupssettings', 'v1', credentials=self._get_credentials())
+                self._groupssettings_service = build('groupssettings', 'v1', credentials=self._get_credentials(self.SCOPES_GROUPS_SETTINGS))
             except Exception as e:
                 logger.warning(f"Failed to initialize Groups Settings API: {e}")
                 self._groupssettings_service = None
@@ -393,25 +413,17 @@ class WorkspaceService:
         """
         Section 3: Storage & Usage Statistics
         
-        Retrieves storage quota using Drive API about().get() (always works with drive scope).
-        Optionally retrieves usage reports if Reports API scope is available.
+        Prioritizes Drive API (about().get()) for realtime "Instant" storage numbers (matching Drive UI).
+        Uses Settings/Reports API for activity metrics.
         """
         result = {
-            "quota_info": {
-                "total_quota_mb": 0,
-                "total_quota_gb": 0,
-                "total_used_mb": 0,
-                "total_used_gb": 0,
-                "drive_used_mb": 0,
-                "gmail_used_mb": 0,
-                "percentage_used": 0,
-            },
+            "quota_info": None,
             "shared_drive_storage_mb": 0,
             "activity": None,
             "date": None,
         }
         
-        # Primary: Use Drive API about().get() - works with existing 'drive' scope
+        # 1. Primary: Use Drive API about().get() - Realtime, matching Admin view
         try:
             about = self.drive.about().get(fields='storageQuota,user').execute()
             storage_quota = about.get('storageQuota', {})
@@ -442,95 +454,81 @@ class WorkspaceService:
                 "drive_used_mb": int(drive_mb),
                 "trash_mb": int(trash_bytes / (1024 * 1024)),
                 "percentage_used": round(percentage, 1),
+                "source": "Drive API (Realtime)"
             }
             
-            # User info for context
             user = about.get('user', {})
             result["retrieved_as"] = user.get('emailAddress')
-            
-            logger.info(f"Storage retrieved via Drive API: {usage_gb:.1f} GB / {limit_gb:.1f} GB ({percentage:.1f}%)")
+            logger.info(f"Storage retrieved via Drive API: {usage_gb:.1f} GB / {limit_gb:.1f} GB")
             
         except HttpError as e:
-            logger.error(f"Failed to get storage via Drive API: {e}")
-            return {"status": "error", "message": f"Drive API error: {e.resp.status}"}
+            logger.warning(f"Failed to get storage via Drive API: {e}")
         except Exception as e:
-            logger.error(f"Error fetching storage (Drive API): {e}")
-            return {"status": "error", "message": str(e)}
-        
-        # Secondary: Try Reports API for activity metrics (optional scope)
+            logger.warning(f"Error fetching storage (Drive API): {e}")
+
+        # 2. Secondary: Reports API for activity metrics (and backup storage source)
         try:
-            for days_ago in [3, 4, 5, 6, 7]:
+            for days_ago in [2, 3, 4, 5]:
                 date = (datetime.now() - timedelta(days=days_ago)).strftime('%Y-%m-%d')
                 try:
                     report = self.reports.customerUsageReports().get(
                         date=date,
-                        parameters=','.join([
-                            'drive:num_items_created',
-                            'drive:num_items_edited',
-                            'drive:num_items_viewed',
-                            'drive:num_items_shared_externally',
-                            'drive:num_items_trashed',
-                        ])
+                        parameters='accounts:used_quota_in_mb,accounts:total_quota_in_mb,drive:num_items_created,drive:num_items_edited,drive:num_items_viewed,drive:num_items_trashed'
                     ).execute()
                     
                     if 'usageReports' in report and len(report['usageReports']) > 0:
-                        activity = {}
-                        for param in report['usageReports'][0].get('parameters', []):
-                            name = param['name'].replace('drive:', '')
-                            if 'intValue' in param:
-                                activity[name] = int(param['intValue'])
+                        params = {p['name']: int(p.get('intValue', 0)) for p in report['usageReports'][0].get('parameters', [])}
                         
+                        # Populate activity
                         result["activity"] = {
-                            "items_created": activity.get('num_items_created', 0),
-                            "items_edited": activity.get('num_items_edited', 0),
-                            "items_viewed": activity.get('num_items_viewed', 0),
-                            "items_shared_externally": activity.get('num_items_shared_externally', 0),
-                            "items_trashed": activity.get('num_items_trashed', 0),
+                            "items_created": params.get('drive:num_items_created', 0),
+                            "items_edited": params.get('drive:num_items_edited', 0),
+                            "items_viewed": params.get('drive:num_items_viewed', 0),
+                            "items_trashed": params.get('drive:num_items_trashed', 0),
                         }
                         result["date"] = date
+                        
+                        # Fallback: If Drive API failed, use Reports API for storage
+                        if not result["quota_info"]:
+                            used_mb = params.get('accounts:used_quota_in_mb', 0)
+                            limit_mb = params.get('accounts:total_quota_in_mb', 0)
+                            
+                            if limit_mb > 0:
+                                limit_gb = limit_mb / 1024
+                                used_gb = used_mb / 1024
+                                percentage = (used_mb / limit_mb * 100)
+                                
+                                result["quota_info"] = {
+                                    "total_quota_mb": int(limit_mb),
+                                    "total_quota_gb": round(limit_gb, 2),
+                                    "total_quota_tb": round(limit_gb / 1024, 2),
+                                    "total_used_mb": int(used_mb),
+                                    "total_used_gb": round(used_gb, 2),
+                                    "total_used_tb": round(used_gb / 1024, 2),
+                                    "drive_used_mb": int(used_mb), 
+                                    "trash_mb": 0,
+                                    "percentage_used": round(percentage, 1),
+                                    "source": "Reports API"
+                                }
+                                logger.info(f"Using Reports API storage fallback: {used_mb}MB")
+                        
                         break
                 except HttpError as e:
-                    if e.resp.status == 400:
-                        continue  # Data not available for this date
-                    elif e.resp.status == 403:
-                        logger.debug("Reports API not authorized - skipping activity metrics")
-                        break
-                    raise
+                     if e.resp.status == 403:
+                         logger.debug("Reports API not authorized")
+                         break
+                     continue 
         except Exception as e:
-            # Activity metrics are optional, don't fail the whole request
-            logger.debug(f"Could not fetch activity metrics: {e}")
-        
+            logger.debug(f"Could not fetch Reports API metrics: {e}")
+            
+        if not result["quota_info"]:
+             return {"status": "error", "message": "All storage APIs failed"}
+
         return result
 
     async def _get_shared_drive_storage_total(self) -> int:
         """Calculate total storage used by all Shared Drives (approximate)."""
-        total_mb = 0
-        try:
-            page_token = None
-            while True:
-                res = self.drive.drives().list(
-                    useDomainAdminAccess=True,
-                    pageToken=page_token,
-                    pageSize=100,
-                    fields="nextPageToken, drives(id)"
-                ).execute()
-                
-                for drive in res.get('drives', []):
-                    try:
-                        # Get about info for storage used - this doesn't work directly for shared drives
-                        # Storage per shared drive requires iterating files which is expensive
-                        # For now, we'll skip per-drive storage calculation
-                        pass
-                    except Exception:
-                        pass
-                
-                page_token = res.get('nextPageToken')
-                if not page_token:
-                    break
-        except Exception as e:
-            logger.warning(f"Could not calculate shared drive storage: {e}")
-        
-        return total_mb
+        return 0
 
     async def get_shared_drives(self, include_permissions: bool = True) -> Dict[str, Any]:
         """
@@ -630,6 +628,9 @@ class WorkspaceService:
                                 drive_info['permissions_error'] = str(e)
                         except Exception as e:
                             drive_info['permissions_error'] = str(e)
+                    else:
+                         drive_info['permission_count'] = -1
+                         drive_info['permissions_skipped'] = True
                     
                     return drive_info
 
@@ -642,8 +643,8 @@ class WorkspaceService:
             # 3. Calculate summary stats
             inventory_summary = {
                 "total_drives": len(drives),
-                "total_managers": sum(d.get('permission_summary', {}).get('organizers', 0) for d in drives),
-                "total_permissions": sum(d.get('permission_count', 0) for d in drives),
+                "total_managers": sum(d.get('permission_summary', {}).get('organizers', 0) for d in drives) if include_permissions else -1,
+                "total_permissions": sum(d.get('permission_count', 0) for d in drives) if include_permissions else -1,
                 "managed_externally": len([d for d in drives if not d.get('restrictions', {}).get('domain_users_only')]),
             }
             
