@@ -99,23 +99,30 @@ This phase authorizes the Service Account to act on behalf of your users.
     *   Click **Manage Domain-wide Delegation**.
     *   Click **Add new**.
     *   **Client ID**: Paste the numeric ID from your JSON key (e.g., `11223344556677889900`).
-    *   **OAuth Scopes**: Copy and paste the entire comma-separated list below (Triple-click to select all):
-
-    ```text
-    https://www.googleapis.com/auth/admin.directory.user,https://www.googleapis.com/auth/admin.directory.group,https://www.googleapis.com/auth/admin.directory.group.member,https://www.googleapis.com/auth/drive,https://www.googleapis.com/auth/spreadsheets,https://www.googleapis.com/auth/cloud-platform,https://www.googleapis.com/auth/cloud-identity,https://www.googleapis.com/auth/admin.directory.customer.readonly,https://www.googleapis.com/auth/admin.directory.domain.readonly,https://www.googleapis.com/auth/admin.reports.usage.readonly,https://www.googleapis.com/auth/apps.groups.settings,https://www.googleapis.com/auth/admin.directory.rolemanagement.readonly
-    ```
+    *   **OAuth Scopes**: Copy and paste the comprehensive list from the section below.
 
 3.  **Verify Scopes (Feature Checklist)**:
-    | Scope | Feature Enabled |
-    | :--- | :--- |
-    | `admin.directory.user` | Identifying Admins & listing users for migration. |
-    | `admin.directory.group` | Managing migration permission groups. |
-    | `drive` | Core data transfer & Shared Drive management. |
-    | `admin.reports.usage.readonly` | Storage statistics & activity dashboards. |
-    | `apps.groups.settings` | Advanced group security & posting policies. |
-    | `admin.directory.rolemanagment` | Verification of admin roles & custom permissions. |
-    | `cloud-platform` | Cross-service GCP integration for automation. |
-    | `admin.directory.customer.readonly` | Retrieving your Workspace Organization ID. |
+
+| Scope | Feature Enabled |
+| :--- | :--- |
+| `admin.directory.user` | Listing users, identification of Super Admins. |
+| `admin.directory.group` | Managing and listing organizational groups. |
+| `admin.directory.group.member` | Membership analysis & permission group sync. |
+| `drive` | **Critical**: Core data transfer, Shared Drive creation & management. |
+| `spreadsheets` | Access to Google Sheets for logging/reporting. |
+| `cloud-platform` | Cross-service GCP API calls for advanced automation. |
+| `cloud-identity` | Management of Cloud Identity groups and device associations. |
+| `admin.directory.customer.readonly` | Retrieving your Workspace Organization ID (Customer ID). |
+| `admin.directory.domain.readonly` | Identification of primary domains and verified aliases. |
+| `admin.reports.usage.readonly` | Storage usage statistics and Drive activity metrics. |
+| `apps.groups.settings` | Advanced group settings (e.g., external posting rules). |
+| `admin.directory.rolemanagement.readonly` | Verification of Admin roles and custom permissions. |
+
+#### 📋 Quick Copy-Paste for OAuth Scopes
+Copy this entire list into the "OAuth Scopes" field in the Admin Console:
+```text
+https://www.googleapis.com/auth/admin.directory.user,https://www.googleapis.com/auth/admin.directory.group,https://www.googleapis.com/auth/admin.directory.group.member,https://www.googleapis.com/auth/drive,https://www.googleapis.com/auth/spreadsheets,https://www.googleapis.com/auth/cloud-platform,https://www.googleapis.com/auth/cloud-identity,https://www.googleapis.com/auth/admin.directory.customer.readonly,https://www.googleapis.com/auth/admin.directory.domain.readonly,https://www.googleapis.com/auth/admin.reports.usage.readonly,https://www.googleapis.com/auth/apps.groups.settings,https://www.googleapis.com/auth/admin.directory.rolemanagement.readonly
+```
 
 ### Phase 3: Final Linkage
 
