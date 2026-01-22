@@ -27,6 +27,36 @@ The codebase demonstrates a **working migration from file-based to database-back
 | **LOW-2**: Hardcoded singleton lists | ✅ **FIXED** | Extracted to `SINGLETON_TYPES` and `KEYED_TYPES` constants |
 | HIGH-2: store.py session management | ⏳ Pending | Requires larger refactor |
 | MED-3: Cache invalidation | ⏳ Pending | Requires WebSocket or event system |
+| MED-4: Bulk scan progress UI | ⏳ Pending | UX improvement for Dashboard |
+| MED-5: Remove legacy state | ⏳ Pending | driveManager/rcloneManager cleanup |
+
+---
+
+## 📍 SESSION CHECKPOINT - 2026-01-21 23:58
+
+**Last Session Summary:**
+- Completed comprehensive code review of Dashboard and frontend-to-database architecture
+- Fixed 7 issues (3 Critical, 2 High, 1 Medium, 1 Low)
+- All TypeScript and Python code compiles successfully
+- Backend health check passes
+
+**Next Steps When Resuming:**
+1. **HIGH-2: store.py session management** - Refactor ConfigStore to accept session dependency instead of creating its own
+2. **MED-3: Cache invalidation** - Implement automatic cache invalidation when data changes via API
+3. **MED-4: Bulk scan progress** - Add progress tracking UI for "Scan All" operation in Dashboard
+4. **MED-5: Legacy state cleanup** - Remove or migrate `driveManager` and `rcloneManager` from context
+
+**Files Modified This Session:**
+- `frontend/src/contexts/IsyncDataContext.tsx` - Stabilized getCached, added constants
+- `backend/repositories/ssh_servers.py` - NEW FILE
+- `backend/repositories/__init__.py` - Added SSHServerRepository export
+- `backend/storage_service.py` - Fixed async blocking I/O
+- `backend/main.py` - Removed duplicate router
+- `backend/repositories/sync_pairs.py` - Simplified ID lookup
+- `backend/routers/dashboard.py` - Simplified ID lookup
+- `backend/models/models.py` - Added database indices
+
+**To Continue:** Just ask "Continue where we left off on the code review improvements"
 
 ---
 
