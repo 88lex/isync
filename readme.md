@@ -67,6 +67,9 @@ To use ISync, you must configure a Google Cloud Project (GCP) and authorize it w
     *   **Cloud Resource Manager API** (Critical: For project/hierarchy verification)
     *   **IAM API** (Identity and Access Management API: Required for permission checks)
     *   **Service Usage API** (Required for API discovery and quota management)
+    *   **Cloud Quotas API** (Highly Recommended: For proactive rate limit & quota management)
+    *   **Cloud Asset API** (Highly Recommended: For automated SA discovery and drift detection)
+    *   **Google Workspace Policy API** (Highly Recommended: For pre-migration environment audits)
     *   **Cloud Identity API**
     *   **Groups Settings API**
 
