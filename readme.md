@@ -65,17 +65,21 @@ To use ISync, you must configure a Google Cloud Project (GCP) and authorize it w
     *   Create a new project named "ISync-Migration" (or similar).
 
 2.  **Enable APIs** (Search for these in the **API Library**):
-    *   **Admin SDK API** (Critical: For User/Group management)
-    *   **Google Drive API** (Critical: For data transfer)
-    *   **Google Sheets API** (Optional: For logs/exports)
-    *   **Cloud Resource Manager API** (Critical: For project/hierarchy verification)
-    *   **IAM API** (Identity and Access Management API: Required for permission checks)
-    *   **Service Usage API** (Required for API discovery and quota management)
-    *   **Cloud Quotas API** (Highly Recommended: For proactive rate limit & quota management)
-    *   **Cloud Asset API** (Highly Recommended: For automated SA discovery and drift detection)
-    *   **Google Workspace Policy API** (Highly Recommended: For pre-migration environment audits)
-    *   **Cloud Identity API**
-    *   **Groups Settings API**
+
+    **Mandatory (Core Functionality)**:
+    *   **Admin SDK API** (For User/Group/Domain management)
+    *   **Google Drive API** (For data transfer and Shared Drive operations)
+    *   **Cloud Resource Manager API** (For project-level permission checks)
+    *   **IAM API** (Identity and Access Management API: For identifying Service Account roles)
+    *   **Service Usage API** (Required for API discovery and state management)
+
+    **Recommended (Advanced Monitoring & Automation)**:
+    *   **Cloud Quotas API** (For proactive rate limit/API request monitoring)
+    *   **Cloud Asset API** (For automated SA discovery and drift detection)
+    *   **Google Workspace Policy API** (For pre-migration environment readiness audits)
+    *   **Cloud Identity API** (For managing Identity-synced groups)
+    *   **Groups Settings API** (For advanced group configuration/security)
+    *   **Google Sheets API** (For automated logging/reporting to Sheets)
 
 3.  **Create a Service Account**:
     *   Navigate to **IAM & Admin > Service Accounts**.
@@ -110,17 +114,22 @@ This phase authorizes the Service Account to act on behalf of your users.
 
 3.  **Verify Scopes (Feature Checklist)**:
 
+**Mandatory (Core Sync Scopes)**:
 | Scope | Feature Enabled |
 | :--- | :--- |
 | `admin.directory.user` | Listing users, identification of Super Admins. |
+| `drive` | **Critical**: Core data transfer, Shared Drive creation & management. |
+| `admin.directory.customer.readonly` | Retrieving your Workspace Organization ID (Customer ID). |
+| `admin.directory.domain.readonly` | Identification of primary domains and verified aliases. |
+
+**Recommended (Advanced Management Scopes)**:
+| Scope | Feature Enabled |
+| :--- | :--- |
 | `admin.directory.group` | Managing and listing organizational groups. |
 | `admin.directory.group.member` | Membership analysis & permission group sync. |
-| `drive` | **Critical**: Core data transfer, Shared Drive creation & management. |
 | `spreadsheets` | Access to Google Sheets for logging/reporting. |
 | `cloud-platform` | Cross-service GCP API calls for advanced automation. |
 | `cloud-identity` | Management of Cloud Identity groups and device associations. |
-| `admin.directory.customer.readonly` | Retrieving your Workspace Organization ID (Customer ID). |
-| `admin.directory.domain.readonly` | Identification of primary domains and verified aliases. |
 | `admin.reports.usage.readonly` | Storage usage statistics and Drive activity metrics. |
 | `apps.groups.settings` | Advanced group settings (e.g., external posting rules). |
 | `admin.directory.rolemanagement.readonly` | Verification of Admin roles and custom permissions. |
