@@ -54,6 +54,10 @@ ISync is versatile and supports multiple operational modes:
 
 To use ISync, you must configure a Google Cloud Project (GCP) and authorize it within your Google Workspace via Domain-Wide Delegation (DWD).
 
+> **Important Architecture Note**: 
+> *   **DWD User Rotation** is used to scale **Data Volume** (the 750GB/day upload limit). Each impersonated user has their own quota.
+> *   **GCP Service Accounts** are used as the **API Gateway**. They manage the **API Request Rate** (requests per second) for the entire project. Careful management of the GCP project is critical to prevent metadata bottlenecks during large-scale user rotation.
+
 ### Phase 1: Google Cloud Project (GCP)
 
 1.  **Create a Project**:
