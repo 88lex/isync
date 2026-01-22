@@ -37,7 +37,7 @@ def get_engine():
     global _engine_instance
     if _engine_instance is None:
         from isync_engine import ISyncEngine
-        config = store.config
+        config = store.get_config()
         _engine_instance = ISyncEngine(config)
     return _engine_instance
 
@@ -98,11 +98,11 @@ def get_base_path() -> str:
 
 def get_config():
     """Get the current configuration dict."""
-    return store.config
+    return store.get_config()
 
 
 def reload_config():
     """Reload configuration from disk."""
-    store.reload()
+    # store.reload() is now a no-op as it's DB backed
     reset_engine()
-    return store.config
+    return store.get_config()

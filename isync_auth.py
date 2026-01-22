@@ -221,19 +221,31 @@ class ISyncAuthManager:
                 logging.error(f"[ISyncAuth] Failed to add to group: {e}")
                 raise
 
-    def delete_user(self, user_email):
-        """Deletes the temporary user."""
+    def delete_user(self, user_email, group_email=None):
+        """Deletes the temporary user and removes them from the group."""
         if user_email.lower().strip() in self.protected_users:
             logging.warning(f"[ISyncAuth] BLOCKED DELETE: {user_email} is in Protected Users list.")
             return
 
+        # Step 1: Remove from group first (if group_email provided)
+        if group_email:
+            try:
+                logging.info(f"[ISyncAuth] Removing {user_email} from group {group_email}")
+                self.service.members().delete(groupKey=group_email, memberKey=user_email).execute()
+            except HttpError as e:
+                if e.resp.status == 404:
+                    logging.info(f"[ISyncAuth] User {user_email} not in group (already removed or never added)")
+                else:
+                    logging.error(f"[ISyncAuth] Failed to remove {user_email} from group: {e}")
+
+        # Step 2: Delete the user
         try:
             logging.info(f"[ISyncAuth] Deleting User: {user_email}")
             self.service.users().delete(userKey=user_email).execute()
             self._update_user_status_log(user_email, status="Deleted")
         except HttpError as e:
             if e.resp.status == 404:
-                pass # Already deleted
+                logging.info(f"[ISyncAuth] User {user_email} already deleted")
             else:
                 logging.error(f"[ISyncAuth] Failed to delete user {user_email}: {e}")
 

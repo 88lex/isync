@@ -522,6 +522,7 @@ def process_bulk_ops(req: BulkOpRequest):
         
         # Initialize direct manager
         mgr = ISyncAuthManager(d_cfg['sa_json_path'], d_cfg['admin_email'])
+        group_email = d_cfg.get('group_email')
         
         for u in req.users:
             if u.lower() in protected:
@@ -529,10 +530,26 @@ def process_bulk_ops(req: BulkOpRequest):
                 continue
             try:
                 # Pass group_email
-                mgr.delete_user(u, group_email=d_cfg.get('group_email')) 
-                results[u] = "Deleted"
+                mgr.delete_user(u, group_email=group_email) 
+                if group_email:
+                    results[u] = f"Deleted (removed from {group_email})"
+                else:
+                    results[u] = "Deleted"
             except Exception as e:
                 results[u] = f"Error: {str(e)}"
+        
+        # Invalidate users cache for this domain so List Users shows fresh data
+        try:
+            from backend.database import SessionLocal
+            from backend.models.models import DataCache
+            db = SessionLocal()
+            cache_id = f"users_{req.domain}"
+            db.query(DataCache).filter(DataCache.id == cache_id).delete()
+            db.commit()
+            db.close()
+            logger.info(f"Invalidated users cache for {req.domain}")
+        except Exception as cache_err:
+            logger.warning(f"Failed to invalidate users cache: {cache_err}")
 
     elif req.action == 'add_to_group':
         try:

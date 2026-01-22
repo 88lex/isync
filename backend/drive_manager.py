@@ -380,7 +380,7 @@ async def create_drives_unified(
             
             # Add default managers if successful
             from backend.store import store
-            defaults = default_managers if default_managers is not None else store.config.get('always_included_managers', [])
+            defaults = default_managers if default_managers is not None else store.get_config().get('always_included_managers', [])
             
             if res["status"] in ["ok", "partial"] and defaults:
                 for drive in res.get("created", []):
@@ -416,7 +416,7 @@ async def list_drives_unified(
     Unified function to list Shared Drives using either fclone or Google API.
     """
     from backend.store import store
-    excluded = set(store.config.get('excluded_drives', []))
+    excluded = set(store.get_config().get('excluded_drives', []))
 
     if method == "fclone":
         if not gdrive_remote:
@@ -707,7 +707,7 @@ async def expand_union_group(
         
         # 4.5 Add default managers from config
         from backend.store import store
-        defaults = store.config.get('always_included_managers', [])
+        defaults = store.get_config().get('always_included_managers', [])
         for mgr in defaults:
              if mgr["email"] not in (group_emails or []):
                 await add_drive_member_api(

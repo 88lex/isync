@@ -5,7 +5,10 @@ import logging
 import json
 from threading import RLock
 from datetime import datetime
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any, List, TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from sqlalchemy.orm import Session
 
 logger = logging.getLogger("isync_store")
 
@@ -47,8 +50,12 @@ class ConfigStore:
             return
         self._initialized = True
         self._ensure_directories()
-        # No initial load needed, getters fetch from DB
         logger.info("[ConfigStore] Initialized (DB-Backed).")
+        
+    @property
+    def config(self) -> Dict[str, Any]:
+        """Compatibility property for legacy code access."""
+        return self.get_config()
 
     def _ensure_directories(self):
         """Ensure required directories exist (for logs, keys, etc)."""
@@ -95,12 +102,19 @@ class ConfigStore:
         """No-op for compatibility."""
         pass
 
-    def get_config(self) -> Dict[str, Any]:
-        """Get current config from DB."""
+    def get_config(self, db: "Session" = None) -> Dict[str, Any]:
+        """Get current config from DB.
+        
+        Args:
+            db: Optional SQLAlchemy session. If provided, uses it without closing.
+                If None, creates and manages its own session.
+        """
         from backend.database import SessionLocal
         from backend.models.models import AppConfig, SSHServer
         
-        db = SessionLocal()
+        own_session = db is None
+        if own_session:
+            db = SessionLocal()
         try:
             # 1. Fetch Scalars/Lists from AppConfig
             rows = db.query(AppConfig).all()
@@ -150,28 +164,43 @@ class ConfigStore:
             logger.error(f"[ConfigStore] Failed to fetch config from DB: {e}")
             return self.get_hardcoded_defaults()
         finally:
-            db.close()
+            if own_session:
+                db.close()
 
-    def get_sync_pairs(self) -> List[Dict]:
-        """Get sync pairs from DB."""
+    def get_sync_pairs(self, db: "Session" = None) -> List[Dict]:
+        """Get sync pairs from DB.
+        
+        Args:
+            db: Optional SQLAlchemy session. If provided, uses it without closing.
+        """
         from backend.repositories.sync_pairs import SyncPairRepository
         from backend.database import SessionLocal
         
-        db = SessionLocal()
+        own_session = db is None
+        if own_session:
+            db = SessionLocal()
         try:
             return SyncPairRepository(db).list_all()
         finally:
-            db.close()
+            if own_session:
+                db.close()
 
-    def save_config(self, new_config: Optional[Dict[str, Any]] = None) -> bool:
-        """Save config updates to DB."""
+    def save_config(self, new_config: Optional[Dict[str, Any]] = None, db: "Session" = None) -> bool:
+        """Save config updates to DB.
+        
+        Args:
+            new_config: Dictionary of config updates
+            db: Optional SQLAlchemy session. If provided, uses it without closing.
+        """
         if not new_config:
             return True
             
         from backend.database import SessionLocal
         from backend.models.models import AppConfig
         
-        db = SessionLocal()
+        own_session = db is None
+        if own_session:
+            db = SessionLocal()
         try:
             for k, v in new_config.items():
                 if k == 'ssh_servers': continue # Handle separately via SSH Router/Repo
@@ -200,17 +229,25 @@ class ConfigStore:
             logger.error(f"[ConfigStore] Failed to save config to DB: {e}")
             return False
         finally:
-            db.close()
+            if own_session:
+                db.close()
 
-    def save_synclist(self, new_pairs: Optional[List[Dict]] = None) -> bool:
-        """Sync Pairs are managed via Repository. Legacy shim."""
+    def save_synclist(self, new_pairs: Optional[List[Dict]] = None, db: "Session" = None) -> bool:
+        """Sync Pairs are managed via Repository. Legacy shim.
+        
+        Args:
+            new_pairs: List of sync pair dictionaries
+            db: Optional SQLAlchemy session. If provided, uses it without closing.
+        """
         if new_pairs is None:
             return True
 
         from backend.database import SessionLocal
         from backend.repositories.sync_pairs import SyncPairRepository
         
-        db = SessionLocal()
+        own_session = db is None
+        if own_session:
+            db = SessionLocal()
         try:
             # We assume new_pairs is the complete list desired.
             # But SyncPairRepo mostly handles item operations.
@@ -220,7 +257,8 @@ class ConfigStore:
             logger.warning("[ConfigStore] save_synclist called. This method is deprecated by DB migration.")
             return True
         finally:
-            db.close()
+            if own_session:
+                db.close()
 
     def add_known_email(self, email: str):
         """Adds an email to known_emails and saves."""

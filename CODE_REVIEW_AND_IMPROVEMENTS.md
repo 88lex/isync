@@ -14,7 +14,7 @@ The codebase demonstrates a **working migration from file-based to database-back
 
 ---
 
-## 🔧 IMPLEMENTATION STATUS (Updated: 2026-01-21)
+## 🔧 IMPLEMENTATION STATUS (Updated: 2026-01-22)
 
 | Issue | Status | Details |
 |-------|--------|---------|
@@ -22,13 +22,31 @@ The codebase demonstrates a **working migration from file-based to database-back
 | **CRITICAL-2**: Missing SSHServerRepository | ✅ **FIXED** | Created `backend/repositories/ssh_servers.py` |
 | **CRITICAL-3**: Blocking I/O in async | ✅ **FIXED** | Wrapped `exec_remote_command` in `run_in_executor` |
 | **HIGH-1**: Duplicate router import | ✅ **FIXED** | Removed duplicate `workspace_router` from main.py |
+| **HIGH-2**: store.py session management | ✅ **FIXED** | Added optional `db` param to `get_config`, `save_config`, etc. |
 | **HIGH-3**: ID type inconsistency | ✅ **FIXED** | Simplified repository and dashboard.py lookup logic |
 | **MED-2**: Missing database indices | ✅ **FIXED** | Added composite indices to SyncPair and DataCache |
+| **MED-3**: Cache invalidation | ✅ **FIXED** | Added `_invalidate_sync_pairs_cache()` to config.py CRUD endpoints |
+| **MED-5**: Remove legacy state | ✅ **FIXED** | Added deprecation comments to driveManager/rcloneManager |
 | **LOW-2**: Hardcoded singleton lists | ✅ **FIXED** | Extracted to `SINGLETON_TYPES` and `KEYED_TYPES` constants |
-| HIGH-2: store.py session management | ⏳ Pending | Requires larger refactor |
-| MED-3: Cache invalidation | ⏳ Pending | Requires WebSocket or event system |
-| MED-4: Bulk scan progress UI | ⏳ Pending | UX improvement for Dashboard |
-| MED-5: Remove legacy state | ⏳ Pending | driveManager/rcloneManager cleanup |
+| MED-4: Bulk scan progress UI | ⏳ Deferred | UX improvement for Dashboard (lower priority) |
+| **NEW**: DriveManager domain refresh | ✅ **FIXED** | Added `useRef` to detect domain key changes and force refresh |
+
+---
+
+## 📍 SESSION CHECKPOINT - 2026-01-22 20:30
+
+**Session Summary:**
+- Fixed DriveManager Shared Drive loading (domain key change detection)
+- Refactored store.py session management (optional db parameter)
+- Implemented cache invalidation for sync pair mutations
+- Added deprecation comments to legacy driveManager/rcloneManager state
+- Frontend and backend builds verified
+
+**Files Modified This Session:**
+- `frontend/src/pages/DriveManager.tsx` - Domain key refresh fix with useRef
+- `backend/store.py` - Optional session dependency for get_config/save_config
+- `backend/routers/config.py` - Cache invalidation helper
+- `frontend/src/contexts/IsyncDataContext.tsx` - Deprecation comments
 
 ---
 
@@ -41,12 +59,12 @@ The codebase demonstrates a **working migration from file-based to database-back
 - Backend health check passes
 
 **Next Steps When Resuming:**
-1. **HIGH-2: store.py session management** - Refactor ConfigStore to accept session dependency instead of creating its own
-2. **MED-3: Cache invalidation** - Implement automatic cache invalidation when data changes via API
+1. ~~**HIGH-2: store.py session management**~~ ✅ Done
+2. ~~**MED-3: Cache invalidation**~~ ✅ Done
 3. **MED-4: Bulk scan progress** - Add progress tracking UI for "Scan All" operation in Dashboard
-4. **MED-5: Legacy state cleanup** - Remove or migrate `driveManager` and `rcloneManager` from context
+4. ~~**MED-5: Legacy state cleanup**~~ ✅ Done (deprecation comments added)
 
-**Files Modified This Session:**
+**Files Modified Previous Session:**
 - `frontend/src/contexts/IsyncDataContext.tsx` - Stabilized getCached, added constants
 - `backend/repositories/ssh_servers.py` - NEW FILE
 - `backend/repositories/__init__.py` - Added SSHServerRepository export
@@ -55,8 +73,6 @@ The codebase demonstrates a **working migration from file-based to database-back
 - `backend/repositories/sync_pairs.py` - Simplified ID lookup
 - `backend/routers/dashboard.py` - Simplified ID lookup
 - `backend/models/models.py` - Added database indices
-
-**To Continue:** Just ask "Continue where we left off on the code review improvements"
 
 ---
 

@@ -1,4 +1,4 @@
-import { useState, useEffect, useMemo } from 'react';
+import { useState, useEffect, useMemo, useRef } from 'react';
 import { HardDrive, Plus, Folder, Link, Settings, Check, CheckCircle, ChevronDown, ChevronRight, AlertCircle, Play, RefreshCw, RefreshCcw, Cloud, Terminal, Users, Send, Zap, X, Server, Layers, Globe, Edit2, Trash2, UserPlus, Search, FileCode, ShieldAlert, Save } from 'lucide-react';
 import {
     fetchConfig, DomainConfig,
@@ -1036,13 +1036,18 @@ const DriveManager = () => {
         } catch (e: any) { alert("Add member failed: " + e.message); }
     };
 
-    // Auto-refresh when entering manager tab if domain is selected
+    // Track previous domain to detect domain switches
+    const prevDomainRef = useRef(domainKey);
+
+    // Auto-refresh when entering manager tab or switching domains
     useEffect(() => {
         if (activeTab === 'manager' && selectedDomain) {
-            // Only refresh if data is empty or missing
-            refreshManagerData(false);
+            // Force refresh if domain changed, otherwise just fill empty cache
+            const domainChanged = prevDomainRef.current !== domainKey;
+            prevDomainRef.current = domainKey;
+            refreshManagerData(domainChanged);
         }
-    }, [activeTab, selectedDomain, serviceAccountFile, keys]);
+    }, [activeTab, selectedDomain, serviceAccountFile, keys, domainKey]);
 
     // Auto-select domain if not selected
     useEffect(() => {

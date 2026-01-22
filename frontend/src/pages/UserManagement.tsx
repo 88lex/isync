@@ -255,8 +255,19 @@ const UserManagement = () => {
                 const res = await bulkUserOps({ action, domain: dom, users: userList });
                 results = { ...results, ...res };
             }
-            setOpStatus(`✅ Done processing bulk operation.`);
+
+            // Show detailed results for delete action
+            if (action === 'delete') {
+                const resultEntries = Object.entries(results);
+                const successCount = resultEntries.filter(([_, v]) => (v as string).startsWith('Deleted')).length;
+                setOpStatus(`✅ Deleted ${successCount}/${resultEntries.length} users. Refreshing list...`);
+            } else {
+                setOpStatus(`✅ Done processing bulk operation.`);
+            }
+
             if (['delete', 'protect', 'unsuspend', 'add_to_group'].includes(action)) {
+                // Clear session storage to force fresh data
+                sessionStorage.removeItem(SESSION_KEYS.USERS);
                 await loadData();
                 await fetchUsers();
             }

@@ -181,7 +181,7 @@ def list_remotes() -> Dict[str, Any]:
         
         # Filter excluded
         from backend.store import store
-        excluded = set(store.config.get('excluded_remotes', []))
+        excluded = set(store.get_config().get('excluded_remotes', []))
         remotes = [r for r in remotes if r.rstrip(':') not in excluded]
         
         return {"status": "ok", "remotes": remotes, "count": len(remotes)}

@@ -100,8 +100,19 @@ export const IsyncDataProvider: React.FC<{ children: ReactNode }> = ({ children 
     const cacheRef = useRef<CacheState>(cache);
     cacheRef.current = cache;
 
-    // Legacy state for backwards compatibility
+    /**
+     * @deprecated Legacy state - retained for backwards compatibility.
+     * Migration: Use `useCacheStatus('shared_drives', domainKey)` and 
+     * `useCacheStatus('rclone_remotes', 'local')` instead.
+     * TODO: Remove in future release after all consumers migrate.
+     */
     const [driveManager, setDriveManager] = useState({ drives: [], localRemotes: [], lastUpdated: 0 });
+
+    /**
+     * @deprecated Legacy state - retained for backwards compatibility.
+     * Migration: Use the new cache system via `useCacheStatus()` hook.
+     * TODO: Remove in future release after all consumers migrate.
+     */
     const [rcloneManager, setRcloneManager] = useState({
         remotes: [], servers: [], source: 'local', selectedServer: '', searchFilter: '', statusFilter: 'all', lastUpdated: 0
     });

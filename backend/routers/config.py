@@ -137,12 +137,23 @@ from sqlalchemy.orm import Session
 from backend.database import get_db
 from backend.repositories.sync_pairs import SyncPairRepository
 
-
 @router.get("/synclist")
 def get_synclist(db: Session = Depends(get_db)):
     """Get sync pairs from database."""
     repo = SyncPairRepository(db)
     return repo.list_all()
+
+
+def _invalidate_sync_pairs_cache(db: Session):
+    """Invalidate the sync_pairs cache entry after mutations."""
+    from backend.models.models import DataCache
+    try:
+        db.query(DataCache).filter(DataCache.id == "sync_pairs_local").delete()
+        db.commit()
+        logger.debug("[config] Invalidated sync_pairs cache")
+    except Exception as e:
+        logger.warning(f"[config] Failed to invalidate cache: {e}")
+        db.rollback()
 
 
 @router.post("/synclist")
@@ -168,6 +179,10 @@ def update_synclist(update: SyncListUpdate, db: Session = Depends(get_db)):
         db.add(new_pair)
     
     db.commit()
+    
+    # Invalidate cache
+    _invalidate_sync_pairs_cache(db)
+    
     return {"status": "ok", "count": len(update.pairs)}
 
 
@@ -193,6 +208,9 @@ def create_sync_pair(pair: SyncPairCreate, db: Session = Depends(get_db)):
         meta_server_id=pair.meta_server_id,
         meta_execution_mode=pair.meta_execution_mode or "local"
     )
+    
+    # Invalidate cache
+    _invalidate_sync_pairs_cache(db)
     
     return {"status": "ok", "pair": new_pair, "total": repo.count()}
 
@@ -224,6 +242,9 @@ def update_sync_pair(pair_id: str, pair: SyncPairCreate, db: Session = Depends(g
     if not updated:
         raise HTTPException(status_code=404, detail="Sync pair not found")
     
+    # Invalidate cache
+    _invalidate_sync_pairs_cache(db)
+    
     return {"status": "ok", "pair": updated}
 
 
@@ -248,6 +269,10 @@ def delete_sync_pair(pair_id: str, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="Sync pair not found")
     
     logger.info(f"[config] Successfully deleted sync pair: {pair_info.get('source') if pair_info else 'unknown'} -> {pair_info.get('dest') if pair_info else 'unknown'}")
+    
+    # Invalidate cache
+    _invalidate_sync_pairs_cache(db)
+    
     return {"status": "ok", "removed": pair_info, "remaining": repo.count()}
 
 

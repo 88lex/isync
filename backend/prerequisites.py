@@ -151,6 +151,7 @@ def check_google_api_libs() -> Dict[str, Any]:
     try:
         from google.oauth2 import service_account
         from googleapiclient.discovery import build
+        from googleapiclient.errors import HttpError
         return {
             "name": "Google API Libraries",
             "status": PrerequisiteStatus.OK,
@@ -161,7 +162,7 @@ def check_google_api_libs() -> Dict[str, Any]:
         return {
             "name": "Google API Libraries",
             "status": PrerequisiteStatus.WARNING,
-            "message": "Not installed (needed for Google API drive creation method)",
+            "message": "Not installed (needed for Google API interactions)",
             "suggestion": "Run: pip install google-api-python-client google-auth",
             "auto_fix": "install_google_api"
         }
@@ -330,10 +331,14 @@ def check_domain_config(base_path: str = None) -> Dict[str, Any]:
             issues = []
             for d in domains:
                 name = d.get("domain_name", "unnamed")
+                # Mandatory fields
                 if d.get("admin_email") and d.get("sa_json_path"):
                     valid.append(name)
                 else:
-                    issues.append(f"{name}: missing admin_email or sa_json_path")
+                    if not d.get("admin_email"):
+                        issues.append(f"{name}: missing admin_email (Super Admin)")
+                    if not d.get("sa_json_path"):
+                        issues.append(f"{name}: missing sa_json_path (JSON Key)")
             
             if issues:
                 return {
@@ -341,9 +346,9 @@ def check_domain_config(base_path: str = None) -> Dict[str, Any]:
                     "status": PrerequisiteStatus.WARNING,
                     "domains": [d.get("domain_name") for d in domains],
                     "valid": len(valid),
-                    "message": f"{len(domains)} domain(s), {len(issues)} with issues",
+                    "message": f"{len(domains)} domain(s), {len(issues)} setup issues",
                     "issues": issues,
-                    "suggestion": "Complete domain configuration in config.yaml"
+                    "suggestion": "Complete admin_email and sa_json_path for all domains"
                 }
             else:
                 return {
@@ -358,7 +363,7 @@ def check_domain_config(base_path: str = None) -> Dict[str, Any]:
                 "name": "Domain Configuration",
                 "status": PrerequisiteStatus.WARNING,
                 "domains": [],
-                "message": "No domains configured",
+                "message": "No domains configured (DWD is disabled)",
                 "suggestion": "Add domain configuration to config.yaml"
             }
     except Exception as e:
@@ -367,6 +372,82 @@ def check_domain_config(base_path: str = None) -> Dict[str, Any]:
             "status": PrerequisiteStatus.ERROR,
             "message": f"Failed to read config: {e}",
             "suggestion": "Check config.yaml syntax"
+        }
+
+
+def check_google_cloud_apis(base_path: str = None) -> Dict[str, Any]:
+    """Check if mandatory GCP APIs are enabled in the project."""
+    if base_path is None:
+        base_path = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+    
+    # We use a discovery-based check by building the service
+    # This requires a valid SA key and internet access
+    # We check for ONE domain as a sample
+    config_path = os.path.join(base_path, "config.yaml")
+    if not os.path.exists(config_path):
+        return {"name": "GCP Cloud APIs", "status": PrerequisiteStatus.MISSING, "message": "Config missing"}
+
+    try:
+        import yaml
+        from google.oauth2 import service_account
+        from googleapiclient.discovery import build
+        from googleapiclient.errors import HttpError
+        
+        with open(config_path, 'r') as f:
+            config = yaml.safe_load(f) or {}
+        
+        domains = config.get("domains", [])
+        if not domains:
+            return {"name": "GCP Cloud APIs", "status": PrerequisiteStatus.WARNING, "message": "No domains to check"}
+            
+        # Test first domain
+        d = domains[0]
+        sa_path = d.get("sa_json_path")
+        if not sa_path or not os.path.exists(sa_path):
+            return {"name": "GCP Cloud APIs", "status": PrerequisiteStatus.WARNING, "message": f"SA Key missing: {sa_path}"}
+            
+        creds = service_account.Credentials.from_service_account_file(sa_path)
+        
+        mandatory = ["drive", "admin", "cloudresourcemanager", "iam", "serviceusage"]
+        recommended = ["cloudquotas", "cloudasset", "sheets", "cloudidentity", "groupssettings"]
+        
+        missing = []
+        errors = []
+        
+        # Test build for mandatory
+        for api in mandatory:
+            try:
+                # Use v1 as default for check
+                version = 'v1'
+                if api == 'drive': version = 'v3'
+                elif api == 'cloudresourcemanager': version = 'v3'
+                build(api, version, credentials=creds)
+            except Exception as e:
+                missing.append(api)
+                errors.append(f"{api}: {str(e)[:50]}")
+        
+        if missing:
+            return {
+                "name": "GCP Cloud APIs",
+                "status": PrerequisiteStatus.ERROR,
+                "message": f"Missing/Disabled Mandatory APIs: {', '.join(missing)}",
+                "suggestion": f"Enable these in the GCP Console API Library",
+                "errors": errors
+            }
+            
+        return {
+            "name": "GCP Cloud APIs",
+            "status": PrerequisiteStatus.OK,
+            "message": "All mandatory APIs reachable",
+            "suggestion": None
+        }
+            
+    except Exception as e:
+        return {
+            "name": "GCP Cloud APIs",
+            "status": PrerequisiteStatus.WARNING,
+            "message": "Cannot verify APIs (Auth/Network issue)",
+            "suggestion": "Ensure SA key is valid and has internet access"
         }
 
 
@@ -502,6 +583,7 @@ def run_full_check(base_path: str = None, include_remote: bool = False) -> Dict[
         check_sa_keys(base_path),
         check_domain_config(base_path),
         check_rclone_remotes(),
+        check_google_cloud_apis(base_path),
     ]
     
     # Collect issues
