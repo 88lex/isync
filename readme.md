@@ -52,53 +52,71 @@ ISync is versatile and supports multiple operational modes:
 
 ## Google Workspace & GCP Setup
 
-To use ISync, you must configure a Google Cloud Project and Google Workspace Domain-Wide Delegation (DWD).
+To use ISync, you must configure a Google Cloud Project (GCP) and authorize it within your Google Workspace via Domain-Wide Delegation (DWD).
 
-### 1. Create a Service Account
-1.  Go to the [Google Cloud Console](https://console.cloud.google.com/).
-2.  Create a new project (or select an existing one).
-3.  Navigate to **IAM & Admin > Service Accounts**.
-4.  Create a Service Account and download the **JSON Key**. **Important:** Save this file to `/opt/isync/keys/`.
+### Phase 1: Google Cloud Project (GCP)
 
-### 2. Enable Required APIs
-Ensure the following APIs are enabled in your GCP project:
-*   **Admin SDK API** (Directory & Reports)
-*   **Google Drive API**
-*   **Google Sheets API**
-*   **Cloud Resource Manager API**
-*   **Cloud Identity API**
-*   **Groups Settings API**
+1.  **Create a Project**:
+    *   Go to the [Google Cloud Console](https://console.cloud.google.com/).
+    *   Create a new project named "ISync-Migration" (or similar).
 
-### 3. Enable Domain-Wide Delegation (DWD)
-This allows your Service Account to impersonate users in your domain (required for cycling through the 750GB/day upload quota).
-1.  Open the [Google Admin Console](https://admin.google.com/).
-2.  Go to **Security > Access and data control > API controls**.
-3.  Click **Manage Domain-wide Delegation**.
-4.  Click **Add new** and enter:
-    *   **Client ID**: The numeric `client_id` found in your Service Account JSON key.
-    *   **OAuth Scopes**: Copy and paste the comma-separated list below.
+2.  **Enable APIs** (Search for these in the **API Library**):
+    *   **Admin SDK API** (Critical: For User/Group management)
+    *   **Google Drive API** (Critical: For data transfer)
+    *   **Google Sheets API** (Optional: For logs/exports)
+    *   **Cloud Resource Manager API** (Critical: For permission verification)
+    *   **Cloud Identity API**
+    *   **Groups Settings API**
 
-### 4. Required OAuth Scopes
-Copy this list into the "OAuth Scopes" field in the Admin Console:
-```text
-https://www.googleapis.com/auth/admin.directory.user,https://www.googleapis.com/auth/admin.directory.group,https://www.googleapis.com/auth/admin.directory.group.member,https://www.googleapis.com/auth/drive,https://www.googleapis.com/auth/spreadsheets,https://www.googleapis.com/auth/cloud-platform,https://www.googleapis.com/auth/cloud-identity,https://www.googleapis.com/auth/admin.directory.customer.readonly,https://www.googleapis.com/auth/admin.directory.domain.readonly,https://www.googleapis.com/auth/admin.reports.usage.readonly
-```
+3.  **Create a Service Account**:
+    *   Navigate to **IAM & Admin > Service Accounts**.
+    *   Click **Create Service Account**. Give it a name like `isync-worker`.
+    *   **Important**: On the "Grant this service account access to project" step, assign the **Security Reviewer** role (Search for it in the role dropdown). This allows ISync to verify its own project-level health.
+    *   Finish creation.
 
-| Scope | Purpose |
-| :--- | :--- |
-| `admin.directory.user` | Lists users and identifies Super Admins. |
-| `admin.directory.group` | Manages and lists Google Groups. |
-| `admin.directory.group.member` | Analyzes group memberships. |
-| `drive` | Full access to files and Shared Drives (required for impersonation). |
-| `spreadsheets` | Accesses Google Sheets for logging/exports. |
-| `cloud-platform` | Enables cross-service GCP API calls. |
-| `admin.reports.usage.readonly` | Fetches storage usage and activity metrics. |
-| `admin.directory.customer.readonly` | Retrieves Workspace Customer ID and Org metadata. |
-| `admin.directory.domain.readonly` | Identifies primary and alias domains. |
+4.  **Generate JSON Key**:
+    *   Click on your new Service Account.
+    *   Go to the **Keys** tab > **Add Key** > **Create new key**.
+    *   Select **JSON** and download it.
+    *   **Save this file** to `/opt/isync/keys/master-key.json`.
 
-### 5. GCP IAM Roles
-For the **Key Inspection** feature to work, assign the following role to the Service Account within the GCP Project:
-*   **Security Reviewer** (or **Project Viewer**): Allows ISync to verify its own project-level permissions.
+5.  **Assign Project Roles** (Distinction from APIs):
+    *   Permissions are managed in **IAM & Admin > IAM**, *not* the API Library.
+    *   Ensure your `isync-worker` service account has the **Security Reviewer** role. If you cannot find it, **Project Viewer** is a functional alternative.
+
+### Phase 2: Google Workspace (Admin Console)
+
+This phase authorizes the Service Account to act on behalf of your users.
+
+1.  **Copy the Client ID**:
+    *   Open your downloaded JSON key and copy the numeric `client_id` (e.g., `123456789...`).
+
+2.  **Configure Domain-Wide Delegation (DWD)**:
+    *   Open the [Google Admin Console](https://admin.google.com/).
+    *   Go to **Security > Access and data control > API controls**.
+    *   Click **Manage Domain-wide Delegation**.
+    *   Click **Add new**.
+    *   **Client ID**: Paste the numeric ID from your JSON key.
+    *   **OAuth Scopes**: Copy and paste the entire comma-separated list below:
+
+    ```text
+    https://www.googleapis.com/auth/admin.directory.user,https://www.googleapis.com/auth/admin.directory.group,https://www.googleapis.com/auth/admin.directory.group.member,https://www.googleapis.com/auth/drive,https://www.googleapis.com/auth/spreadsheets,https://www.googleapis.com/auth/cloud-platform,https://www.googleapis.com/auth/cloud-identity,https://www.googleapis.com/auth/admin.directory.customer.readonly,https://www.googleapis.com/auth/admin.directory.domain.readonly,https://www.googleapis.com/auth/admin.reports.usage.readonly
+    ```
+
+3.  **Verify Scopes**:
+    | Scope | Feature Enabled |
+    | :--- | :--- |
+    | `admin.directory.user` | Identifying Admins & listing users for migration. |
+    | `admin.directory.group` | Managing migration permission groups. |
+    | `drive` | Core data transfer & Shared Drive management. |
+    | `admin.reports.usage.readonly` | Storage statistics & activity dashboards. |
+    | `cloud-platform` | Cross-service GCP integration. |
+    | `admin.directory.customer.readonly` | Retrieving your Workspace Organization ID. |
+
+### Phase 3: Final Linkage
+
+1.  **Admin Email**: You must choose a **Super Admin** email from your Workspace (e.g., `admin@yourdomain.com`). ISync uses this to impersonate the authority needed for Directory lookups.
+2.  **Config**: Add these details to the **Configuration** page in the ISync UI or directly in `config.yaml`.
 
 ---
 
