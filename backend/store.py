@@ -260,10 +260,61 @@ class ConfigStore:
             if own_session:
                 db.close()
 
-    def add_known_email(self, email: str):
-        """Adds an email to known_emails and saves."""
-        # TODO: Implement DB update
-        pass
+    def add_known_email(self, email: str, db: "Session" = None) -> bool:
+        """Adds an email to known_emails and saves.
+        
+        Args:
+            email: The email address to add
+            db: Optional SQLAlchemy session. If provided, uses it without closing.
+        
+        Returns:
+            True if the email was added (or already existed), False on error
+        """
+        if not email or not email.strip():
+            return True
+            
+        email = email.strip().lower()
+        
+        from backend.database import SessionLocal
+        from backend.models.models import AppConfig
+        
+        own_session = db is None
+        if own_session:
+            db = SessionLocal()
+        try:
+            # Fetch current known_emails list
+            entry = db.query(AppConfig).filter(AppConfig.key == "known_emails").first()
+            
+            if entry:
+                try:
+                    current_emails = json.loads(entry.value) if entry.value else []
+                except json.JSONDecodeError:
+                    current_emails = []
+            else:
+                current_emails = []
+            
+            # Add email if not already present
+            if email not in current_emails:
+                current_emails.append(email)
+                
+                # Update or insert
+                if entry:
+                    entry.value = json.dumps(current_emails)
+                else:
+                    db.add(AppConfig(key="known_emails", value=json.dumps(current_emails)))
+                
+                db.commit()
+                logger.info(f"[ConfigStore] Added email to known_emails: {email}")
+            
+            return True
+        except Exception as e:
+            logger.error(f"[ConfigStore] Failed to add email to known_emails: {e}")
+            if own_session:
+                db.rollback()
+            return False
+        finally:
+            if own_session:
+                db.close()
 
     def reload(self):
         pass

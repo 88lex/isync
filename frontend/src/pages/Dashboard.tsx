@@ -1,13 +1,13 @@
 
-import React, { useState, useEffect, useCallback } from 'react';
-import { LayoutDashboard, RefreshCw, HardDrive, Database, Clock, Server, Play, MoreHorizontal, CheckCircle, XCircle, AlertTriangle, FileText } from 'lucide-react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
+import { LayoutDashboard, RefreshCw, HardDrive, Database, Clock, Server, Play, MoreHorizontal, CheckCircle, XCircle, AlertTriangle, FileText, Square } from 'lucide-react';
 import { PageHeader } from '../components/PageHeader';
 import { Card } from '../components/Card';
 import { LoadingSpinner } from '../components/LoadingSpinner';
 import { DataTable, ColumnConfig } from '../components/ui/DataTable';
 import { useIsyncData } from '../contexts/IsyncDataContext';
 import { formatDate } from '../utils/formatters';
-import { scanPath, SyncPair, SSHServer, fetchSSHServers, fetchSyncList } from '../api';
+import { scanPath, SyncPair, SSHServer, fetchSSHServers, fetchSyncList, bulkUpdateScanServers } from '../api';
 import { useDataTable } from '../hooks/useDataTable';
 
 // Format bytes
@@ -34,6 +34,21 @@ const DashboardPage: React.FC = () => {
     const servers = (cache.ssh_servers.data as SSHServer[]) || [];
 
     const [scanning, setScanning] = useState<{ [key: string]: boolean }>({});
+	const [bulkSourceServer, setBulkSourceServer] = useState<string>('');
+    const [bulkDestServer, setBulkDestServer] = useState<string>('');
+    const [updatingBulk, setUpdatingBulk] = useState(false);
+
+    const [bulkScanProgress, setBulkScanProgress] = useState({
+        total: 0,
+        completed: 0,
+        failed: 0,
+        currentPath: '',
+        currentSide: '' as "source" | "dest" | '',
+        inProgress: false,
+        isStopping: false
+    });
+
+    const stopBulkRequested = useRef(false);
 
     // Scan Configuration Modal
     const [scanModalPair, setScanModalPair] = useState<SyncPair | null>(null);
@@ -90,16 +105,10 @@ const DashboardPage: React.FC = () => {
 
     const refreshSynclist = fetchAndCacheSyncPairs;
 
-    const handleInitiateScan = (pair: SyncPair, side: "source" | "dest", forceModal: boolean = false) => {
-        const currentServerId = side === "source" ? pair.scan_source_server_id : pair.scan_dest_server_id;
-
-        if (currentServerId && !forceModal) {
-            runScan(pair, side, currentServerId, scanTimeout);
-        } else {
-            setScanModalPair(pair);
-            setScanModalSide(side);
-            setShowScanModal(true);
-        }
+    const handleInitiateScan = (pair: SyncPair, side: "source" | "dest") => {
+        setScanModalPair(pair);
+        setScanModalSide(side);
+        setShowScanModal(true);
     };
 
     const runScan = async (pair: SyncPair, side: "source" | "dest", serverId: string, timeout: number = 1200) => {
@@ -118,7 +127,32 @@ const DashboardPage: React.FC = () => {
                 timeout: timeout
             });
 
-            await refreshSynclist();
+            // Update local state immediately
+            setLocalSynclist(prev => {
+                const updated = prev.length > 0 ? [...prev] : [...((cache.sync_pairs.data as SyncPair[]) || [])];
+                const index = updated.findIndex(p => p.id === pair.id);
+                if (index !== -1) {
+                    const now = new Date().toISOString();
+                    if (side === "source") {
+                        updated[index] = { 
+                            ...updated[index], 
+                            source_size_bytes: res.result.bytes, 
+                            source_file_count: res.result.count,
+                            source_scanned_at: now,
+                            scan_source_server_id: serverId
+                        };
+                    } else {
+                        updated[index] = { 
+                            ...updated[index], 
+                            dest_size_bytes: res.result.bytes, 
+                            dest_file_count: res.result.count,
+                            dest_scanned_at: now,
+                            scan_dest_server_id: serverId
+                        };
+                    }
+                }
+                return updated;
+            });
 
             // Show Success Report
             setReportModal({
@@ -153,21 +187,75 @@ const DashboardPage: React.FC = () => {
     };
 
     const handleScanAll = async () => {
-        if (!confirm('This will trigger scans for ALL configured pairs. Continue?')) return;
-
-        // We do not show modals for "Scan All" to avoid spam. FAILURES will be alerted though? 
-        // Or maybe we create a "Bulk Report"? 
-        // For simplicity, we fallback to simple logging or just let individual errors pop?
-        // Actually showing 20 modals is bad.
-        // Let's just run them and maybe aggregate results?
-        // Given complexity, I will just run them and suppress success modals, but show failure modals (stacked? or just log?).
-        // Or simpler: Just run them.
-
+        const jobs: { pair: SyncPair, side: "source" | "dest", serverId: string }[] = [];
+        
         for (const pair of synclist) {
-            if (pair.scan_source_server_id) runScanSilent(pair, "source", pair.scan_source_server_id);
-            if (pair.scan_dest_server_id) runScanSilent(pair, "dest", pair.scan_dest_server_id);
+            if (pair.scan_source_server_id) jobs.push({ pair, side: "source", serverId: pair.scan_source_server_id });
+            if (pair.scan_dest_server_id) jobs.push({ pair, side: "dest", serverId: pair.scan_dest_server_id });
         }
-        alert("Bulk scan initiated in background.");
+
+        if (jobs.length === 0) {
+            alert("No scan servers configured for any pairs.");
+            return;
+        }
+
+        if (!confirm(`This will scan ${jobs.length} paths sequentially. Continue?`)) return;
+
+        stopBulkRequested.current = false;
+        setBulkScanProgress({ total: jobs.length, completed: 0, failed: 0, currentPath: '', currentSide: '', inProgress: true, isStopping: false });
+
+        for (const job of jobs) {
+            if (stopBulkRequested.current) {
+                setBulkScanProgress(p => ({ ...p, isStopping: true }));
+                break;
+            }
+
+            setBulkScanProgress(p => ({ 
+                ...p, 
+                currentPath: job.side === 'source' ? job.pair.source : job.pair.dest,
+                currentSide: job.side 
+            }));
+            
+            try {
+                await runScanSilent(job.pair, job.side, job.serverId);
+                setBulkScanProgress(p => ({ ...p, completed: p.completed + 1 }));
+            } catch (e) {
+                console.error(`Bulk scan failed for ${job.pair.id} ${job.side}:`, e);
+                setBulkScanProgress(p => ({ ...p, failed: p.failed + 1 }));
+            }
+        }
+        
+        setBulkScanProgress(p => ({ ...p, inProgress: false }));
+        // Refresh final counts
+        await refreshSynclist();
+    };
+
+    const handleApplyBulkDefaults = async () => {
+        if (!bulkSourceServer && !bulkDestServer) {
+            alert("Please select at least one server preference to apply.");
+            return;
+        }
+
+        const pairIds = synclist.filter(p => p.id).map(p => p.id!);
+        if (pairIds.length === 0) return;
+
+        if (!confirm(`This will update scan server preferences for all ${pairIds.length} pairs. Continue?`)) return;
+
+        setUpdatingBulk(true);
+        try {
+            await bulkUpdateScanServers({
+                pair_ids: pairIds,
+                source_server_id: bulkSourceServer || undefined,
+                dest_server_id: bulkDestServer || undefined
+            });
+            await refreshSynclist();
+            alert("Defaults updated successfully.");
+        } catch (e) {
+            console.error("Failed to update bulk defaults:", e);
+            alert("Failed to update defaults.");
+        } finally {
+            setUpdatingBulk(false);
+        }
     };
 
     // Silent version of runScan for bulk ops (avoids modal spam)
@@ -177,11 +265,36 @@ const DashboardPage: React.FC = () => {
         setScanning(prev => ({ ...prev, [key]: true }));
 
         try {
-            await scanPath({ pair_id: pair.id, side: side, server_id: serverId });
-            await refreshSynclist();
+            const res = await scanPath({ pair_id: pair.id, side: side, server_id: serverId });
+            
+            // Update local state immediately
+            setLocalSynclist(prev => {
+                const updated = prev.length > 0 ? [...prev] : [...((cache.sync_pairs.data as SyncPair[]) || [])];
+                const index = updated.findIndex(p => p.id === pair.id);
+                if (index !== -1) {
+                    const now = new Date().toISOString();
+                    if (side === "source") {
+                        updated[index] = { 
+                            ...updated[index], 
+                            source_size_bytes: res.result.bytes, 
+                            source_file_count: res.result.count,
+                            source_scanned_at: now,
+                            scan_source_server_id: serverId
+                        };
+                    } else {
+                        updated[index] = { 
+                            ...updated[index], 
+                            dest_size_bytes: res.result.bytes, 
+                            dest_file_count: res.result.count,
+                            dest_scanned_at: now,
+                            scan_dest_server_id: serverId
+                        };
+                    }
+                }
+                return updated;
+            });
         } catch (e: any) {
             console.error(`Scan failed for ${pair.id} ${side}:`, e);
-            // Optionally toast error?
         } finally {
             setScanning(prev => ({ ...prev, [key]: false }));
         }
@@ -195,17 +308,17 @@ const DashboardPage: React.FC = () => {
                 <div className="flex flex-col gap-1 max-w-[200px]">
                     <span className="font-mono text-xs text-blue-400 truncate" title={item.source}>{item.source}</span>
                     <div className="flex items-center gap-2">
-                        <button
-                            onClick={(e) => handleInitiateScan(item, "source", e.shiftKey)}
-                            disabled={!item.id || scanning[`${item.id}-source`]}
-                            className="p-1.5 text-zinc-400 hover:text-white transition rounded bg-white/5 hover:bg-white/10"
-                            title={item.scan_source_server_id ? `Scan on ${item.scan_source_server_id} (Shift+Click to configure)` : "Click to Configure Scan"}
-                        >
-                            <RefreshCw size={12} className={scanning[`${item.id}-source`] ? "animate-spin text-cyan-500" : ""} />
-                        </button>
-                        <span className="text-[10px] text-zinc-600 bg-black/30 px-1.5 py-0.5 rounded border border-white/5 uppercase min-w-[30px] text-center">
-                            {item.scan_source_server_id === 'local' ? 'LOC' : item.scan_source_server_id ? 'SSH' : '?'}
-                        </span>
+                            <button
+                                onClick={(e) => handleInitiateScan(item, "source")}
+                                disabled={!item.id || scanning[`${item.id}-source`]}
+                                className="p-1.5 text-zinc-400 hover:text-white transition rounded bg-white/5 hover:bg-white/10"
+                                title={item.scan_source_server_id ? `Scan on ${item.scan_source_server_id}` : "Click to Configure Scan"}
+                            >
+                                <RefreshCw size={12} className={scanning[`${item.id}-source`] ? "animate-spin text-cyan-500" : ""} />
+                            </button>
+                            <span className="text-[10px] text-zinc-600 bg-black/30 px-1.5 py-0.5 rounded border border-white/5 uppercase min-w-[30px] text-center">
+                                {item.scan_source_server_id === 'local' ? 'LOC' : item.scan_source_server_id ? 'SSH' : '?'}
+                            </span>
                     </div>
                 </div>
             )
@@ -229,17 +342,17 @@ const DashboardPage: React.FC = () => {
                 <div className="flex flex-col gap-1 max-w-[200px]">
                     <span className="font-mono text-xs text-emerald-400 truncate" title={item.dest}>{item.dest}</span>
                     <div className="flex items-center gap-2">
-                        <button
-                            onClick={(e) => handleInitiateScan(item, "dest", e.shiftKey)}
-                            disabled={!item.id || scanning[`${item.id}-dest`]}
-                            className="p-1.5 text-zinc-400 hover:text-white transition rounded bg-white/5 hover:bg-white/10"
-                            title={item.scan_dest_server_id ? `Scan on ${item.scan_dest_server_id} (Shift+Click to configure)` : "Click to Configure Scan"}
-                        >
-                            <RefreshCw size={12} className={scanning[`${item.id}-dest`] ? "animate-spin text-cyan-500" : ""} />
-                        </button>
-                        <span className="text-[10px] text-zinc-600 bg-black/30 px-1.5 py-0.5 rounded border border-white/5 uppercase min-w-[30px] text-center">
-                            {item.scan_dest_server_id === 'local' ? 'LOC' : item.scan_dest_server_id ? 'SSH' : '?'}
-                        </span>
+                            <button
+                                onClick={(e) => handleInitiateScan(item, "dest")}
+                                disabled={!item.id || scanning[`${item.id}-dest`]}
+                                className="p-1.5 text-zinc-400 hover:text-white transition rounded bg-white/5 hover:bg-white/10"
+                                title={item.scan_dest_server_id ? `Scan on ${item.scan_dest_server_id}` : "Click to Configure Scan"}
+                            >
+                                <RefreshCw size={12} className={scanning[`${item.id}-dest`] ? "animate-spin text-cyan-500" : ""} />
+                            </button>
+                            <span className="text-[10px] text-zinc-600 bg-black/30 px-1.5 py-0.5 rounded border border-white/5 uppercase min-w-[30px] text-center">
+                                {item.scan_dest_server_id === 'local' ? 'LOC' : item.scan_dest_server_id ? 'SSH' : '?'}
+                            </span>
                     </div>
                 </div>
             )
@@ -314,13 +427,126 @@ const DashboardPage: React.FC = () => {
                 </button>
                 <button
                     onClick={handleScanAll}
-                    disabled={cache.sync_pairs.isLoading}
-                    className="flex items-center gap-2 px-4 py-2 bg-cyan-600 hover:bg-cyan-500 text-white rounded-lg transition text-sm font-bold shadow-lg shadow-cyan-900/20"
+                    disabled={cache.sync_pairs.isLoading || bulkScanProgress.inProgress}
+                    className={`flex items-center gap-2 px-4 py-2 rounded-lg transition text-sm font-bold shadow-lg ${
+                        bulkScanProgress.inProgress 
+                            ? "bg-zinc-700 text-zinc-400 cursor-not-allowed" 
+                            : "bg-cyan-600 hover:bg-cyan-500 text-white shadow-cyan-900/20"
+                    }`}
                 >
-                    <Play size={14} />
-                    Scan All
+                    {bulkScanProgress.inProgress ? (
+                        <RefreshCw size={14} className="animate-spin" />
+                    ) : (
+                        <Play size={14} />
+                    )}
+                    {bulkScanProgress.inProgress ? "Scanning..." : "Scan All"}
                 </button>
             </PageHeader>
+
+            {/* Bulk Scan Progress UI */}
+            {bulkScanProgress.inProgress && (
+                <Card className="mb-6 bg-cyan-950/20 border-cyan-500/30 overflow-hidden relative">
+                    <div className="absolute top-0 left-0 h-1 bg-cyan-500 transition-all duration-500" style={{ width: `${(bulkScanProgress.completed + bulkScanProgress.failed) / bulkScanProgress.total * 100}%` }}></div>
+                    <div className="flex flex-col md:flex-row items-center justify-between gap-4">
+                        <div className="flex items-center gap-4">
+                            <div className="p-2 bg-cyan-500/10 text-cyan-400 rounded-lg animate-pulse">
+                                <RefreshCw size={20} className="animate-spin" />
+                            </div>
+                            <div>
+                                <h4 className="text-white font-bold text-sm">Bulk Scanning in Progress</h4>
+                                <div className="flex items-center gap-2 mt-0.5">
+                                    <span className={`text-[10px] px-1.5 py-0.5 rounded font-bold uppercase ${bulkScanProgress.currentSide === 'source' ? 'bg-blue-500/20 text-blue-400' : 'bg-emerald-500/20 text-emerald-400'}`}>
+                                        {bulkScanProgress.currentSide}
+                                    </span>
+                                    <p className="text-zinc-400 text-xs font-mono truncate max-w-[300px]" title={bulkScanProgress.currentPath}>
+                                        {bulkScanProgress.currentPath}
+                                    </p>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div className="flex items-center gap-8">
+                            <div className="text-center">
+                                <div className="text-[10px] uppercase font-bold text-zinc-500 mb-1">Total</div>
+                                <div className="text-lg font-mono font-bold text-white">{bulkScanProgress.total}</div>
+                            </div>
+                            <div className="text-center">
+                                <div className="text-[10px] uppercase font-bold text-emerald-500 mb-1">Completed</div>
+                                <div className="text-lg font-mono font-bold text-emerald-400">{bulkScanProgress.completed}</div>
+                            </div>
+                            {bulkScanProgress.failed > 0 && (
+                                <div className="text-center">
+                                    <div className="text-[10px] uppercase font-bold text-red-500 mb-1">Failed</div>
+                                    <div className="text-lg font-mono font-bold text-red-400">{bulkScanProgress.failed}</div>
+                                </div>
+                            )}
+                            <div className="text-center pl-4 border-l border-white/5">
+                                <div className="text-[10px] uppercase font-bold text-zinc-500 mb-1">Progress</div>
+                                <div className="text-lg font-mono font-bold text-cyan-400">
+                                    {Math.round(((bulkScanProgress.completed + bulkScanProgress.failed) / bulkScanProgress.total) * 100)}%
+                                </div>
+                            </div>
+
+                            <button
+                                onClick={() => {
+                                    stopBulkRequested.current = true;
+                                    setBulkScanProgress(p => ({ ...p, isStopping: true }));
+                                }}
+                                disabled={bulkScanProgress.isStopping}
+                                className="flex items-center gap-2 px-3 py-1.5 bg-red-600/20 hover:bg-red-600/30 text-red-400 border border-red-500/30 rounded-lg transition text-[10px] font-bold uppercase tracking-wider disabled:opacity-50"
+                            >
+                                <Square size={12} fill="currentColor" />
+                                {bulkScanProgress.isStopping ? "Stopping..." : "Stop Scans"}
+                            </button>
+                        </div>
+                    </div>
+                </Card>
+            )}
+
+            {/* Bulk Scan Configuration */}
+            <Card className="mb-6 bg-zinc-900/40 border-zinc-800">
+                <div className="flex flex-col md:flex-row items-center gap-6">
+                    <div className="flex flex-col gap-1.5 flex-1">
+                        <label className="text-[10px] uppercase font-bold text-zinc-500 tracking-wider">Bulk Source Scan Server</label>
+                        <select
+                            value={bulkSourceServer}
+                            onChange={(e) => setBulkSourceServer(e.target.value)}
+                            className="bg-black/40 border border-zinc-800 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:ring-1 focus:ring-blue-500/50"
+                        >
+                            <option value="">-- No Change --</option>
+                            <option value="local">Local Server</option>
+                            {servers.map(s => <option key={s.id} value={s.id}>{s.name} ({s.host})</option>)}
+                        </select>
+                    </div>
+
+                    <div className="flex flex-col gap-1.5 flex-1">
+                        <label className="text-[10px] uppercase font-bold text-emerald-500/70 tracking-wider">Bulk Dest Scan Server</label>
+                        <select
+                            value={bulkDestServer}
+                            onChange={(e) => setBulkDestServer(e.target.value)}
+                            className="bg-black/40 border border-zinc-800 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:ring-1 focus:ring-emerald-500/50"
+                        >
+                            <option value="">-- No Change --</option>
+                            <option value="local">Local Server</option>
+                            {servers.map(s => <option key={s.id} value={s.id}>{s.name} ({s.host})</option>)}
+                        </select>
+                    </div>
+
+                    <div className="flex items-end pt-5">
+                        <button
+                            onClick={handleApplyBulkDefaults}
+                            disabled={updatingBulk || (!bulkSourceServer && !bulkDestServer)}
+                            className="px-6 py-2 bg-blue-600/20 hover:bg-blue-600/30 text-blue-400 border border-blue-500/30 rounded-lg transition text-sm font-bold flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                        >
+                            {updatingBulk ? <RefreshCw size={14} className="animate-spin" /> : <Database size={14} />}
+                            Apply & Save Defaults
+                        </button>
+                    </div>
+                </div>
+                <p className="mt-4 text-[11px] text-zinc-500 italic">
+                    * Applying defaults will override individual scan server selections for all listed pairs and save them to the database.
+                </p>
+            </Card>
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
                 <Card className="bg-gradient-to-br from-blue-900/20 to-black/40 border-blue-500/20">
@@ -395,36 +621,65 @@ const DashboardPage: React.FC = () => {
                         <div className="space-y-2 mb-6 max-h-[300px] overflow-y-auto pr-1">
                             <button
                                 onClick={() => runScan(scanModalPair, scanModalSide!, 'local', scanTimeout)}
-                                className="w-full flex items-center justify-between p-3 rounded-lg bg-zinc-800 hover:bg-zinc-700 transition border border-zinc-800 hover:border-zinc-600 group"
+                                className={`w-full flex items-center justify-between p-3 rounded-lg transition border group ${
+                                    (scanModalSide === 'source' ? scanModalPair.scan_source_server_id : scanModalPair.scan_dest_server_id) === 'local'
+                                        ? 'bg-blue-600/20 border-blue-500/50 hover:bg-blue-600/30'
+                                        : 'bg-zinc-800 border-zinc-800 hover:bg-zinc-700 hover:border-zinc-600'
+                                }`}
                             >
                                 <div className="flex items-center gap-3">
-                                    <div className="p-2 bg-blue-500/10 text-blue-400 rounded-lg group-hover:bg-blue-500/20 transition">
+                                    <div className={`p-2 rounded-lg transition ${
+                                        (scanModalSide === 'source' ? scanModalPair.scan_source_server_id : scanModalPair.scan_dest_server_id) === 'local'
+                                            ? 'bg-blue-500/20 text-blue-400'
+                                            : 'bg-blue-500/10 text-blue-400 group-hover:bg-blue-500/20'
+                                    }`}>
                                         <Database size={16} />
                                     </div>
                                     <div className="text-left">
-                                        <div className="text-white font-medium text-sm">Local Server</div>
+                                        <div className="text-white font-medium text-sm flex items-center gap-2">
+                                            Local Server
+                                            {(scanModalSide === 'source' ? scanModalPair.scan_source_server_id : scanModalPair.scan_dest_server_id) === 'local' && (
+                                                <span className="text-[10px] bg-blue-500 text-white px-1.5 py-0.5 rounded font-bold uppercase">Current</span>
+                                            )}
+                                        </div>
                                         <div className="text-xs text-zinc-500">Run locally</div>
                                     </div>
                                 </div>
                             </button>
 
-                            {Array.isArray(servers) ? servers.map(srv => (
-                                <button
-                                    key={srv.id}
-                                    onClick={() => runScan(scanModalPair, scanModalSide!, srv.id, scanTimeout)}
-                                    className="w-full flex items-center justify-between p-3 rounded-lg bg-zinc-800 hover:bg-zinc-700 transition border border-zinc-800 hover:border-zinc-600 group"
-                                >
-                                    <div className="flex items-center gap-3">
-                                        <div className="p-2 bg-purple-500/10 text-purple-400 rounded-lg group-hover:bg-purple-500/20 transition">
-                                            <Server size={16} />
+                            {Array.isArray(servers) ? servers.map(srv => {
+                                const isCurrent = (scanModalSide === 'source' ? scanModalPair.scan_source_server_id : scanModalPair.scan_dest_server_id) === srv.id;
+                                return (
+                                    <button
+                                        key={srv.id}
+                                        onClick={() => runScan(scanModalPair, scanModalSide!, srv.id, scanTimeout)}
+                                        className={`w-full flex items-center justify-between p-3 rounded-lg transition border group ${
+                                            isCurrent
+                                                ? 'bg-purple-600/20 border-purple-500/50 hover:bg-purple-600/30'
+                                                : 'bg-zinc-800 border-zinc-800 hover:bg-zinc-700 hover:border-zinc-600'
+                                        }`}
+                                    >
+                                        <div className="flex items-center gap-3">
+                                            <div className={`p-2 rounded-lg transition ${
+                                                isCurrent
+                                                    ? 'bg-purple-500/20 text-purple-400'
+                                                    : 'bg-purple-500/10 text-purple-400 group-hover:bg-purple-500/20'
+                                            }`}>
+                                                <Server size={16} />
+                                            </div>
+                                            <div className="text-left">
+                                                <div className="text-white font-medium text-sm flex items-center gap-2">
+                                                    {srv.name}
+                                                    {isCurrent && (
+                                                        <span className="text-[10px] bg-purple-500 text-white px-1.5 py-0.5 rounded font-bold uppercase">Current</span>
+                                                    )}
+                                                </div>
+                                                <div className="text-xs text-zinc-500">{srv.host}</div>
+                                            </div>
                                         </div>
-                                        <div className="text-left">
-                                            <div className="text-white font-medium text-sm">{srv.name}</div>
-                                            <div className="text-xs text-zinc-500">{srv.host}</div>
-                                        </div>
-                                    </div>
-                                </button>
-                            )) : null}
+                                    </button>
+                                );
+                            }) : null}
                         </div>
 
                         <div className="flex justify-end">

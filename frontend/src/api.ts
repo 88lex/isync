@@ -6,6 +6,12 @@ export interface ScanRequest {
     timeout?: number;
 }
 
+export interface BulkScanServerUpdateRequest {
+    pair_ids: string[];
+    source_server_id?: string;
+    dest_server_id?: string;
+}
+
 export interface ScanResult {
     bytes: number;
     count: number;
@@ -14,6 +20,11 @@ export interface ScanResult {
 
 export const scanPath = async (req: ScanRequest): Promise<{ status: string, result: ScanResult }> => {
     const res = await axios.post(`${API_BASE}/dashboard/scan`, req);
+    return res.data;
+};
+
+export const bulkUpdateScanServers = async (req: BulkScanServerUpdateRequest): Promise<{ status: string, updated_count: number }> => {
+    const res = await axios.post(`${API_BASE}/dashboard/bulk-update-scan-servers`, req);
     return res.data;
 };
 

@@ -51,11 +51,6 @@ interface IsyncDataContextType {
     setLoading: (dataType: DataType, contextKey: string, isLoading: boolean) => void;
     invalidate: (dataType: DataType, contextKey?: string) => void;
     refreshAll: () => Promise<void>;
-    // Legacy support (to be deprecated)
-    driveManager: { drives: any[]; localRemotes: any[]; lastUpdated: number };
-    setDriveManager: React.Dispatch<React.SetStateAction<{ drives: any[]; localRemotes: any[]; lastUpdated: number }>>;
-    rcloneManager: any;
-    setRcloneManager: React.Dispatch<React.SetStateAction<any>>;
     loadPayload: (dataType: DataType, contextKey?: string) => Promise<void>;
 }
 
@@ -99,23 +94,6 @@ export const IsyncDataProvider: React.FC<{ children: ReactNode }> = ({ children 
     // Ref for stable access in callbacks (prevents infinite loops)
     const cacheRef = useRef<CacheState>(cache);
     cacheRef.current = cache;
-
-    /**
-     * @deprecated Legacy state - retained for backwards compatibility.
-     * Migration: Use `useCacheStatus('shared_drives', domainKey)` and 
-     * `useCacheStatus('rclone_remotes', 'local')` instead.
-     * TODO: Remove in future release after all consumers migrate.
-     */
-    const [driveManager, setDriveManager] = useState({ drives: [], localRemotes: [], lastUpdated: 0 });
-
-    /**
-     * @deprecated Legacy state - retained for backwards compatibility.
-     * Migration: Use the new cache system via `useCacheStatus()` hook.
-     * TODO: Remove in future release after all consumers migrate.
-     */
-    const [rcloneManager, setRcloneManager] = useState({
-        remotes: [], servers: [], source: 'local', selectedServer: '', searchFilter: '', statusFilter: 'all', lastUpdated: 0
-    });
 
     // Load cache from backend on mount (non-blocking)
     useEffect(() => {
@@ -290,11 +268,6 @@ export const IsyncDataProvider: React.FC<{ children: ReactNode }> = ({ children 
             setLoading,
             invalidate,
             refreshAll,
-            // Legacy support
-            driveManager,
-            setDriveManager,
-            rcloneManager,
-            setRcloneManager,
             loadPayload,
         }}>
             {children}

@@ -4,7 +4,7 @@ Handles statistics and scanning operations for the Dashboard.
 """
 from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
-from typing import Optional, Literal
+from typing import Optional, Literal, List
 from sqlalchemy.orm import Session
 from datetime import datetime
 import json
@@ -24,6 +24,11 @@ class ScanRequest(BaseModel):
     side: Literal["source", "dest"]
     server_id: Optional[str] = None  # If 'local', use "local". If None, use stored.
     timeout: Optional[int] = 1200 # Default 20m if not specified
+
+class BulkScanServerUpdateRequest(BaseModel):
+    pair_ids: List[str]
+    source_server_id: Optional[str] = None
+    dest_server_id: Optional[str] = None
 
 class ScanResult(BaseModel):
     bytes: int
@@ -214,3 +219,24 @@ def scan_path(req: ScanRequest, db: Session = Depends(get_db)):
             "scanned_at": now.isoformat()
         }
     }
+
+@router.post("/bulk-update-scan-servers")
+def bulk_update_scan_servers(req: BulkScanServerUpdateRequest, db: Session = Depends(get_db)):
+    """
+    Update scan server preferences for multiple sync pairs.
+    """
+    try:
+        int_ids = [int(pid) for pid in req.pair_ids]
+    except (ValueError, TypeError):
+        raise HTTPException(status_code=400, detail="Invalid pair_id in list")
+    
+    pairs = db.query(SyncPair).filter(SyncPair.id.in_(int_ids)).all()
+    
+    for pair in pairs:
+        if req.source_server_id:
+            pair.scan_source_server_id = req.source_server_id
+        if req.dest_server_id:
+            pair.scan_dest_server_id = req.dest_server_id
+            
+    db.commit()
+    return {"status": "ok", "updated_count": len(pairs)}

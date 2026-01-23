@@ -38,6 +38,7 @@ logs/
 
 # --- Backups & Archives ---
 backups/
+archive/
 *.zip
 *.bak
 .deprecated/
@@ -54,10 +55,8 @@ frontend/.env.local
 
 
 # --- Planning Documents (Antigravity) ---
-CODE_REVIEW_AND_IMPROVEMENTS.md
-DB_REFACTOR_PLAN.md
-FUTURE_ENHANCEMENTS_PLAN.md
-WORKSPACE_REFRESH_FIX.md
+# Consolidated in PLAN.md
+# Archived files in archive/
 
 # --- Temporary Dev Scripts ---
 check_migration.py

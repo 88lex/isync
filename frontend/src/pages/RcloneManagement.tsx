@@ -30,9 +30,15 @@ interface RcloneRemote {
     config: Record<string, string>;
 }
 
+
 const RcloneManagement: React.FC = () => {
-    const { rcloneManager, setRcloneManager, setCached, setLoading: setCacheLoading } = useIsyncData();
-    const { source, selectedServer, searchFilter, statusFilter } = rcloneManager;
+    const { setCached, setLoading: setCacheLoading } = useIsyncData();
+    
+    // Page-local filter state (previously stored in legacy rcloneManager context)
+    const [source, setSource] = useState<'local' | 'remote'>('local');
+    const [selectedServer, setSelectedServer] = useState<string>('');
+    const [searchFilter, setSearchFilter] = useState<string>('');
+    const [statusFilter, setStatusFilter] = useState<'all' | 'normal' | 'ignored' | 'protected'>('all');
 
     const serverCache = useCacheStatus('ssh_servers');
     const contextKey = source === 'local' ? 'local' : selectedServer;
@@ -50,13 +56,6 @@ const RcloneManagement: React.FC = () => {
 
     const [testing, setTesting] = useState(false);
 
-    // Filter Updaters
-    const setSource = (val: 'local' | 'remote') => setRcloneManager(prev => ({ ...prev, source: val }));
-    const setServers = (val: any[]) => setRcloneManager(prev => ({ ...prev, servers: val }));
-    const setSelectedServer = (val: string) => setRcloneManager(prev => ({ ...prev, selectedServer: val }));
-    const setRemotes = (val: any[]) => setRcloneManager(prev => ({ ...prev, remotes: val, lastUpdated: Date.now() }));
-    const setSearchFilter = (val: string) => setRcloneManager(prev => ({ ...prev, searchFilter: val }));
-    const setStatusFilter = (val: any) => setRcloneManager(prev => ({ ...prev, statusFilter: val }));
 
     // Other state
     const [showAddModal, setShowAddModal] = useState(false);
@@ -136,10 +135,9 @@ const RcloneManagement: React.FC = () => {
                 res = { remotes: [] };
             }
 
+
             setCached('rclone_remotes', contextKey, res.remotes, source === 'local' ? 'local_rclone' : `ssh_${selectedServer}`);
 
-            // Legacy support sync
-            setRcloneManager(prev => ({ ...prev, remotes: res.remotes, lastUpdated: Date.now() }));
         } catch (e: any) {
             console.error(e);
             setMessage(`Error: ${e.message} `);
