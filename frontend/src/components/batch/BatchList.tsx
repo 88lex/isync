@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import {
     BatchFile, SSHServer, getBatchFile, updateBatchContent, renameBatchFile,
-    deleteBatchLocal, checkBatchRemote, pullBatch, deleteBatchRemote, regenerateBatch
+    deleteBatchLocal, checkBatchRemote, pullBatch, deleteBatchRemote
 } from '../../api';
 import { FolderOpen, FileCode, Users, Shuffle, Trash2, Edit2, ChevronDown, UploadCloud } from 'lucide-react';
 import { DataTable, ColumnConfig } from '../ui/DataTable';
@@ -21,6 +21,7 @@ export interface BatchListProps {
     handleOpenPushModal: (type: 'batch' | 'group', ids: string | string[]) => void;
     batchOperationLoading: string | null;
     setBatchOperationLoading: (val: string | null) => void;
+    onRegenerate: (file: BatchFile) => void;
 }
 
 export const BatchList: React.FC<BatchListProps> = ({
@@ -36,7 +37,8 @@ export const BatchList: React.FC<BatchListProps> = ({
     openBatchUsersModal,
     handleOpenPushModal,
     batchOperationLoading,
-    setBatchOperationLoading
+    setBatchOperationLoading,
+    onRegenerate
 }) => {
     // Local UI State for editing
     const [editingBatch, setEditingBatch] = useState<string | null>(null);
@@ -143,7 +145,7 @@ export const BatchList: React.FC<BatchListProps> = ({
                             <UploadCloud size={12} />
                         </button>
                         <button
-                            onClick={() => handleRegenerate(f)}
+                            onClick={() => onRegenerate(f)}
                             disabled={!!isLoading || !f.sync_pair}
                             className="flex items-center gap-1 px-2 py-1 bg-amber-600/20 hover:bg-amber-600 text-amber-400 hover:text-white rounded text-xs transition disabled:opacity-50 border border-amber-500/20"
                             title="Regenerate"
@@ -275,38 +277,7 @@ export const BatchList: React.FC<BatchListProps> = ({
         }
     };
 
-    const handleRegenerate = async (f: BatchFile) => {
-        const choice = prompt(
-            `Regenerate ${f.name}?\n\n` +
-            `1: Keep existing users\n` +
-            `2: Use selected ${selectedUsers.size} users\n` +
-            `3: Refresh and use ALL\n`,
-            "1"
-        );
-        if (!choice || !['1', '2', '3'].includes(choice)) return;
 
-        try {
-            setBatchOperationLoading(`regen-${f.name}`);
-            let sUsers: string[] | undefined = undefined;
-            let allU = false;
-
-            if (choice === '2') {
-                if (selectedUsers.size === 0) return alert("No users selected!");
-                sUsers = Array.from(selectedUsers);
-            } else if (choice === '3') {
-                allU = true;
-            }
-
-            await regenerateBatch(f.name, randomOrder, sUsers, allU, f.sync_pair?.id);
-            await loadSavedBatches();
-            const data = await getBatchFile(f.name);
-            setBatchContentCache(prev => ({ ...prev, [f.name]: data.content }));
-        } catch (e: any) {
-            alert(`Regeneration failed: ${e.message}`);
-        } finally {
-            setBatchOperationLoading(null);
-        }
-    };
 
     return (
         <React.Fragment>

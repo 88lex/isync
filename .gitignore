@@ -64,3 +64,8 @@ complete_migration.py
 update_db_schema.py
 test_imports.py
 verify_sync.py
+test*.py
+dump*.py
+check*.py
+debug*.py
+verify_fix.py

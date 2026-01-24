@@ -6,6 +6,7 @@ from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 from datetime import datetime, timedelta
 import asyncio
+import threading
 
 logger = logging.getLogger("isync_api")
 
@@ -26,8 +27,7 @@ class WorkspaceService:
         'https://www.googleapis.com/auth/admin.directory.group',
         'https://www.googleapis.com/auth/admin.directory.group.member',
         'https://www.googleapis.com/auth/admin.directory.customer.readonly',
-        'https://www.googleapis.com/auth/admin.directory.domain.readonly',
-        'https://www.googleapis.com/auth/admin.directory.rolemanagement.readonly'
+        'https://www.googleapis.com/auth/admin.directory.domain.readonly'
     ]
     
     SCOPES_DRIVE = [
@@ -38,9 +38,7 @@ class WorkspaceService:
         'https://www.googleapis.com/auth/admin.reports.usage.readonly'
     ]
 
-    SCOPES_GROUPS_SETTINGS = [
-        'https://www.googleapis.com/auth/apps.groups.settings'
-    ]
+    SCOPES_GROUPS_SETTINGS = []
     
     SCOPES_SHEETS = [
         'https://www.googleapis.com/auth/spreadsheets'
@@ -57,66 +55,51 @@ class WorkspaceService:
     def __init__(self, sa_json_path: str, admin_email: str):
         self.sa_json_path = sa_json_path
         self.admin_email = admin_email
-        self._directory_service = None
-        self._reports_service = None
-        self._drive_service = None
-        self._groupssettings_service = None
-        self._sheets_service = None
-        self._crm_service = None
-        self._identity_service = None
+        self._local = threading.local()
 
-    def _get_credentials(self, scopes: List[str]):
-        creds = service_account.Credentials.from_service_account_file(
-            self.sa_json_path, scopes=scopes
-        )
-        return creds.with_subject(self.admin_email)
+    def _get_service(self, name: str, version: str, scopes: List[str]):
+        """Helper to get or create a thread-local service object."""
+        key = f"{name}_{version}"
+        if not hasattr(self._local, key):
+            creds = service_account.Credentials.from_service_account_file(
+                self.sa_json_path, scopes=scopes
+            )
+            creds = creds.with_subject(self.admin_email)
+            setattr(self._local, key, build(name, version, credentials=creds, cache_discovery=False))
+        return getattr(self._local, key)
 
     @property
     def directory(self):
-        if not self._directory_service:
-            self._directory_service = build('admin', 'directory_v1', credentials=self._get_credentials(self.SCOPES_DIRECTORY))
-        return self._directory_service
+        return self._get_service('admin', 'directory_v1', self.SCOPES_DIRECTORY)
 
     @property
     def reports(self):
-        if not self._reports_service:
-            self._reports_service = build('admin', 'reports_v1', credentials=self._get_credentials(self.SCOPES_REPORTS))
-        return self._reports_service
+        return self._get_service('admin', 'reports_v1', self.SCOPES_REPORTS)
 
     @property
     def drive(self):
-        if not self._drive_service:
-            self._drive_service = build('drive', 'v3', credentials=self._get_credentials(self.SCOPES_DRIVE))
-        return self._drive_service
+        return self._get_service('drive', 'v3', self.SCOPES_DRIVE)
     
     @property
     def sheets(self):
-        if not self._sheets_service:
-            self._sheets_service = build('sheets', 'v4', credentials=self._get_credentials(self.SCOPES_SHEETS))
-        return self._sheets_service
+        return self._get_service('sheets', 'v4', self.SCOPES_SHEETS)
     
     @property
     def cloud_resource_manager(self):
-        if not self._crm_service:
-            self._crm_service = build('cloudresourcemanager', 'v3', credentials=self._get_credentials(self.SCOPES_CLOUD))
-        return self._crm_service
+        return self._get_service('cloudresourcemanager', 'v3', self.SCOPES_CLOUD)
 
     @property
     def cloud_identity(self):
-        if not self._identity_service:
-            self._identity_service = build('cloudidentity', 'v1', credentials=self._get_credentials(self.SCOPES_CLOUD))
-        return self._identity_service
+        return self._get_service('cloudidentity', 'v1', self.SCOPES_CLOUD)
 
     @property
     def groupssettings(self):
         """Group Settings API for advanced group configuration details."""
-        if not self._groupssettings_service:
-            try:
-                self._groupssettings_service = build('groupssettings', 'v1', credentials=self._get_credentials(self.SCOPES_GROUPS_SETTINGS))
-            except Exception as e:
-                logger.warning(f"Failed to initialize Groups Settings API: {e}")
-                self._groupssettings_service = None
-        return self._groupssettings_service
+        try:
+            return self._get_service('groupssettings', 'v1', self.SCOPES_GROUPS_SETTINGS)
+        except Exception as e:
+            logger.warning(f"Failed to initialize Groups Settings API: {e}")
+            return None
 
     async def get_auth_status(self) -> Dict[str, Any]:
         """
@@ -141,7 +124,7 @@ class WorkspaceService:
         # Define status check logic
         async def check_scope(name, api_call):
             try:
-                api_call()
+                await asyncio.to_thread(api_call)
                 return {"name": name, "status": "active", "error": None}
             except HttpError as e:
                 return {"name": name, "status": "failed", "error": f"{e.resp.status}: {e.reason}"}
@@ -151,20 +134,28 @@ class WorkspaceService:
         # Perform checks (non-destructive read calls)
         try:
             domain = self.admin_email.split("@")[-1]
-            status_checks.append(await check_scope("Directory API (Users)", lambda: self.directory.users().list(domain=domain, maxResults=1).execute()))
-            status_checks.append(await check_scope("Directory API (Customers)", lambda: self.directory.customers().get(customerKey="my_customer").execute()))
+            
+            # 1. Drive API (Fundamental)
             status_checks.append(await check_scope("Drive API", lambda: self.drive.about().get(fields="storageQuota").execute()))
             
+            # 2. Reports API (Critical for stats)
             check_date = (datetime.now() - timedelta(days=4)).strftime("%Y-%m-%d")
             status_checks.append(await check_scope("Reports API", lambda: self.reports.customerUsageReports().get(date=check_date, parameters="accounts:num_users").execute()))
+
+            # 3. Directory API (Identity/Drives)
+            if self.SCOPES_DIRECTORY:
+                status_checks.append(await check_scope("Directory API (Users)", lambda: self.directory.users().list(domain=domain, maxResults=1).execute()))
+            
+            # 4. Sheets API (Optional)
+            if self.SCOPES_SHEETS:
+                status_checks.append(await check_scope("Sheets API", lambda: self.sheets.spreadsheets().get(spreadsheetId="1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgvE2upms").execute()))
+            
+            # 5. Groups Settings (Optional)
+            if self.SCOPES_GROUPS_SETTINGS:
+                status_checks.append(await check_scope("Groups Settings API", lambda: self.groupssettings.groups().get(groupUniqueId=self.admin_email).execute()))
+
         except Exception as e:
             logger.error(f"Error during auth status checks: {e}")
-
-        # Optional APIs
-        try:
-            status_checks.append(await check_scope("Sheets API", lambda: self.sheets.spreadsheets().get(spreadsheetId="1BxiMVs0XRA5nFMdKvBdBZjgmUUqptlbs74OgvE2upms").execute()))
-        except:
-             status_checks.append({"name": "Sheets API", "status": "active", "error": None})
 
         return {
             "service_account_email": client_email,
@@ -202,23 +193,27 @@ class WorkspaceService:
         
         # Try to get Customer Info (requires admin.directory.customer scope)
         try:
-            customer_res = self.directory.customers().get(customerKey='my_customer').execute()
-            result["customer_id"] = customer_res.get('id')
-            result["customer_domain"] = customer_res.get('customerDomain')
-            result["primary_domain"] = customer_res.get('customerDomain')
-            result["org_id"] = customer_res.get('id')
-            result["customer_creation_time"] = customer_res.get('customerCreationTime')
-        except HttpError as e:
-            if e.resp.status == 403:
-                logger.warning("Customer API not authorized - using domain from config")
-            else:
-                logger.warning(f"Failed to retrieve customer info: {e}")
+            # Check if scope is even possibly available before trying
+            try:
+                customer_res = await asyncio.to_thread(
+                    self.directory.customers().get(customerKey='my_customer').execute
+                )
+                result["customer_id"] = customer_res.get('id')
+                result["customer_domain"] = customer_res.get('customerDomain')
+                result["primary_domain"] = customer_res.get('customerDomain')
+                result["org_id"] = customer_res.get('id')
+                result["customer_creation_time"] = customer_res.get('customerCreationTime')
+            except HttpError as e:
+                # 403 or 401 usually means scope issue or API disabled
+                logger.warning(f"Customer/Org Info unavailable via API ({e.resp.status}). Using configuration defaults.")
         except Exception as e:
-            logger.warning(f"Customer API error: {e}")
+             logger.warning(f"Customer API error: {e}")
         
         # Try to get Domain Info (requires admin.directory.domain scope)
         try:
-            domains_res = self.directory.domains().list(customer='my_customer').execute()
+            domains_res = await asyncio.to_thread(
+                self.directory.domains().list(customer='my_customer').execute
+            )
             for d in domains_res.get('domains', []):
                 domain_info = {
                     "domain_name": d.get('domainName'),
@@ -242,7 +237,9 @@ class WorkspaceService:
         
         # Try to get Domain Aliases (requires admin.directory.domain scope)
         try:
-            aliases_res = self.directory.domainAliases().list(customer='my_customer').execute()
+            aliases_res = await asyncio.to_thread(
+                self.directory.domainAliases().list(customer='my_customer').execute
+            )
             for alias in aliases_res.get('domainAliases', []):
                 result["domain_aliases"].append({
                     "alias": alias.get('domainAliasName'),
@@ -258,12 +255,14 @@ class WorkspaceService:
         
         # Get Admin Users (this should work with admin.directory.user scope)
         try:
-            users_res = self.directory.users().list(
-                domain=domain, 
-                query="isAdmin=true", 
-                projection='full',
-                maxResults=500
-            ).execute()
+            users_res = await asyncio.to_thread(
+                self.directory.users().list(
+                    domain=domain, 
+                    query="isAdmin=true", 
+                    projection='full',
+                    maxResults=500
+                ).execute
+            )
             
             for u in users_res.get('users', []):
                 result["admins"].append({
@@ -276,12 +275,16 @@ class WorkspaceService:
                 })
         except HttpError as e:
             logger.error(f"Failed to list admin users: {e}")
+            result["admins_error"] = str(e)
         except Exception as e:
             logger.error(f"Admin users error: {e}")
+            result["admins_error"] = str(e)
         
         # Try to get custom admin roles (requires admin.directory.rolemanagement scope)
         try:
-            roles_res = self.directory.roles().list(customer='my_customer').execute()
+            roles_res = await asyncio.to_thread(
+                self.directory.roles().list(customer='my_customer').execute
+            )
             for role in roles_res.get('items', []):
                 if role.get('isSuperAdminRole') or role.get('isSystemRole'):
                     continue
@@ -320,13 +323,15 @@ class WorkspaceService:
             thirty_days_ago = (datetime.now() - timedelta(days=30)).isoformat() + 'Z'
             
             while True:
-                users_res = self.directory.users().list(
-                    domain=domain,
-                    maxResults=500,
-                    pageToken=page_token,
-                    projection='basic',
-                    fields='users(primaryEmail,suspended,archived,isAdmin,isDelegatedAdmin,lastLoginTime),nextPageToken'
-                ).execute()
+                users_res = await asyncio.to_thread(
+                    self.directory.users().list(
+                        domain=domain,
+                        maxResults=500,
+                        pageToken=page_token,
+                        projection='basic',
+                        fields='users(primaryEmail,suspended,archived,isAdmin,isDelegatedAdmin,lastLoginTime),nextPageToken'
+                    ).execute
+                )
                 
                 for user in users_res.get('users', []):
                     total_users += 1
@@ -352,11 +357,13 @@ class WorkspaceService:
             page_token = None
             
             while True:
-                groups_res = self.directory.groups().list(
-                    domain=domain,
-                    maxResults=200,
-                    pageToken=page_token
-                ).execute()
+                groups_res = await asyncio.to_thread(
+                    self.directory.groups().list(
+                        domain=domain,
+                        maxResults=200,
+                        pageToken=page_token
+                    ).execute
+                )
                 
                 for g in groups_res.get('groups', []):
                     group_info = {
@@ -371,7 +378,9 @@ class WorkspaceService:
                     # Try to get group settings if available
                     try:
                         if self.groupssettings:
-                            settings = self.groupssettings.groups().get(groupUniqueId=g['email']).execute()
+                            settings = await asyncio.to_thread(
+                                self.groupssettings.groups().get(groupUniqueId=g['email']).execute
+                            )
                             group_info['settings'] = {
                                 "who_can_join": settings.get('whoCanJoin', 'UNKNOWN'),
                                 "who_can_view_membership": settings.get('whoCanViewMembership', 'UNKNOWN'),
@@ -402,19 +411,53 @@ class WorkspaceService:
                 "groups": groups,
                 "group_count": len(groups),
             }
-        except HttpError as e:
-            logger.error(f"HTTP Error fetching inventory stats: {e.resp.status} - {e.content}")
-            raise
         except Exception as e:
-            logger.error(f"Error fetching inventory stats: {e}")
-            raise
+            # Fallback for Inventory if Directory API failed
+            # Try to get at least the user count from Reports API
+            logger.warning(f"Directory API failed for inventory ({e}). Attempting Reports API fallback...")
+            try:
+                for days_ago in [2, 3, 4, 5, 6]:
+                    date = (datetime.now() - timedelta(days=days_ago)).strftime('%Y-%m-%d')
+                    report = await asyncio.to_thread(
+                        self.reports.customerUsageReports().get(
+                            date=date,
+                            parameters='accounts:num_users'
+                        ).execute
+                    )
+                    if 'usageReports' in report and len(report['usageReports']) > 0:
+                        params = {p['name']: int(p.get('intValue', 0)) for p in report['usageReports'][0].get('parameters', [])}
+                        num_users = params.get('accounts:num_users', 0)
+                        return {
+                            "user_stats": {
+                                "total": num_users,
+                                "active": num_users,
+                                "suspended": 0,
+                                "archived": 0,
+                                "never_logged_in": 0,
+                                "active_last_30_days": 0,
+                                "source_is_fallback": True
+                            },
+                            "groups": [],
+                            "group_count": 0,
+                            "directory_error": str(e)
+                        }
+            except Exception as fe:
+                logger.error(f"Both Directory and Reports APIs failed for inventory: {fe}")
+            
+            # If everything else fails, return empty result with error
+            return {
+                "user_stats": {"total": 0, "active": 0, "suspended": 0, "archived": 0, "never_logged_in": 0, "active_last_30_days": 0},
+                "groups": [],
+                "group_count": 0,
+                "directory_error": str(e)
+            }
 
     async def get_storage_usage(self, domain: str) -> Dict[str, Any]:
         """
         Section 3: Storage & Usage Statistics
         
-        Prioritizes Drive API (about().get()) for realtime "Instant" storage numbers (matching Drive UI).
-        Uses Settings/Reports API for activity metrics.
+        Prioritizes Reports API for domain-wide aggregate statistics.
+        Uses Drive API about().get() as a real-time fallback for the specific Admin user.
         """
         result = {
             "quota_info": None,
@@ -423,106 +466,91 @@ class WorkspaceService:
             "date": None,
         }
         
-        # 1. Primary: Use Drive API about().get() - Realtime, matching Admin view
+        # 1. Primary: Reports API for REAL Aggregate Domain Usage
         try:
-            about = self.drive.about().get(fields='storageQuota,user').execute()
-            storage_quota = about.get('storageQuota', {})
-            
-            # Values come as strings in bytes
-            limit_bytes = int(storage_quota.get('limit', 0))
-            usage_bytes = int(storage_quota.get('usage', 0))
-            drive_bytes = int(storage_quota.get('usageInDrive', 0))
-            trash_bytes = int(storage_quota.get('usageInDriveTrash', 0))
-            
-            # Convert to MB and GB for display
-            limit_mb = limit_bytes / (1024 * 1024)
-            usage_mb = usage_bytes / (1024 * 1024)
-            drive_mb = drive_bytes / (1024 * 1024)
-            
-            limit_gb = limit_bytes / (1024 ** 3)
-            usage_gb = usage_bytes / (1024 ** 3)
-            
-            percentage = (usage_bytes / limit_bytes * 100) if limit_bytes > 0 else 0
-            
-            result["quota_info"] = {
-                "total_quota_mb": int(limit_mb),
-                "total_quota_gb": round(limit_gb, 2),
-                "total_quota_tb": round(limit_gb / 1024, 2),
-                "total_used_mb": int(usage_mb),
-                "total_used_gb": round(usage_gb, 2),
-                "total_used_tb": round(usage_gb / 1024, 2),
-                "drive_used_mb": int(drive_mb),
-                "trash_mb": int(trash_bytes / (1024 * 1024)),
-                "percentage_used": round(percentage, 1),
-                "source": "Drive API (Realtime)"
-            }
-            
-            user = about.get('user', {})
-            result["retrieved_as"] = user.get('emailAddress')
-            logger.info(f"Storage retrieved via Drive API: {usage_gb:.1f} GB / {limit_gb:.1f} GB")
-            
-        except HttpError as e:
-            logger.warning(f"Failed to get storage via Drive API: {e}")
-        except Exception as e:
-            logger.warning(f"Error fetching storage (Drive API): {e}")
-
-        # 2. Secondary: Reports API for activity metrics (and backup storage source)
-        try:
-            for days_ago in [2, 3, 4, 5]:
+            # Check last 6 days for data (Reports API delayed by ~48h)
+            for days_ago in [2, 3, 4, 5, 6]:
                 date = (datetime.now() - timedelta(days=days_ago)).strftime('%Y-%m-%d')
                 try:
-                    report = self.reports.customerUsageReports().get(
-                        date=date,
-                        parameters='accounts:used_quota_in_mb,accounts:total_quota_in_mb,drive:num_items_created,drive:num_items_edited,drive:num_items_viewed,drive:num_items_trashed'
-                    ).execute()
+                    report = await asyncio.to_thread(
+                        self.reports.customerUsageReports().get(
+                            date=date,
+                            parameters='accounts:used_quota_in_mb,accounts:total_quota_in_mb,drive:num_items_created,drive:num_items_edited,drive:num_items_viewed,drive:num_items_trashed'
+                        ).execute
+                    )
                     
                     if 'usageReports' in report and len(report['usageReports']) > 0:
                         params = {p['name']: int(p.get('intValue', 0)) for p in report['usageReports'][0].get('parameters', [])}
                         
-                        # Populate activity
-                        result["activity"] = {
-                            "items_created": params.get('drive:num_items_created', 0),
-                            "items_edited": params.get('drive:num_items_edited', 0),
-                            "items_viewed": params.get('drive:num_items_viewed', 0),
-                            "items_trashed": params.get('drive:num_items_trashed', 0),
-                        }
-                        result["date"] = date
+                        used_mb = params.get('accounts:used_quota_in_mb', 0)
+                        limit_mb = params.get('accounts:total_quota_in_mb', 0)
                         
-                        # Fallback: If Drive API failed, use Reports API for storage
-                        if not result["quota_info"]:
-                            used_mb = params.get('accounts:used_quota_in_mb', 0)
-                            limit_mb = params.get('accounts:total_quota_in_mb', 0)
+                        if limit_mb > 0 or used_mb > 0:
+                            limit_gb = limit_mb / 1024
+                            used_gb = used_mb / 1024
+                            percentage = (used_mb / limit_mb * 100) if limit_mb > 0 else 0
                             
-                            if limit_mb > 0:
-                                limit_gb = limit_mb / 1024
-                                used_gb = used_mb / 1024
-                                percentage = (used_mb / limit_mb * 100)
-                                
-                                result["quota_info"] = {
-                                    "total_quota_mb": int(limit_mb),
-                                    "total_quota_gb": round(limit_gb, 2),
-                                    "total_quota_tb": round(limit_gb / 1024, 2),
-                                    "total_used_mb": int(used_mb),
-                                    "total_used_gb": round(used_gb, 2),
-                                    "total_used_tb": round(used_gb / 1024, 2),
-                                    "drive_used_mb": int(used_mb), 
-                                    "trash_mb": 0,
-                                    "percentage_used": round(percentage, 1),
-                                    "source": "Reports API"
-                                }
-                                logger.info(f"Using Reports API storage fallback: {used_mb}MB")
-                        
-                        break
+                            result["quota_info"] = {
+                                "total_quota_mb": int(limit_mb),
+                                "total_quota_gb": round(limit_gb, 2),
+                                "total_quota_tb": round(limit_gb / 1024, 2),
+                                "total_used_mb": int(used_mb),
+                                "total_used_gb": round(used_gb, 2),
+                                "total_used_tb": round(used_gb / 1024, 2),
+                                "drive_used_mb": int(used_mb), 
+                                "trash_mb": 0,
+                                "percentage_used": round(percentage, 1),
+                                "source": "Reports API"
+                            }
+                            
+                            # Populate activity
+                            result["activity"] = {
+                                "items_created": params.get('drive:num_items_created', 0),
+                                "items_edited": params.get('drive:num_items_edited', 0),
+                                "items_viewed": params.get('drive:num_items_viewed', 0),
+                                "items_trashed": params.get('drive:num_items_trashed', 0),
+                            }
+                            result["date"] = date
+                            logger.info(f"Retrieved aggregate storage for {domain} via Reports API: {used_gb:.1f} GB")
+                            break
                 except HttpError as e:
-                     if e.resp.status == 403:
-                         logger.debug("Reports API not authorized")
-                         break
+                     if e.resp.status == 403: break # Not authorized
                      continue 
         except Exception as e:
-            logger.debug(f"Could not fetch Reports API metrics: {e}")
+            logger.debug(f"Reports API storage fallback failure: {e}")
+
+        # 2. Fallback: Drive API about().get()
+        try:
+            about = await asyncio.to_thread(
+                self.drive.about().get(fields='storageQuota,user').execute
+            )
+            storage_quota = about.get('storageQuota', {})
+            limit_bytes = int(storage_quota.get('limit', 0))
+            usage_bytes = int(storage_quota.get('usage', 0))
             
-        if not result["quota_info"]:
-             return {"status": "error", "message": "All storage APIs failed"}
+            # If Reports API failed, or returned significantly LESS than the Admin user's own usage, update
+            if not result["quota_info"] or (usage_bytes / (1024**3) > result["quota_info"]["total_used_gb"]):
+                limit_gb = limit_bytes / (1024 ** 3)
+                usage_gb = usage_bytes / (1024 ** 3)
+                percentage = (usage_bytes / limit_bytes * 100) if limit_bytes > 0 else 0
+                result["quota_info"] = {
+                    "total_quota_mb": int(limit_bytes / (1024 * 1024)),
+                    "total_quota_gb": round(limit_gb, 2),
+                    "total_quota_tb": round(limit_gb / 1024, 2),
+                    "total_used_mb": int(usage_bytes / (1024 * 1024)),
+                    "total_used_gb": round(usage_gb, 2),
+                    "total_used_tb": round(usage_gb / 1024, 2),
+                    "drive_used_mb": int(usage_bytes / (1024 * 1024)),
+                    "trash_mb": 0,
+                    "percentage_used": round(percentage, 1),
+                    "source": "Drive API (Admin Direct)"
+                }
+            
+            user = about.get('user', {})
+            result["retrieved_as"] = user.get('emailAddress')
+        except Exception as e:
+            if not result["quota_info"]:
+                 return {"status": "error", "message": f"All storage APIs failed: {e}"}
 
         return result
 

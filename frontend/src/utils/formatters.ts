@@ -8,7 +8,11 @@
 export function formatDate(dateStr: string | null | undefined): string {
     if (!dateStr) return '-';
     const date = new Date(dateStr);
-    return date.toLocaleString();
+    const month = date.toLocaleString('default', { month: 'short' });
+    const day = date.getDate();
+    const hours = date.getHours().toString().padStart(2, '0');
+    const minutes = date.getMinutes().toString().padStart(2, '0');
+    return `${month} ${day} ${hours}:${minutes}`;
 }
 
 /**
@@ -52,4 +56,13 @@ export function formatTime(dateStr: string | null | undefined): string {
 export function truncate(str: string, maxLength: number): string {
     if (!str || str.length <= maxLength) return str;
     return str.slice(0, maxLength - 3) + '...';
+}
+
+/**
+ * Format bytes specifically to Terabytes (TB) with 2 decimal places
+ */
+export function formatTB(bytes?: number | null): string {
+    if (bytes === undefined || bytes === null) return '-';
+    // 1024^4 = 1099511627776
+    return (bytes / 1099511627776).toFixed(2);
 }

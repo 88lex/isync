@@ -200,7 +200,7 @@ async def delete_cache_entry(
     entry = db.query(DataCache).filter(DataCache.id == cache_id).first()
     
     if not entry:
-        raise HTTPException(status_code=404, detail="Cache entry not found")
+        return {"status": "already_deleted", "id": cache_id}
     
     db.delete(entry)
     db.commit()

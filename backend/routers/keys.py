@@ -48,10 +48,10 @@ async def list_keys():
     # Load config for mapping
     path_to_admin = {}
     filename_to_admin = {}
+    domains = []
     try:
         from backend.config_manager import config_manager
-        config = config_manager.load_config()
-        domains = config.get('domains', [])
+        domains = config_manager.get_domains()
         for d in domains:
             if d.get('sa_json_path'):
                 try:
@@ -92,8 +92,7 @@ async def list_keys():
 
     # 2. Key from Configuration
     try:
-        # We already loaded config above
-        domains = config.get('domains', [])
+        # We already loaded domains above
         for d in domains:
             sa_path = d.get('sa_json_path')
             if sa_path and os.path.exists(sa_path):
@@ -134,8 +133,7 @@ async def inspect_key(filename: str, req: InspectRequest = None):
          # Try in config
         try:
             from backend.config_manager import config_manager
-            config = config_manager.load_config()
-            domains = config.get('domains', [])
+            domains = config_manager.get_domains()
             for d in domains:
                 sa_path = d.get('sa_json_path')
                 if sa_path and os.path.basename(sa_path) == filename and os.path.exists(sa_path):
@@ -156,7 +154,7 @@ async def inspect_key(filename: str, req: InspectRequest = None):
         creds = service_account.Credentials.from_service_account_file(file_path)
         project_id = creds.project_id
         email = creds.service_account_email
-        service = discovery.build('cloudresourcemanager', 'v1', credentials=creds)
+        service = discovery.build('cloudresourcemanager', 'v1', credentials=creds, cache_discovery=False)
         policy = service.projects().getIamPolicy(resource=project_id, body={}).execute()
         for binding in policy.get('bindings', []):
             members = binding.get('members', [])
@@ -179,8 +177,7 @@ async def inspect_key(filename: str, req: InspectRequest = None):
         if not admin_email:
             try:
                 from backend.config_manager import config_manager
-                config = config_manager.load_config()
-                domains = config.get('domains', [])
+                domains = config_manager.get_domains()
                 
                 # Match by path first
                 for d in domains:
@@ -256,8 +253,7 @@ async def extract_attributes(filename: str):
          # Try to find in config
         try:
             from backend.config_manager import config_manager
-            config = config_manager.load_config()
-            domains = config.get('domains', [])
+            domains = config_manager.get_domains()
             for d in domains:
                 sa_path = d.get('sa_json_path')
                 if sa_path and os.path.basename(sa_path) == filename and os.path.exists(sa_path):

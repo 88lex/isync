@@ -118,6 +118,22 @@ def test_ssh_connection(req: SSHBaseRequest):
     except Exception as e:
         return {"status": "error", "message": str(e)}
 
+def _resolve_ssh_alias(host_str: str):
+    """
+    Parses host string which may be an IP, hostname, or alias.
+    Supports host:port format.
+    """
+    if not host_str:
+        return "", 22
+    if ":" in host_str:
+        parts = host_str.split(":")
+        try:
+            return parts[0], int(parts[1])
+        except ValueError:
+            return parts[0], 22
+    return host_str, 22
+
+
 def approve_ssh_host_key(req: SSHBaseRequest):
     """Adds the host key to known_hosts."""
     try:

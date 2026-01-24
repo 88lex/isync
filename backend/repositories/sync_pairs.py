@@ -47,7 +47,9 @@ class SyncPairRepository:
                source_type: str = "LOCAL", source_server_id: str = None,
                dest_type: str = "LOCAL", dest_server_id: str = None,
                meta_server_id: str = None, meta_execution_mode: str = "local",
-               description: str = None) -> dict:
+               description: str = None,
+               scan_source_server_id: str = None,
+               scan_dest_server_id: str = None) -> dict:
         """Create a new sync pair."""
         pair = SyncPairModel(
             source=source,
@@ -59,7 +61,9 @@ class SyncPairRepository:
             dest_server_id=dest_server_id,
             meta_server_id=meta_server_id,
             meta_execution_mode=meta_execution_mode,
-            description=description
+            description=description,
+            scan_source_server_id=scan_source_server_id,
+            scan_dest_server_id=scan_dest_server_id
         )
         self.db.add(pair)
         self.db.commit()

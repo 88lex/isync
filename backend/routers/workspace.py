@@ -100,7 +100,11 @@ async def get_workspace_summary(domain: str, refresh: bool = False, quick: bool 
         if existing_cache and existing_cache.payload:
             try:
                 logger.info(f"Returning cached workspace summary for domain: {domain}")
-                return json.loads(existing_cache.payload)
+                payload = json.loads(existing_cache.payload)
+                # Ensure we return a consistent format to the frontend
+                # If cached as object, wrap in list for frontend's expectation
+                # If cached as list, return as is (to be unwrapped by frontend)
+                return payload
             except Exception as e:
                 logger.warning(f"Failed to parse cached summary for {domain}: {e}")
 
@@ -161,7 +165,8 @@ async def get_workspace_summary(domain: str, refresh: bool = False, quick: bool 
         # 4. Update DataCache in DB
         try:
             now = datetime.utcnow()
-            payload_json = json.dumps(results)
+            # Wrap in list for consistency with frontend's setCached logic
+            payload_json = json.dumps([results]) 
             cache_entry = db.query(DataCache).filter(DataCache.id == cache_id).first()
             
             if cache_entry:
@@ -181,7 +186,8 @@ async def get_workspace_summary(domain: str, refresh: bool = False, quick: bool 
             logger.error(f"Failed to update DataCache for {domain}: {cache_err}")
             db.rollback()
 
-        return results
+        # Return as list for consistency
+        return [results]
 
     except HTTPException:
         raise

@@ -1,24 +1,19 @@
 
-import React, { useState, useEffect, useCallback, useRef } from 'react';
-import { LayoutDashboard, RefreshCw, HardDrive, Database, Clock, Server, Play, MoreHorizontal, CheckCircle, XCircle, AlertTriangle, FileText, Square } from 'lucide-react';
+import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
+import { LayoutDashboard, RefreshCw, HardDrive, Database, Clock, Server, Play, MoreHorizontal, CheckCircle, XCircle, AlertTriangle, FileText, Square, Activity, ChevronDown, ChevronRight } from 'lucide-react';
 import { PageHeader } from '../components/PageHeader';
 import { Card } from '../components/Card';
 import { LoadingSpinner } from '../components/LoadingSpinner';
 import { DataTable, ColumnConfig } from '../components/ui/DataTable';
 import { useIsyncData } from '../contexts/IsyncDataContext';
-import { formatDate } from '../utils/formatters';
+import { formatDate, formatTB, formatBytes } from '../utils/formatters';
 import { scanPath, SyncPair, SSHServer, fetchSSHServers, fetchSyncList, bulkUpdateScanServers } from '../api';
 import { useDataTable } from '../hooks/useDataTable';
+import { HierarchyTable } from '../components/dashboard/HierarchyTable';
+import { ScanServerModal } from '../components/ScanServerModal';
 
 // Format bytes
-const formatBytes = (bytes?: number) => {
-    if (bytes === undefined || bytes === null) return '-';
-    if (bytes === 0) return '0 B';
-    const k = 1024;
-    const sizes = ['B', 'KB', 'MB', 'GB', 'TB', 'PB'];
-    const i = Math.floor(Math.log(bytes) / Math.log(k));
-    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
-};
+
 
 const formatCount = (count?: number) => {
     if (count === undefined || count === null) return '-';
@@ -26,12 +21,24 @@ const formatCount = (count?: number) => {
 };
 
 const DashboardPage: React.FC = () => {
-    const { cache, loadPayload, setLoading, invalidate, setCached } = useIsyncData();
+    const { cache, loadPayload, setLoading, invalidate, setCached, addOperation, updateOperation, removeOperation, activeOperations } = useIsyncData();
     const [localSynclist, setLocalSynclist] = useState<SyncPair[]>([]);
-    const [scanTimeout, setScanTimeout] = useState(1200);
-
+    
     const synclist = localSynclist.length > 0 ? localSynclist : ((cache.sync_pairs.data as SyncPair[]) || []);
     const servers = (cache.ssh_servers.data as SSHServer[]) || [];
+
+    const getServerName = (id?: string) => {
+        if (!id) return '?';
+        if (id === 'local') return 'Local';
+        const srv = servers.find(s => s.id === id);
+        return srv ? srv.name : id.substring(0, 8);
+    };
+
+    const getServerType = (id?: string) => {
+        if (!id) return '';
+        if (id === 'local') return 'local';
+        return 'ssh';
+    };
 
     const [scanning, setScanning] = useState<{ [key: string]: boolean }>({});
 	const [bulkSourceServer, setBulkSourceServer] = useState<string>('');
@@ -48,12 +55,35 @@ const DashboardPage: React.FC = () => {
         isStopping: false
     });
 
+    const statsByServer = useMemo(() => {
+        const stats: Record<string, { size: number, count: number, paths: number }> = {};
+        synclist.forEach(item => {
+            // Source
+            const sId = item.scan_source_server_id || 'local';
+            if (!stats[sId]) stats[sId] = { size: 0, count: 0, paths: 0 };
+            stats[sId].size += item.source_size_bytes || 0;
+            stats[sId].count += item.source_file_count || 0;
+            stats[sId].paths += 1;
+
+            // Dest
+            const dId = item.scan_dest_server_id || 'local';
+            if (!stats[dId]) stats[dId] = { size: 0, count: 0, paths: 0 };
+            stats[dId].size += item.dest_size_bytes || 0;
+            stats[dId].count += item.dest_file_count || 0;
+            stats[dId].paths += 1;
+        });
+        return stats;
+    }, [synclist]);
+
     const stopBulkRequested = useRef(false);
 
-    // Scan Configuration Modal
+    // Unified Scan Selection
     const [scanModalPair, setScanModalPair] = useState<SyncPair | null>(null);
-    const [scanModalSide, setScanModalSide] = useState<"source" | "dest" | null>(null);
+    const [scanModalSide, setScanModalSide] = useState<"source" | "dest" | "both" | null>(null);
     const [showScanModal, setShowScanModal] = useState(false);
+
+    // Category Scan State (Unified)
+    const [categoryScanInfo, setCategoryScanInfo] = useState<{ category: string, items: SyncPair[], side?: 'source' | 'dest' | 'both' } | null>(null);
 
     // Scan Result Reporting Modal
     const [reportModal, setReportModal] = useState<{
@@ -66,6 +96,9 @@ const DashboardPage: React.FC = () => {
         path?: string;
         server?: string;
     }>({ show: false, type: 'success', title: '' });
+    
+    // UI State
+    const [showBulkConfig, setShowBulkConfig] = useState(false);
 
     // Helper: Fetch from Source and Update Cache (Manual Hydration)
     const fetchAndCacheSyncPairs = useCallback(async () => {
@@ -97,7 +130,7 @@ const DashboardPage: React.FC = () => {
             setLoading('ssh_servers', 'local', true);
             fetchSSHServers()
                 .then(srvs => {
-                    loadPayload('ssh_servers', 'local');
+                    setCached('ssh_servers', 'local', srvs);
                 })
                 .finally(() => setLoading('ssh_servers', 'local', false));
         }
@@ -111,10 +144,33 @@ const DashboardPage: React.FC = () => {
         setShowScanModal(true);
     };
 
+    const scrollToActivityMonitor = () => {
+        const el = document.getElementById('activity-monitor-section');
+        if (el) {
+            el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            // Add temporary highlight effect
+            el.classList.add('ring-2', 'ring-cyan-500', 'shadow-[0_0_20px_rgba(6,182,212,0.5)]');
+            setTimeout(() => {
+                el.classList.remove('ring-2', 'ring-cyan-500', 'shadow-[0_0_20px_rgba(6,182,212,0.5)]');
+            }, 2000);
+        }
+    };
+
     const runScan = async (pair: SyncPair, side: "source" | "dest", serverId: string, timeout: number = 1200) => {
         if (!pair.id) return;
         const key = `${pair.id}-${side}`;
         const path = side === "source" ? pair.source : pair.dest;
+        const serverName = servers.find(s => s.id === serverId)?.name || (serverId === 'local' ? 'Local Server' : serverId);
+        
+        const opId = `scan-${pair.id}-${side}-${Date.now()}`;
+        addOperation({
+            id: opId,
+            type: 'scan',
+            label: `Scanning ${path}`,
+            status: 'running',
+            description: `Scanning on ${serverName}...`,
+            progress: 'Starting...'
+        });
 
         setScanning(prev => ({ ...prev, [key]: true }));
         setShowScanModal(false);
@@ -163,6 +219,11 @@ const DashboardPage: React.FC = () => {
                 server: serverId,
                 stats: { bytes: res.result.bytes, count: res.result.count }
             });
+            updateOperation(opId, { 
+                status: 'completed', 
+                description: `Scan finished on ${serverName}`,
+                progress: 'Done'
+            });
 
         } catch (e: any) {
             // Show Error Report
@@ -181,9 +242,76 @@ const DashboardPage: React.FC = () => {
                     ? `${errorMsg}\n\nSUGGESTION: Try clicking 'Refresh Stats' button to reload sync pairs.`
                     : errorMsg
             });
+            updateOperation(opId, { 
+                status: 'failed', 
+                description: `Scan failed on ${serverName}`,
+                progress: 'Error'
+            });
         } finally {
             setScanning(prev => ({ ...prev, [key]: false }));
+            // Auto remove single scan notifications after 5s to avoid clutter
+            setTimeout(() => removeOperation(opId), 5000);
         }
+    };
+
+    const executeBulkScan = async (jobs: { pair: SyncPair, side: "source" | "dest", serverId: string }[]) => {
+        stopBulkRequested.current = false;
+        
+        const opId = `bulk-scan-${Date.now()}`;
+        addOperation({
+            id: opId,
+            type: 'scan',
+            label: `Bulk Scan (${jobs.length} items)`,
+            status: 'running',
+            description: 'Initializing batch scan...',
+            progress: '0%'
+        });
+
+        setBulkScanProgress({ total: jobs.length, completed: 0, failed: 0, currentPath: '', currentSide: '' as any, inProgress: true, isStopping: false });
+
+        for (const [index, job] of jobs.entries()) {
+            if (stopBulkRequested.current) {
+                setBulkScanProgress(p => ({ ...p, isStopping: true }));
+                updateOperation(opId, { status: 'failed', description: 'Scan stopped by user', progress: 'Stopped' });
+                break;
+            }
+
+            const path = job.side === 'source' ? job.pair.source : job.pair.dest;
+            const serverName = servers.find(s => s.id === job.serverId)?.name || (job.serverId === 'local' ? 'Local' : job.serverId);
+
+            setBulkScanProgress(p => ({ 
+                ...p, 
+                currentPath: path,
+                currentSide: job.side 
+            }));
+
+            // Update Global Monitor
+            updateOperation(opId, { 
+                description: `Scanning ${index + 1}/${jobs.length} on ${serverName}`,
+                progress: `${Math.round(((index) / jobs.length) * 100)}% - ${path.substring(0, 30)}...`
+            });
+            
+            try {
+                await runScanSilent(job.pair, job.side, job.serverId);
+                setBulkScanProgress(p => ({ ...p, completed: p.completed + 1 }));
+            } catch (e) {
+                console.error(`Bulk scan failed for ${job.pair.id} ${job.side}:`, e);
+                setBulkScanProgress(p => ({ ...p, failed: p.failed + 1 }));
+            }
+        }
+        
+        setBulkScanProgress(p => ({ ...p, inProgress: false }));
+        
+        if (!stopBulkRequested.current) {
+             updateOperation(opId, { 
+                status: 'completed', 
+                description: `Scanned ${jobs.length} items`, 
+                progress: '100% Complete'
+            });
+        }
+        
+        // Refresh final counts
+        await refreshSynclist();
     };
 
     const handleScanAll = async () => {
@@ -201,33 +329,33 @@ const DashboardPage: React.FC = () => {
 
         if (!confirm(`This will scan ${jobs.length} paths sequentially. Continue?`)) return;
 
-        stopBulkRequested.current = false;
-        setBulkScanProgress({ total: jobs.length, completed: 0, failed: 0, currentPath: '', currentSide: '', inProgress: true, isStopping: false });
+        await executeBulkScan(jobs);
+    };
 
-        for (const job of jobs) {
-            if (stopBulkRequested.current) {
-                setBulkScanProgress(p => ({ ...p, isStopping: true }));
-                break;
+    const executeCategoryScan = async (items: SyncPair[], mode: 'source' | 'dest' | 'both', overrideServerId?: string) => {
+        const jobs: { pair: SyncPair, side: "source" | "dest", serverId: string }[] = [];
+        
+        for (const pair of items) {
+            if (mode === 'source' || mode === 'both') {
+                const sid = overrideServerId || pair.scan_source_server_id;
+                if (sid) jobs.push({ pair, side: "source", serverId: sid });
             }
-
-            setBulkScanProgress(p => ({ 
-                ...p, 
-                currentPath: job.side === 'source' ? job.pair.source : job.pair.dest,
-                currentSide: job.side 
-            }));
-            
-            try {
-                await runScanSilent(job.pair, job.side, job.serverId);
-                setBulkScanProgress(p => ({ ...p, completed: p.completed + 1 }));
-            } catch (e) {
-                console.error(`Bulk scan failed for ${job.pair.id} ${job.side}:`, e);
-                setBulkScanProgress(p => ({ ...p, failed: p.failed + 1 }));
+            if (mode === 'dest' || mode === 'both') {
+                const sid = overrideServerId || pair.scan_dest_server_id;
+                if (sid) jobs.push({ pair, side: "dest", serverId: sid });
             }
         }
-        
-        setBulkScanProgress(p => ({ ...p, inProgress: false }));
-        // Refresh final counts
-        await refreshSynclist();
+
+        if (jobs.length === 0) {
+            alert("No valid scan servers configured for items in this category.");
+            return;
+        }
+
+        await executeBulkScan(jobs);
+    };
+
+    const handleInitiateCategoryScan = (items: SyncPair[], category: string, side?: 'source' | 'dest') => {
+        setCategoryScanInfo({ category, items, side });
     };
 
     const handleApplyBulkDefaults = async () => {
@@ -305,97 +433,106 @@ const DashboardPage: React.FC = () => {
             key: 'source',
             header: 'Source',
             render: (_, item) => (
-                <div className="flex flex-col gap-1 max-w-[200px]">
-                    <span className="font-mono text-xs text-blue-400 truncate" title={item.source}>{item.source}</span>
+                <div className="flex flex-col gap-1 max-w-[400px]">
                     <div className="flex items-center gap-2">
-                            <button
-                                onClick={(e) => handleInitiateScan(item, "source")}
-                                disabled={!item.id || scanning[`${item.id}-source`]}
-                                className="p-1.5 text-zinc-400 hover:text-white transition rounded bg-white/5 hover:bg-white/10"
-                                title={item.scan_source_server_id ? `Scan on ${item.scan_source_server_id}` : "Click to Configure Scan"}
-                            >
-                                <RefreshCw size={12} className={scanning[`${item.id}-source`] ? "animate-spin text-cyan-500" : ""} />
-                            </button>
-                            <span className="text-[10px] text-zinc-600 bg-black/30 px-1.5 py-0.5 rounded border border-white/5 uppercase min-w-[30px] text-center">
-                                {item.scan_source_server_id === 'local' ? 'LOC' : item.scan_source_server_id ? 'SSH' : '?'}
-                            </span>
+                        <span className="font-mono text-sm text-blue-400 line-clamp-2 break-all flex-1 leading-tight" title={item.source}>{item.source}</span>
+                        <button
+                            onClick={(e) => handleInitiateScan(item, "source")}
+                            disabled={!item.id || scanning[`${item.id}-source`]}
+                            className="p-1 text-zinc-400 hover:text-white transition rounded bg-white/5 hover:bg-white/10 shrink-0"
+                            title={item.scan_source_server_id ? `Scan on ${getServerName(item.scan_source_server_id)}` : "Click to Configure Scan"}
+                        >
+                            <RefreshCw size={12} className={scanning[`${item.id}-source`] ? "animate-spin text-cyan-500" : ""} />
+                        </button>
+                    </div>
+                    <div className="flex items-center gap-1.5">
+                         <span className={`text-[9px] px-1.5 py-0.5 rounded-sm font-bold uppercase tracking-wider border ${
+                             getServerType(item.scan_source_server_id) === 'local' 
+                                ? 'bg-blue-500/10 text-blue-400 border-blue-500/20' 
+                                : item.scan_source_server_id ? 'bg-purple-500/10 text-purple-400 border-purple-500/20' : 'bg-zinc-800 text-zinc-500 border-zinc-700'
+                         }`}>
+                             {getServerName(item.scan_source_server_id)}
+                         </span>
+                         {item.source_type && item.source_type !== 'LOCAL' && (
+                             <span className="text-[9px] text-zinc-500 font-mono italic">
+                                 Storage: {item.source_server_id || 'N/A'}
+                             </span>
+                         )}
                     </div>
                 </div>
-            )
+            ),
+            sortable: true
         },
         {
             key: 'source_size_bytes',
-            header: 'Size',
-            render: (val) => <span className="font-mono text-zinc-300">{formatBytes(val)}</span>,
+            header: 'Size (TB)',
+            render: (val) => <div className="text-right font-mono text-zinc-300">{formatTB(val)}</div>,
             sortable: true
         },
         {
             key: 'source_file_count',
             header: 'Files',
-            render: (val) => <span className="font-mono text-zinc-300">{formatCount(val)}</span>,
+            render: (val) => <div className="text-right font-mono text-zinc-300">{formatCount(val)}</div>,
             sortable: true
         },
         {
             key: 'dest',
             header: 'Destination',
             render: (_, item) => (
-                <div className="flex flex-col gap-1 max-w-[200px]">
-                    <span className="font-mono text-xs text-emerald-400 truncate" title={item.dest}>{item.dest}</span>
+                <div className="flex flex-col gap-1 max-w-[400px]">
                     <div className="flex items-center gap-2">
-                            <button
-                                onClick={(e) => handleInitiateScan(item, "dest")}
-                                disabled={!item.id || scanning[`${item.id}-dest`]}
-                                className="p-1.5 text-zinc-400 hover:text-white transition rounded bg-white/5 hover:bg-white/10"
-                                title={item.scan_dest_server_id ? `Scan on ${item.scan_dest_server_id}` : "Click to Configure Scan"}
-                            >
-                                <RefreshCw size={12} className={scanning[`${item.id}-dest`] ? "animate-spin text-cyan-500" : ""} />
-                            </button>
-                            <span className="text-[10px] text-zinc-600 bg-black/30 px-1.5 py-0.5 rounded border border-white/5 uppercase min-w-[30px] text-center">
-                                {item.scan_dest_server_id === 'local' ? 'LOC' : item.scan_dest_server_id ? 'SSH' : '?'}
-                            </span>
+                        <span className="font-mono text-sm text-emerald-400 line-clamp-2 break-all flex-1 leading-tight" title={item.dest}>{item.dest}</span>
+                        <button
+                            onClick={(e) => handleInitiateScan(item, "dest")}
+                            disabled={!item.id || scanning[`${item.id}-dest`]}
+                            className="p-1 text-zinc-400 hover:text-white transition rounded bg-white/5 hover:bg-white/10 shrink-0"
+                            title={item.scan_dest_server_id ? `Scan on ${getServerName(item.scan_dest_server_id)}` : "Click to Configure Scan"}
+                        >
+                            <RefreshCw size={12} className={scanning[`${item.id}-dest`] ? "animate-spin text-cyan-500" : ""} />
+                        </button>
+                    </div>
+                    <div className="flex items-center gap-1.5">
+                         <span className={`text-[9px] px-1.5 py-0.5 rounded-sm font-bold uppercase tracking-wider border ${
+                             getServerType(item.scan_dest_server_id) === 'local' 
+                                ? 'bg-blue-500/10 text-blue-400 border-blue-500/20' 
+                                : item.scan_dest_server_id ? 'bg-purple-500/10 text-purple-400 border-purple-500/20' : 'bg-zinc-800 text-zinc-500 border-zinc-700'
+                         }`}>
+                             {getServerName(item.scan_dest_server_id)}
+                         </span>
+                         {item.dest_type && item.dest_type !== 'LOCAL' && (
+                             <span className="text-[9px] text-zinc-500 font-mono italic">
+                                 Storage: {item.dest_server_id || 'N/A'}
+                             </span>
+                         )}
                     </div>
                 </div>
-            )
+            ),
+            sortable: true
         },
         {
             key: 'dest_size_bytes',
-            header: 'Size',
-            render: (val) => <span className="font-mono text-zinc-300">{formatBytes(val)}</span>,
+            header: 'Size (TB)',
+            render: (val) => <div className="text-right font-mono text-zinc-300">{formatTB(val)}</div>,
             sortable: true
         },
         {
             key: 'dest_file_count',
             header: 'Files',
-            render: (val) => <span className="font-mono text-zinc-300">{formatCount(val)}</span>,
+            render: (val) => <div className="text-right font-mono text-zinc-300">{formatCount(val)}</div>,
             sortable: true
         },
         {
             key: 'source_scanned_at',
             header: 'Scanned',
             render: (val, item) => (
-                <div className="flex flex-col text-[10px] text-zinc-500 font-mono">
+                <div className="flex flex-col text-[10px] text-zinc-500 font-mono whitespace-nowrap leading-tight">
                     <span title="Source Scanned At">{val ? formatDate(val) : '-'}</span>
                     <span title="Dest Scanned At">{item.dest_scanned_at ? formatDate(item.dest_scanned_at) : '-'}</span>
                 </div>
             ),
             sortable: true
         },
-        {
-            key: 'id',
-            header: 'Actions',
-            render: (_, item) => (
-                <button
-                    onClick={() => {
-                        handleInitiateScan(item, "source");
-                        handleInitiateScan(item, "dest");
-                    }}
-                    className="p-2 text-zinc-400 hover:text-white hover:bg-white/10 rounded transition"
-                    title="Scan Both"
-                >
-                    <Play size={14} />
-                </button>
-            )
-        }
+
     ];
 
     const table = useDataTable({
@@ -425,6 +562,24 @@ const DashboardPage: React.FC = () => {
                     <RefreshCw size={14} className={cache.sync_pairs.isLoading ? "animate-spin" : ""} />
                     Refresh Stats
                 </button>
+
+                <button
+                    onClick={scrollToActivityMonitor}
+                    className={`flex items-center gap-2 px-3 py-2 rounded-lg transition text-xs font-bold uppercase tracking-wider border ${
+                        activeOperations.length > 0
+                            ? "bg-zinc-800 text-cyan-400 border-cyan-500/30 hover:bg-zinc-700 shadow-[0_0_10px_rgba(6,182,212,0.2)]"
+                            : "bg-zinc-800 text-zinc-500 border-zinc-700 hover:text-zinc-300"
+                    }`}
+                >
+                    <Activity size={14} className={activeOperations.length > 0 ? "text-cyan-400 animate-pulse" : ""} />
+                    Activity
+                    {activeOperations.length > 0 && (
+                        <span className="bg-cyan-500/20 text-cyan-400 px-1.5 py-0.5 rounded-full">
+                            {activeOperations.length}
+                        </span>
+                    )}
+                </button>
+
                 <button
                     onClick={handleScanAll}
                     disabled={cache.sync_pairs.isLoading || bulkScanProgress.inProgress}
@@ -503,78 +658,115 @@ const DashboardPage: React.FC = () => {
                 </Card>
             )}
 
-            {/* Bulk Scan Configuration */}
-            <Card className="mb-6 bg-zinc-900/40 border-zinc-800">
-                <div className="flex flex-col md:flex-row items-center gap-6">
-                    <div className="flex flex-col gap-1.5 flex-1">
-                        <label className="text-[10px] uppercase font-bold text-zinc-500 tracking-wider">Bulk Source Scan Server</label>
-                        <select
-                            value={bulkSourceServer}
-                            onChange={(e) => setBulkSourceServer(e.target.value)}
-                            className="bg-black/40 border border-zinc-800 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:ring-1 focus:ring-blue-500/50"
-                        >
-                            <option value="">-- No Change --</option>
-                            <option value="local">Local Server</option>
-                            {servers.map(s => <option key={s.id} value={s.id}>{s.name} ({s.host})</option>)}
-                        </select>
-                    </div>
 
-                    <div className="flex flex-col gap-1.5 flex-1">
-                        <label className="text-[10px] uppercase font-bold text-emerald-500/70 tracking-wider">Bulk Dest Scan Server</label>
-                        <select
-                            value={bulkDestServer}
-                            onChange={(e) => setBulkDestServer(e.target.value)}
-                            className="bg-black/40 border border-zinc-800 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:ring-1 focus:ring-emerald-500/50"
-                        >
-                            <option value="">-- No Change --</option>
-                            <option value="local">Local Server</option>
-                            {servers.map(s => <option key={s.id} value={s.id}>{s.name} ({s.host})</option>)}
-                        </select>
-                    </div>
 
-                    <div className="flex items-end pt-5">
-                        <button
-                            onClick={handleApplyBulkDefaults}
-                            disabled={updatingBulk || (!bulkSourceServer && !bulkDestServer)}
-                            className="px-6 py-2 bg-blue-600/20 hover:bg-blue-600/30 text-blue-400 border border-blue-500/30 rounded-lg transition text-sm font-bold flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
-                        >
-                            {updatingBulk ? <RefreshCw size={14} className="animate-spin" /> : <Database size={14} />}
-                            Apply & Save Defaults
-                        </button>
-                    </div>
-                </div>
-                <p className="mt-4 text-[11px] text-zinc-500 italic">
-                    * Applying defaults will override individual scan server selections for all listed pairs and save them to the database.
-                </p>
-            </Card>
-
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
-                <Card className="bg-gradient-to-br from-blue-900/20 to-black/40 border-blue-500/20">
-                    <div className="flex items-center gap-4">
-                        <div className="p-3 rounded-xl bg-blue-500/10 text-blue-400 ring-1 ring-blue-500/20">
-                            <Database size={24} />
-                        </div>
-                        <div>
-                            <div className="text-zinc-500 text-xs font-bold uppercase tracking-wider">Source Total</div>
-                            <div className="text-2xl font-bold text-white font-mono">{formatBytes(totalSourceBytes)}</div>
-                            <div className="text-xs text-zinc-400 font-mono">{formatCount(totalSourceFiles)} files</div>
-                        </div>
-                    </div>
-                </Card>
-                <Card className="bg-gradient-to-br from-emerald-900/20 to-black/40 border-emerald-500/20">
-                    <div className="flex items-center gap-4">
-                        <div className="p-3 rounded-xl bg-emerald-500/10 text-emerald-400 ring-1 ring-emerald-500/20">
-                            <HardDrive size={24} />
-                        </div>
-                        <div>
-                            <div className="text-zinc-500 text-xs font-bold uppercase tracking-wider">Destination Total</div>
-                            <div className="text-2xl font-bold text-white font-mono">{formatBytes(totalDestBytes)}</div>
-                            <div className="text-xs text-zinc-400 font-mono">{formatCount(totalDestFiles)} files</div>
-                        </div>
-                    </div>
-                </Card>
+            {/* Hierarchy Dashboard */}
+            <div className="mb-8">
+                <HierarchyTable data={synclist} onScan={handleInitiateScan} onScanCategory={handleInitiateCategoryScan} scanning={scanning} />
             </div>
 
+            {/* Storage Distribution by Server */}
+            <div className="mb-8 overflow-x-auto">
+                 <div className="flex items-center gap-2 mb-4">
+                     <Server size={20} className="text-zinc-500" />
+                     <h2 className="text-xl font-bold text-white">Storage Distribution</h2>
+                 </div>
+                 <div className="flex gap-4 pb-2">
+                     {Object.entries(statsByServer).map(([id, stats]) => {
+                         const s = stats as { size: number, count: number, paths: number };
+                         return (
+                             <Card key={id} className="min-w-[200px] bg-zinc-900/40 border-zinc-800 p-4">
+                                 <div className="flex items-center justify-between mb-2">
+                                     <span className={`text-[10px] px-1.5 py-0.5 rounded font-bold uppercase tracking-wider ${id === 'local' ? 'bg-blue-500/20 text-blue-400' : 'bg-purple-500/20 text-purple-400'}`}>
+                                         {getServerName(id)}
+                                     </span>
+                                     <span className="text-zinc-600 text-[10px] font-mono">{s.paths} paths</span>
+                                 </div>
+                                 <div className="text-xl font-bold text-white font-mono mb-1">{formatTB(s.size)}</div>
+                                 <div className="flex items-center justify-between text-[11px] text-zinc-500 font-mono">
+                                     <span>{formatCount(s.count)} files</span>
+                                     <span>{totalSourceBytes > 0 ? ((s.size / totalSourceBytes) * 100).toFixed(1) : 0}%</span>
+                                 </div>
+                                 <div className="mt-2 w-full bg-zinc-800 h-1 rounded-full overflow-hidden">
+                                     <div 
+                                        className={`h-full ${id === 'local' ? 'bg-blue-500' : 'bg-purple-500'}`} 
+                                        style={{ width: `${totalSourceBytes > 0 ? (s.size / (totalSourceBytes + totalDestBytes) * 100 * 2) : 0}%` }}
+                                     ></div>
+                                 </div>
+                             </Card>
+                         );
+                     })}
+                 </div>
+            </div>
+
+            {/* Bulk Scan Configuration */}
+            {/* Bulk Scan Configuration */}
+            <Card className="mb-6 bg-zinc-900/40 border-zinc-800">
+                <button 
+                    onClick={() => setShowBulkConfig(!showBulkConfig)}
+                    className="w-full flex items-center justify-between group"
+                >
+                    <div className="flex items-center gap-2">
+                         <div className={`p-1 rounded ${showBulkConfig ? 'bg-cyan-500/10 text-cyan-400' : 'text-zinc-500 bg-zinc-800'}`}>
+                              <Database size={14} />
+                         </div>
+                         <h3 className="text-sm font-bold text-zinc-300 group-hover:text-white transition">Bulk Scan Defaults</h3>
+                    </div>
+                    {showBulkConfig ? <ChevronDown size={16} className="text-zinc-500" /> : <ChevronRight size={16} className="text-zinc-500" />}
+                </button>
+                
+                {showBulkConfig && (
+                    <div className="mt-6 animate-in slide-in-from-top-2 fade-in duration-200">
+                        <div className="flex flex-col md:flex-row items-center gap-6">
+                            <div className="flex flex-col gap-1.5 flex-1 w-full">
+                                <label className="text-[10px] uppercase font-bold text-zinc-500 tracking-wider">Bulk Source Scan Server</label>
+                                <select
+                                    value={bulkSourceServer}
+                                    onChange={(e) => setBulkSourceServer(e.target.value)}
+                                    className="w-full bg-black/40 border border-zinc-800 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:ring-1 focus:ring-blue-500/50"
+                                >
+                                    <option value="">-- No Change --</option>
+                                    <option value="local">Local Server</option>
+                                    {servers.map(s => <option key={s.id} value={s.id}>{s.name} ({s.host})</option>)}
+                                </select>
+                            </div>
+
+                            <div className="flex flex-col gap-1.5 flex-1 w-full">
+                                <label className="text-[10px] uppercase font-bold text-emerald-500/70 tracking-wider">Bulk Dest Scan Server</label>
+                                <select
+                                    value={bulkDestServer}
+                                    onChange={(e) => setBulkDestServer(e.target.value)}
+                                    className="w-full bg-black/40 border border-zinc-800 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:ring-1 focus:ring-emerald-500/50"
+                                >
+                                    <option value="">-- No Change --</option>
+                                    <option value="local">Local Server</option>
+                                    {servers.map(s => <option key={s.id} value={s.id}>{s.name} ({s.host})</option>)}
+                                </select>
+                            </div>
+
+                            <div className="flex items-end pt-5 w-full md:w-auto">
+                                <button
+                                    onClick={handleApplyBulkDefaults}
+                                    disabled={updatingBulk || (!bulkSourceServer && !bulkDestServer)}
+                                    className="w-full md:w-auto px-6 py-2 bg-blue-600/20 hover:bg-blue-600/30 text-blue-400 border border-blue-500/30 rounded-lg transition text-sm font-bold flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                                >
+                                    {updatingBulk ? <RefreshCw size={14} className="animate-spin" /> : <Database size={14} />}
+                                    Apply & Save Defaults
+                                </button>
+                            </div>
+                        </div>
+                        <p className="mt-4 text-[11px] text-zinc-500 italic">
+                            * Applying defaults will override individual scan server selections for all listed pairs and save them to the database.
+                        </p>
+                    </div>
+                )}
+            </Card>
+
+            {/* Legacy Detail View */}
+            <h2 className="text-xl font-bold text-white mb-4 flex items-center gap-2">
+                <LayoutDashboard size={20} className="text-zinc-500" />
+                Detail View
+            </h2>
             <div className="card p-0 overflow-hidden bg-zinc-900/50 border-zinc-800/50">
                 <DataTable
                     data={table.data}
@@ -591,109 +783,60 @@ const DashboardPage: React.FC = () => {
                     onInvertSelection={table.invertSelection}
                     emptyMessage="No sync pairs found. Go to Batch Generator to create some."
                     isLoading={cache.sync_pairs.isLoading}
+                    compact={true}
                 />
             </div>
 
-            {/* Scan Server Selection Modal */}
-            {showScanModal && scanModalPair && (
-                <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">
-                    <div className="bg-zinc-900 border border-zinc-700 rounded-xl shadow-2xl max-w-md w-full p-6 animate-in fade-in zoom-in duration-200">
-                        <h3 className="text-lg font-bold text-white mb-2">Select Scan Server</h3>
-                        <p className="text-zinc-400 text-sm mb-4">
-                            Select execution context for scanning:
-                            <div className="mt-2 text-xs font-mono bg-black/40 p-2 rounded text-zinc-300 break-all border border-zinc-800">
-                                {scanModalSide === 'source' ? scanModalPair.source : scanModalPair.dest}
-                            </div>
-                        </p>
-
-                        <div className="mb-4">
-                            <label className="block text-xs uppercase text-zinc-500 font-bold mb-1">Scan Timeout (Seconds)</label>
-                            <input
-                                type="number"
-                                value={scanTimeout}
-                                onChange={(e) => setScanTimeout(parseInt(e.target.value) || 1200)}
-                                className="w-full bg-black/40 border border-zinc-700 rounded p-2 text-white text-sm focus:border-blue-500 outline-none transition"
-                                min="10"
-                            />
-                            <p className="text-[10px] text-zinc-600 mt-1">Increase for large drives (Default: 1200s)</p>
+            {/* Scan Server Selection Modal (Single Item) */}
+            <ScanServerModal 
+                isOpen={showScanModal && !!scanModalPair}
+                onClose={() => setShowScanModal(false)}
+                onSelect={(serverId, timeout) => {
+                    if (scanModalPair && scanModalSide && scanModalSide !== 'both') {
+                        runScan(scanModalPair, scanModalSide, serverId, timeout);
+                    }
+                }}
+                title="Select Scan Server"
+                subtitle={
+                    <>
+                        Select execution context for scanning:
+                        <div className="mt-2 text-xs font-mono bg-black/40 p-2 rounded text-zinc-300 break-all border border-zinc-800">
+                            {scanModalSide === 'source' ? scanModalPair?.source : scanModalPair?.dest}
                         </div>
+                    </>
+                }
+                servers={servers}
+                currentServerId={
+                    scanModalSide === 'source' 
+                        ? scanModalPair?.scan_source_server_id 
+                        : scanModalPair?.scan_dest_server_id
+                }
+                showModeSelector={false}
+                initialMode={scanModalSide === 'both' ? 'source' : (scanModalSide || 'source')}
+            />
+            
+            {/* Unified Category Scan Selection Modal */}
+            <ScanServerModal 
+                isOpen={!!categoryScanInfo}
+                onClose={() => setCategoryScanInfo(null)}
+                onSelect={(serverId, timeout, mode) => {
+                    if (categoryScanInfo) {
+                        executeCategoryScan(categoryScanInfo.items, mode || 'both', serverId);
+                    }
+                }}
+                title="Category Batch Scan"
+                subtitle={ categoryScanInfo && (
+                    <>
+                        Configure bulk scan for <span className="text-white font-bold">{categoryScanInfo.category}</span>
+                        <br/><span className="text-xs text-zinc-500">Targeting {categoryScanInfo.items.length} folders</span>
+                    </>
+                )}
+                servers={servers}
+                showModeSelector={!categoryScanInfo?.side}
+                initialMode={categoryScanInfo?.side || 'both'}
+            />
 
-                        <div className="space-y-2 mb-6 max-h-[300px] overflow-y-auto pr-1">
-                            <button
-                                onClick={() => runScan(scanModalPair, scanModalSide!, 'local', scanTimeout)}
-                                className={`w-full flex items-center justify-between p-3 rounded-lg transition border group ${
-                                    (scanModalSide === 'source' ? scanModalPair.scan_source_server_id : scanModalPair.scan_dest_server_id) === 'local'
-                                        ? 'bg-blue-600/20 border-blue-500/50 hover:bg-blue-600/30'
-                                        : 'bg-zinc-800 border-zinc-800 hover:bg-zinc-700 hover:border-zinc-600'
-                                }`}
-                            >
-                                <div className="flex items-center gap-3">
-                                    <div className={`p-2 rounded-lg transition ${
-                                        (scanModalSide === 'source' ? scanModalPair.scan_source_server_id : scanModalPair.scan_dest_server_id) === 'local'
-                                            ? 'bg-blue-500/20 text-blue-400'
-                                            : 'bg-blue-500/10 text-blue-400 group-hover:bg-blue-500/20'
-                                    }`}>
-                                        <Database size={16} />
-                                    </div>
-                                    <div className="text-left">
-                                        <div className="text-white font-medium text-sm flex items-center gap-2">
-                                            Local Server
-                                            {(scanModalSide === 'source' ? scanModalPair.scan_source_server_id : scanModalPair.scan_dest_server_id) === 'local' && (
-                                                <span className="text-[10px] bg-blue-500 text-white px-1.5 py-0.5 rounded font-bold uppercase">Current</span>
-                                            )}
-                                        </div>
-                                        <div className="text-xs text-zinc-500">Run locally</div>
-                                    </div>
-                                </div>
-                            </button>
-
-                            {Array.isArray(servers) ? servers.map(srv => {
-                                const isCurrent = (scanModalSide === 'source' ? scanModalPair.scan_source_server_id : scanModalPair.scan_dest_server_id) === srv.id;
-                                return (
-                                    <button
-                                        key={srv.id}
-                                        onClick={() => runScan(scanModalPair, scanModalSide!, srv.id, scanTimeout)}
-                                        className={`w-full flex items-center justify-between p-3 rounded-lg transition border group ${
-                                            isCurrent
-                                                ? 'bg-purple-600/20 border-purple-500/50 hover:bg-purple-600/30'
-                                                : 'bg-zinc-800 border-zinc-800 hover:bg-zinc-700 hover:border-zinc-600'
-                                        }`}
-                                    >
-                                        <div className="flex items-center gap-3">
-                                            <div className={`p-2 rounded-lg transition ${
-                                                isCurrent
-                                                    ? 'bg-purple-500/20 text-purple-400'
-                                                    : 'bg-purple-500/10 text-purple-400 group-hover:bg-purple-500/20'
-                                            }`}>
-                                                <Server size={16} />
-                                            </div>
-                                            <div className="text-left">
-                                                <div className="text-white font-medium text-sm flex items-center gap-2">
-                                                    {srv.name}
-                                                    {isCurrent && (
-                                                        <span className="text-[10px] bg-purple-500 text-white px-1.5 py-0.5 rounded font-bold uppercase">Current</span>
-                                                    )}
-                                                </div>
-                                                <div className="text-xs text-zinc-500">{srv.host}</div>
-                                            </div>
-                                        </div>
-                                    </button>
-                                );
-                            }) : null}
-                        </div>
-
-                        <div className="flex justify-end">
-                            <button
-                                onClick={() => setShowScanModal(false)}
-                                className="px-4 py-2 text-zinc-400 hover:text-white transition text-sm"
-                            >
-                                Cancel
-                            </button>
-                        </div>
-                    </div>
-                </div>
-            )}
-
+            
             {/* Scan Report Modal (Success/Failure) */}
             {reportModal.show && (
                 <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-sm">

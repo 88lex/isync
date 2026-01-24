@@ -1,5 +1,5 @@
 import React from 'react';
-import { Plus, Zap, Shuffle, Edit2, Trash2, Shield, Globe } from 'lucide-react';
+import { Plus, Zap, Shuffle, Edit2, Trash2, Shield, Globe, FileCode } from 'lucide-react';
 import { SyncPairWithBatch, regenerateBatch } from '../../api';
 import { DataTable, ColumnConfig } from '../ui/DataTable';
 
@@ -20,6 +20,7 @@ export interface SyncPairListProps {
     onToggleColumnFilter: (column: string, value: string) => void;
     onClearColumnFilter: (column: string) => void;
     getUniqueValues: (column: string) => string[];
+    onGenerateSingle: (pair: SyncPairWithBatch) => Promise<void>;
 }
 
 export const SyncPairList: React.FC<SyncPairListProps> = ({
@@ -38,7 +39,8 @@ export const SyncPairList: React.FC<SyncPairListProps> = ({
     columnFilters,
     onToggleColumnFilter,
     onClearColumnFilter,
-    getUniqueValues
+    getUniqueValues,
+    onGenerateSingle
 }) => {
 
     const columns: ColumnConfig<SyncPairWithBatch>[] = [
@@ -106,6 +108,13 @@ export const SyncPairList: React.FC<SyncPairListProps> = ({
             header: '',
             render: (_, p) => (
                 <div className="flex items-center justify-end gap-1 opacity-0 group-hover:opacity-100 transition">
+                    <button
+                        onClick={(e) => { e.stopPropagation(); onGenerateSingle(p); }}
+                        className="text-emerald-500 hover:text-emerald-400 p-1"
+                        title={p.batch.exists ? "Generate New Batch File" : "Generate Batch File"}
+                    >
+                        <FileCode size={14} />
+                    </button>
                     {p.batch.needs_update && p.batch.filename && (
                         <button
                             onClick={async (e) => {

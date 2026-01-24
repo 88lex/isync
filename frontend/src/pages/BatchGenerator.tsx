@@ -1,5 +1,5 @@
-import { useState, useEffect } from 'react';
-import { Terminal, Copy, Play, Zap, Save, Users, Layers, X, Plus, Trash2, FileCode, ChevronDown, ChevronRight } from 'lucide-react';
+import { useState, useEffect, useRef } from 'react';
+import { Terminal, Copy, Play, Zap, Save, Users, Layers, X, Plus, Trash2, FileCode, ChevronDown, ChevronRight, FilePlus } from 'lucide-react';
 import {
     fetchConfig, fetchSyncList, generateBatch, startJob, saveBatch, listSavedBatches,
     getBatchFile, SyncPair, Config, BatchFile, getBatchUsers,
@@ -22,12 +22,16 @@ import { RandomBatchSettings } from '../components/batch/RandomBatchSettings';
 import { SyncPairList } from '../components/batch/SyncPairList';
 import { BatchList } from '../components/batch/BatchList';
 import { BatchWizard } from '../components/batch/BatchWizard';
+import { GenerateBatchModal, GenerateBatchParams } from '../components/batch/GenerateBatchModal';
 
 interface BatchGeneratorProps {
     activeSection?: string | null;
 }
 
 const BatchGenerator: React.FC<BatchGeneratorProps> = ({ activeSection }) => {
+    const isMounted = useRef(true);
+    useEffect(() => { return () => { isMounted.current = false; }; }, []);
+
     // Scroll to section when activeSection changes
     useEffect(() => {
         if (activeSection) {
@@ -39,7 +43,7 @@ const BatchGenerator: React.FC<BatchGeneratorProps> = ({ activeSection }) => {
     }, [activeSection]);
 
     // Data Context
-    const { setCached, setLoading: setCacheLoading } = useIsyncData();
+    const { setCached, setLoading: setCacheLoading, addOperation, updateOperation } = useIsyncData();
     const pairCache = useCacheStatus('sync_pairs');
     const fileCache = useCacheStatus('batch_files');
     const groupCache = useCacheStatus('batch_groups');
@@ -110,7 +114,7 @@ const BatchGenerator: React.FC<BatchGeneratorProps> = ({ activeSection }) => {
     // Random Settings
     const [randomUserCount, setRandomUserCount] = useState(() => {
         const saved = localStorage.getItem('isync_bg_random_count');
-        return saved ? parseInt(saved) : 10;
+        return saved ? parseInt(saved) : 0;
     });
     const [selectedDomains, setSelectedDomains] = useState<Set<string>>(() => {
         try {
@@ -143,7 +147,12 @@ const BatchGenerator: React.FC<BatchGeneratorProps> = ({ activeSection }) => {
     const [pushing, setPushing] = useState(false);
     const [pushResults, setPushResults] = useState<any[]>([]);
     const [showPushResults, setShowPushResults] = useState(false);
+
     const [pushStatus, setPushStatus] = useState<string>('');
+
+    // Generate Modal State
+    const [showGenerateModal, setShowGenerateModal] = useState(false);
+    const [generateTargetPairs, setGenerateTargetPairs] = useState<SyncPairWithBatch[]>([]);
 
     // Persistence
     useEffect(() => { localStorage.setItem('isync_bg_random_count', String(randomUserCount)); }, [randomUserCount]);
@@ -283,43 +292,74 @@ const BatchGenerator: React.FC<BatchGeneratorProps> = ({ activeSection }) => {
 
     const handleGenerate = async () => {
         if (selectedPairIndices.size === 0) return alert("Select at least one sync pair.");
+        
+        const selected = unifiedPairs.filter(p => selectedPairIndices.has(p.index));
+        setGenerateTargetPairs(selected);
+        setShowGenerateModal(true);
+    };
+
+    const handleModalGenerate = async (params: GenerateBatchParams) => {
         setBatchLoading(true);
-
         try {
-            if (selectedPairIndices.size === 1) {
-                const idx = Array.from(selectedPairIndices)[0] as number;
-                const pair = unifiedPairs.find(p => p.index === idx);
+            // Prepare Request
+            // Use generateRandomBatch to respect user limits and domains
+            const req = {
+                pairs: generateTargetPairs.map(p => ({
+                    id: p.id, index: p.index, source: p.source, dest: p.dest, domain_reference: p.domain_reference
+                })),
+                user_count: params.userCount,
+                domains: params.selectedDomains,
+                dry_run: params.dryRun,
+                random_order: params.randomOrder
+            };
 
-                if (pair && !pair.batch.exists) {
-                    const safeSource = pair.source.split('/').filter(Boolean).pop() || 'source';
-                    const safeDest = pair.dest.split(':').pop()?.split('/').filter(Boolean).pop() || 'dest';
-                    const defaultName = `batch_${safeSource}_to_${safeDest}.sh`;
+            const res = await generateRandomBatch(req);
 
-                    const name = prompt("Enter filename for new batch:", defaultName);
-                    if (!name) { setBatchLoading(false); return; }
-
-                    const res = await generateBatch({
-                        pairs: [{ id: pair.id, index: pair.index, source: pair.source, dest: pair.dest, domain_reference: pair.domain_reference }],
-                        dry_run: false,
-                        selected_users: selectedUsers.size > 0 ? Array.from(selectedUsers) : undefined,
-                        random_order: randomOrder
-                    });
-
-                    await saveBatch({ filename: name, commands: res.commands, include_header: true });
-                    await loadData();
-                    setBatchLoading(false);
-                    return;
+            if (params.dryRun) {
+                setBatchResults(res.commands);
+                setRandomBatchResult(res);
+                setShowGenerateModal(false);
+                alert("Dry run complete. Results shown in dashboard.");
+            } else {
+                let savedCount = 0;
+                // Save each pair as a batch file
+                for (const pair of generateTargetPairs) {
+                    const label = `${pair.source} -> ${pair.dest}`;
+                    const cmd = res.commands[label];
+                    
+                    if (cmd) {
+                        let fname;
+                        if (generateTargetPairs.length === 1 && params.filename) {
+                            fname = params.filename;
+                        } else {
+                            // Auto name
+                            const safeSource = pair.source.split('/').filter(Boolean).pop() || 'source';
+                            const safeDest = pair.dest.split(':').pop()?.split('/').filter(Boolean).pop() || 'dest';
+                            fname = `batch_${safeSource}_to_${safeDest}.sh`;
+                        }
+                        
+                        // We wrap the command in a simpler dict for saving single file
+                        // The backend expects "commands": {"header": "content"} roughly, or we just pass the content?
+                        // saveBatch endpoint iterates commands dict and writes values.
+                        // If we pass {[label]: cmd}, it writes "# label\n\ncmd".
+                        // This matches expected format.
+                        await saveBatch({ filename: fname, commands: { [label]: cmd }, include_header: true, random_order: params.randomOrder });
+                        savedCount++;
+                    }
                 }
+                alert(`Successfully generated ${savedCount} batch files with ${res.user_count} users.`);
+                setShowGenerateModal(false);
+                await loadData(true);
             }
 
-            const usersArray = selectedUsers.size > 0 ? Array.from(selectedUsers) : undefined;
-            const result = await bulkGenerateBatches(Array.from(selectedPairIndices) as number[], randomOrder, false, usersArray);
-
-            if (result.failed > 0) alert(`Generated ${result.generated} batches. ${result.failed} failed.`);
-            else alert(`Successfully generated and saved ${result.generated} batch file(s).`);
-            await loadData();
         } catch (e: any) { alert(`Generate failed: ${e.response?.data?.detail || e.message}`); }
         finally { setBatchLoading(false); }
+    };
+    
+    // Single Generate Handler for Row Actions
+    const handleGenerateSingle = async (pair: SyncPairWithBatch) => {
+         setGenerateTargetPairs([pair]);
+         setShowGenerateModal(true);
     };
 
     const runBatch = async (dryRun: boolean) => {
@@ -346,7 +386,7 @@ const BatchGenerator: React.FC<BatchGeneratorProps> = ({ activeSection }) => {
         setSaving(true);
         try {
             const filename = saveFilename.trim() || `batch_${new Date().toISOString().slice(0, 10)}`;
-            await saveBatch({ filename, commands: batchResults, include_header: true });
+            await saveBatch({ filename, commands: batchResults, include_header: true, random_order: randomOrder });
             setShowSaveDialog(false); setSaveFilename('');
             await loadSavedBatches(); await loadUnifiedPairs();
         } catch (e: any) { alert(`Failed to save: ${e.message}`); }
@@ -422,14 +462,27 @@ const BatchGenerator: React.FC<BatchGeneratorProps> = ({ activeSection }) => {
         setPushResults([]);
         setShowPushResults(true);
 
+        const opId = `push-${Date.now()}`;
+        addOperation({
+            id: opId,
+            type: 'push',
+            label: pushTargetType === 'batch' ? 'Pushing Batches' : 'Pushing Group',
+            status: 'running',
+            description: `Preparing to push to ${selectedPushServers.size} servers...`
+        });
+
         const results: any[] = [];
 
         try {
-            for (const serverId of Array.from(selectedPushServers)) {
+            const pushPromises = Array.from(selectedPushServers).map(async (serverId) => {
                 const serverName = sshServers.find(s => s.id === serverId)?.name || serverId;
-
+                
+                const serverResults = [];
                 for (const targetId of pushTargetIds) {
-                    setPushStatus(`Pushing ${targetId} to ${serverName}...`);
+                    const statusMsg = `Pushing ${targetId} to ${serverName}...`;
+                    if (isMounted.current) setPushStatus(statusMsg);
+                    updateOperation(opId, { progress: statusMsg });
+                    
                     try {
                         let res;
                         if (pushTargetType === 'batch') {
@@ -437,19 +490,37 @@ const BatchGenerator: React.FC<BatchGeneratorProps> = ({ activeSection }) => {
                         } else {
                             res = await pushBatchGroup(targetId, serverId);
                         }
-                        results.push({ target: targetId, server: serverName, status: 'success', message: 'Pushed successfully' });
+                        serverResults.push({ target: targetId, server: serverName, status: 'success', message: 'Pushed successfully' });
                     } catch (e: any) {
-                        results.push({ target: targetId, server: serverName, status: 'error', message: e.message });
+                        serverResults.push({ target: targetId, server: serverName, status: 'error', message: e.message });
                     }
                 }
+                return serverResults;
+            });
+
+            const allServerResults = await Promise.all(pushPromises);
+            results.push(...allServerResults.flat());
+
+            if (isMounted.current) {
+                setPushResults(results);
+                setPushStatus('Completed');
             }
-            setPushResults(results);
-            setPushStatus('Completed');
-            // Don't close modal immediately so user can see results
+            // Mark operation as completed
+            updateOperation(opId, { 
+                status: 'completed', 
+                description: `Pushed to ${selectedPushServers.size} servers`,
+                progress: 'Success'
+            });
+
         } catch (e: any) {
-            alert(`Push failed: ${e.message}`);
+            if (isMounted.current) alert(`Push failed: ${e.message}`);
+            // Mark operation as failed
+            updateOperation(opId, { 
+                status: 'failed', 
+                description: e.message
+            });
         } finally {
-            setPushing(false);
+            if (isMounted.current) setPushing(false);
         }
     };
 
@@ -496,10 +567,29 @@ const BatchGenerator: React.FC<BatchGeneratorProps> = ({ activeSection }) => {
         try { await deleteGroupRemote(gid, sid); setGroupRemoteStatus(p => ({ ...p, [gid]: { ...p[gid], [sid]: false } })); } finally { setGroupOperationLoading(null); }
     };
 
+    const handleBatchListRegenerate = (file: BatchFile) => {
+        if (!file.sync_pair) {
+            return alert("Cannot regenerate: This batch file is not associated with a Sync Pair.");
+        }
+        
+        // Find current pair configuration
+        const pair = unifiedPairs.find(p => 
+            (p.id && file.sync_pair?.id && p.id === file.sync_pair.id) || 
+            (p.source === file.sync_pair?.source && p.dest === file.sync_pair?.dest)
+        );
+
+        if (!pair) {
+            return alert("Cannot regenerate: The Sync Pair for this batch file no longer exists in configuration.");
+        }
+
+        setGenerateTargetPairs([pair]);
+        setShowGenerateModal(true);
+    };
+
     return (
         <div className="page-container space-y-6 pb-32">
             <PageHeader
-                title="Batch Generator"
+                title="Sync Pairs"
                 subtitle="Generate and execute rclone commands"
                 gradient="from-amber-600 to-orange-600"
                 icon={Terminal}
@@ -558,7 +648,9 @@ const BatchGenerator: React.FC<BatchGeneratorProps> = ({ activeSection }) => {
                         columnFilters={pairFilters}
                         onToggleColumnFilter={togglePairFilter}
                         onClearColumnFilter={clearPairFilter}
+
                         getUniqueValues={getPairUniqueValues}
+                        onGenerateSingle={handleGenerateSingle}
                     />
 
                     {Object.keys(batchResults).length > 0 && (
@@ -592,21 +684,22 @@ const BatchGenerator: React.FC<BatchGeneratorProps> = ({ activeSection }) => {
                     )}
                 </Card>
 
-                <BatchList
-                    savedBatches={savedBatches}
-                    loadSavedBatches={loadSavedBatches}
-                    sshServers={sshServers}
-                    selectedUsers={selectedUsers}
-                    randomOrder={randomOrder}
-                    batchContentCache={batchContentCache}
-                    setBatchContentCache={setBatchContentCache}
-                    remoteStatusCache={remoteStatusCache}
-                    setRemoteStatusCache={setRemoteStatusCache}
-                    openBatchUsersModal={openBatchUsersModal}
-                    handleOpenPushModal={handleOpenPushModal}
-                    batchOperationLoading={batchOperationLoading}
-                    setBatchOperationLoading={setBatchOperationLoading}
-                />
+                    <BatchList
+                        savedBatches={savedBatches}
+                        loadSavedBatches={loadSavedBatches}
+                        sshServers={sshServers}
+                        selectedUsers={selectedUsers}
+                        randomOrder={randomOrder}
+                        batchContentCache={batchContentCache}
+                        setBatchContentCache={setBatchContentCache}
+                        remoteStatusCache={remoteStatusCache}
+                        setRemoteStatusCache={setRemoteStatusCache}
+                        openBatchUsersModal={openBatchUsersModal}
+                        handleOpenPushModal={handleOpenPushModal}
+                        batchOperationLoading={batchOperationLoading}
+                        setBatchOperationLoading={setBatchOperationLoading}
+                        onRegenerate={handleBatchListRegenerate}
+                    />
 
                 <Card id="batch-groups">
                     <div className="flex items-center justify-between mb-4">
@@ -744,12 +837,19 @@ const BatchGenerator: React.FC<BatchGeneratorProps> = ({ activeSection }) => {
                             </div>
                         )}
 
-                        <div className="flex justify-end gap-2 pt-2">
-                            <button onClick={() => setShowPushModal(false)} className="px-4 py-2 text-sm text-zinc-400 hover:text-white transition">Close</button>
-                            <button onClick={handlePush} disabled={pushing || selectedPushServers.size === 0} className="px-4 py-2 bg-cyan-600 hover:bg-cyan-500 text-white rounded text-sm font-bold transition disabled:opacity-50 flex items-center gap-2">
-                                {pushing && <div className="w-3 h-3 border-2 border-white/30 border-t-white rounded-full animate-spin"></div>}
-                                {pushing ? 'Pushing...' : `Push to ${selectedPushServers.size} Server(s)`}
-                            </button>
+                        <div className="flex justify-between items-center pt-2">
+                             <div className="text-[10px] text-zinc-500 italic">
+                                 {pushing && "Process will continue if you close this window."}
+                             </div>
+                             <div className="flex gap-2">
+                                <button onClick={() => setShowPushModal(false)} className="px-4 py-2 text-sm text-zinc-400 hover:text-white transition">
+                                    {pushing ? "Run in Background" : "Close"}
+                                </button>
+                                <button onClick={handlePush} disabled={pushing || selectedPushServers.size === 0} className="px-4 py-2 bg-cyan-600 hover:bg-cyan-500 text-white rounded text-sm font-bold transition disabled:opacity-50 flex items-center gap-2">
+                                    {pushing && <div className="w-3 h-3 border-2 border-white/30 border-t-white rounded-full animate-spin"></div>}
+                                    {pushing ? 'Pushing...' : `Push to ${selectedPushServers.size} Server(s)`}
+                                </button>
+                             </div>
                         </div>
                     </div>
                 </div>
@@ -790,6 +890,23 @@ const BatchGenerator: React.FC<BatchGeneratorProps> = ({ activeSection }) => {
                     </div>
                 </div>
             )}
+
+            <BatchWizard
+                isOpen={showWizard}
+                onClose={() => setShowWizard(false)}
+                editingPair={editingPair}
+                config={config}
+                sshServers={sshServers}
+                onSuccess={async () => await loadData(true)}
+            />
+
+            <GenerateBatchModal
+                isOpen={showGenerateModal}
+                onClose={() => setShowGenerateModal(false)}
+                onGenerate={handleModalGenerate}
+                config={config}
+                initialPairs={generateTargetPairs}
+            />
         </div>
     );
 };

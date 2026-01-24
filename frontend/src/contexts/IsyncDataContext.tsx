@@ -29,6 +29,16 @@ export type DataType =
     | 'workspace_summary'
     | 'storage_overview';
 
+export interface ActiveOperation {
+    id: string;
+    type: 'scan' | 'push' | 'sync' | 'other';
+    label: string;
+    status: 'running' | 'completed' | 'failed';
+    progress?: string;
+    description?: string;
+    timestamp: number;
+}
+
 export interface CacheState {
     users: Record<string, CacheEntry<any>>;            // Keyed by domain
     ssh_servers: CacheEntry<any>;                      // Singleton
@@ -52,6 +62,12 @@ interface IsyncDataContextType {
     invalidate: (dataType: DataType, contextKey?: string) => void;
     refreshAll: () => Promise<void>;
     loadPayload: (dataType: DataType, contextKey?: string) => Promise<void>;
+    
+    // Active Operations
+    activeOperations: ActiveOperation[];
+    addOperation: (op: Omit<ActiveOperation, 'timestamp'>) => void;
+    updateOperation: (id: string, updates: Partial<ActiveOperation>) => void;
+    removeOperation: (id: string) => void;
 }
 
 // --- Initial State ---
@@ -260,6 +276,26 @@ export const IsyncDataProvider: React.FC<{ children: ReactNode }> = ({ children 
         }
     }, []);
 
+    // Active Operations Logic
+    const [activeOperations, setActiveOperations] = useState<ActiveOperation[]>([]);
+
+    const addOperation = useCallback((op: Omit<ActiveOperation, 'timestamp'>) => {
+        setActiveOperations(prev => [
+            { ...op, timestamp: Date.now() },
+            ...prev
+        ]);
+    }, []);
+
+    const updateOperation = useCallback((id: string, updates: Partial<ActiveOperation>) => {
+        setActiveOperations(prev => prev.map(op => 
+            op.id === id ? { ...op, ...updates } : op
+        ));
+    }, []);
+
+    const removeOperation = useCallback((id: string) => {
+        setActiveOperations(prev => prev.filter(op => op.id !== id));
+    }, []);
+
     return (
         <IsyncDataContext.Provider value={{
             cache,
@@ -269,6 +305,10 @@ export const IsyncDataProvider: React.FC<{ children: ReactNode }> = ({ children 
             invalidate,
             refreshAll,
             loadPayload,
+            activeOperations,
+            addOperation,
+            updateOperation,
+            removeOperation
         }}>
             {children}
         </IsyncDataContext.Provider>

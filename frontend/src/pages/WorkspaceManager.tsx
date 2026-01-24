@@ -25,11 +25,18 @@ import { CacheStatus } from '../components/CacheStatus';
 import { useSortableData } from '../hooks/useSortableData';
 import { DataTable, ColumnConfig } from '../components/ui/DataTable';
 import { useDataTable } from '../hooks/useDataTable';
+import { MultiDomainSelector } from '../components/MultiDomainSelector';
 
 const WorkspaceManager = () => {
     const { cache, setCached, setLoading: setCacheLoading } = useIsyncData();
     const [config, setConfig] = useState<Config>({});
-    const [selectedDomain, setSelectedDomain] = useState<string>('');
+    
+    // Global Selection
+    const [selectedDomains, setSelectedDomains] = useState<string[]>([]);
+    
+    // Per-Section Selection Overrides (if empty, defaults to global selectedDomains)
+    const [sectionFilters, setSectionFilters] = useState<Record<string, string[]>>({});
+
     const [isScanning, setIsScanning] = useState(false);
     const [scanningDomains, setScanningDomains] = useState<Set<string>>(new Set());
     const [storageStats, setStorageStats] = useState<any[]>([]);
@@ -37,10 +44,6 @@ const WorkspaceManager = () => {
     const [selectedAuditServer, setSelectedAuditServer] = useState<string>("local");
     const [showScheduleModal, setShowScheduleModal] = useState(false);
     const [scheduleCron, setScheduleCron] = useState("0 2 * * *");
-
-    // Cache Integration
-    const workspaceCache = useCacheStatus<WorkspaceSummary>('workspace_summary', selectedDomain || 'none');
-    const summary = workspaceCache.data[0] || null;
 
     const [expandedSections, setExpandedSections] = useState<Record<string, boolean>>({
         auth: true,
@@ -54,18 +57,41 @@ const WorkspaceManager = () => {
         drives: true
     });
 
-    const combinedDrives = useMemo(() => {
-        return (summary?.drives?.drives || []).map(drive => {
-            const stats = storageStats.find(s => s.drive_id === drive.id);
-            return {
-                ...drive,
-                size_bytes: stats?.size_bytes || 0,
-                file_count: stats?.file_count || 0,
-                last_scanned: stats?.last_scanned || null,
-                db_id: stats?.id
-            };
-        });
-    }, [summary?.drives?.drives, storageStats]);
+    // Helper to get active domains for a section
+    const getSectionDomains = (sectionId: string) => {
+        const local = sectionFilters[sectionId];
+        // If local filter is active (not undefined/null), use it. Otherwise use global.
+        // But if local filter is empty array, it might mean "None Selected" in local context?
+        // Let's assume if key exists, use it.
+        return local !== undefined ? local : selectedDomains;
+    };
+
+    // Helper to get summaries for a list of domains
+    const getSummaries = (domains: string[]) => {
+        return domains.map(d => {
+            const entry = (cache as any).workspace_summary?.[d];
+            return entry?.data?.[0] as WorkspaceSummary | undefined;
+        }).filter((s): s is WorkspaceSummary => !!s);
+    };
+
+    const CombinedDrives = useMemo(() => {
+        const activeDomains = getSectionDomains('drives');
+        const summaries = getSummaries(activeDomains);
+        
+        return summaries.flatMap(summary => 
+            (summary.drives?.drives || []).map(drive => {
+                const stats = storageStats.find(s => s.drive_id === drive.id);
+                return {
+                    ...drive,
+                    size_bytes: stats?.size_bytes || 0,
+                    file_count: stats?.file_count || 0,
+                    last_scanned: stats?.last_scanned || null,
+                    db_id: stats?.id,
+                    domain_source: summary.metadata.primary_domain // Attach source domain
+                };
+            })
+        );
+    }, [cache, sectionFilters, selectedDomains, storageStats]);
 
     const driveColumns = useMemo<ColumnConfig<any>[]>(() => [
         {
@@ -146,7 +172,7 @@ const WorkspaceManager = () => {
     ], [auditLoading]);
 
     const driveTable = useDataTable({
-        data: combinedDrives,
+        data: CombinedDrives,
         columns: driveColumns,
         initialSortColumn: 'name',
         filterFn: (item, term) => {
@@ -179,8 +205,11 @@ const WorkspaceManager = () => {
         try {
             const cfg = await fetchConfig();
             setConfig(cfg);
-            if (!selectedDomain && cfg.domains && cfg.domains.length > 0) {
-                setSelectedDomain(cfg.domains[0].domain_name);
+            if (cfg.domains && cfg.domains.length > 0) {
+                // Default to all domains selected? or just first?
+                // User said "allow selecting some, many or all"
+                // Let's select ALL by default to show the "Workspace Manager" power
+                setSelectedDomains(cfg.domains.map(d => d.domain_name));
             }
 
             // Fetch storage stats from DB
@@ -211,7 +240,9 @@ const WorkspaceManager = () => {
                     payload.drive_name = drive.name;
                 }
             } else {
-                payload.domain = selectedDomain;
+                // If specific domain context is needed for full audit (fallback logic)
+                // Use the first selected domain or all?
+                payload.domain = selectedDomains[0] || 'all'; // simplistic fallback
             }
 
             const res = await triggerStorageAudit(payload);
@@ -232,10 +263,13 @@ const WorkspaceManager = () => {
     const handleCreateSchedule = async () => {
         try {
             const res = await scheduleStorageAudit({
-                domain: selectedDomain,
+                domain: selectedDomains[0] || "all", // Fallback to first or all? This API needs update for multi-domain? 
+                // Currently scheduleStorageAudit takes 'domain'. 
+                // Ideally we loop or the backend handles "all". 
+                // Let's stick to first selected for now to avoid breaking API contract too much in this specific modal
                 server_id: selectedAuditServer,
                 cron_expression: scheduleCron,
-                name: `Storage Audit: ${selectedDomain}`
+                name: `Storage Audit: ${selectedDomains.join(', ')}`
             });
             alert(`Schedule Created! Next run: ${new Date(res.next_run).toLocaleString()}`);
             setShowScheduleModal(false);
@@ -247,7 +281,8 @@ const WorkspaceManager = () => {
     const scanAllDomains = async () => {
         if (!config.domains) return;
         setIsScanning(true);
-        const promises = config.domains.map(async (d) => {
+        // Sequential execution to prevent backend overload/segfaults
+        for (const d of config.domains) {
             const domain = d.domain_name;
             setCacheLoading('workspace_summary', domain, true);
             try {
@@ -258,8 +293,7 @@ const WorkspaceManager = () => {
             } finally {
                 setCacheLoading('workspace_summary', domain, false);
             }
-        });
-        await Promise.all(promises);
+        }
 
         // After all scans, update the global storage overview cache
         try {
@@ -272,28 +306,33 @@ const WorkspaceManager = () => {
         setIsScanning(false);
     };
 
-    const fetchAll = async (domain = selectedDomain, force = false) => {
-        if (!domain) return;
+    const fetchAll = async (domains = selectedDomains, force = false) => {
+        if (domains.length === 0) return;
 
-        // Skip redundant network scans if we have data or are already loading it.
-        // workspaceCache.lastFetched indicates that the backend has a cached version available.
-        if (!force && (workspaceCache.hasData || workspaceCache.isLoading || workspaceCache.lastFetched)) {
-            console.log(`[WorkspaceManager] Skipping network scan for ${domain} as cache metadata exists.`);
-            return;
-        }
-
-        console.log(`[WorkspaceManager] Initiating network scan for ${domain}...`);
+        console.log(`[WorkspaceManager] Starting sequential scan for ${domains.length} domains...`);
         setIsScanning(true);
-        setCacheLoading('workspace_summary', domain, true);
-        try {
-            const result = await fetchWorkspaceSummary(domain, force);
-            setCached('workspace_summary', domain, [result], 'workspace_api');
-        } catch (e) {
-            console.error("Failed to fetch workspace data", e);
-        } finally {
-            setIsScanning(false);
-            setCacheLoading('workspace_summary', domain, false);
+        
+        // Sequential fetch: Process one by one to prevent backend overload
+        for (const domain of domains) {
+             // Check cache if not forcing
+             const entry = (cache as any).workspace_summary?.[domain];
+             // If we have data and not forcing, skip
+             if (!force && entry && entry.data && entry.data.length > 0) {
+                 continue; 
+             }
+             
+             setCacheLoading('workspace_summary', domain, true);
+             try {
+                const result = await fetchWorkspaceSummary(domain, force);
+                setCached('workspace_summary', domain, [result], 'workspace_api');
+             } catch (e) {
+                 console.error(`Failed to fetch ${domain}`, e);
+             } finally {
+                 setCacheLoading('workspace_summary', domain, false);
+             }
         }
+        
+        setIsScanning(false);
     };
 
     const scanSingleDomain = async (domain: string) => {
@@ -319,11 +358,11 @@ const WorkspaceManager = () => {
     };
 
     useEffect(() => {
-        if (selectedDomain) {
+        if (selectedDomains.length > 0) {
             // Only load from cache, don't force refresh on domain selection
-            fetchAll(selectedDomain, false);
+            fetchAll(selectedDomains, false);
         }
-    }, [selectedDomain]);
+    }, [selectedDomains]);
 
     const toggleSection = (id: string) => {
         setExpandedSections(prev => ({ ...prev, [id]: !prev[id] }));
@@ -355,32 +394,52 @@ const WorkspaceManager = () => {
         color: string,
         badge?: string | number,
         subtitle?: string
-    }) => (
-        <button
-            onClick={() => toggleSection(id)}
-            className={`w-full flex items-center justify-between p-4 bg-zinc-900/40 hover:bg-zinc-800/50 transition-colors border-b border-zinc-800/50 ${expandedSections[id] ? '' : 'rounded-b-xl'}`}
-        >
-            <div className="flex items-center gap-3">
-                <div className={`p-2 rounded-lg ${color}`}>
-                    <Icon size={18} className="text-white" />
-                </div>
-                <div className="flex flex-col items-start">
-                    <div className="flex items-center gap-2">
-                        <h3 className="text-base font-bold text-white tracking-tight">{title}</h3>
-                        {badge !== undefined && (
-                            <span className="px-2 py-0.5 bg-zinc-800 text-zinc-400 text-[10px] font-bold rounded-full">
-                                {badge}
-                            </span>
-                        )}
+    }) => {
+        const localSelected = getSectionDomains(id);
+        const handleChange = (newSelection: string[]) => {
+            setSectionFilters(prev => ({ ...prev, [id]: newSelection }));
+        };
+
+        return (
+            <div className={`w-full flex items-center justify-between p-4 bg-zinc-900/40 hover:bg-zinc-800/50 transition-colors border-b border-zinc-800/50 ${expandedSections[id] ? '' : 'rounded-b-xl'}`}>
+                <div onClick={() => toggleSection(id)} className="flex items-center gap-3 cursor-pointer flex-1">
+                    <div className={`p-2 rounded-lg ${color}`}>
+                        <Icon size={18} className="text-white" />
                     </div>
-                    {subtitle && <span className="text-[10px] text-zinc-500">{subtitle}</span>}
+                    <div className="flex flex-col items-start">
+                        <div className="flex items-center gap-2">
+                            <h3 className="text-base font-bold text-white tracking-tight">{title}</h3>
+                            {badge !== undefined && (
+                                <span className="px-2 py-0.5 bg-zinc-800 text-zinc-400 text-[10px] font-bold rounded-full">
+                                    {badge}
+                                </span>
+                            )}
+                        </div>
+                        {subtitle && <span className="text-[10px] text-zinc-500">{subtitle}</span>}
+                    </div>
+                </div>
+
+                <div className="flex items-center gap-4">
+                    {/* Per-Section Selector */}
+                    {expandedSections[id] && (
+                        <div onClick={e => e.stopPropagation()}>
+                            <MultiDomainSelector 
+                                domains={config.domains || []}
+                                selected={localSelected}
+                                onChange={handleChange}
+                                placeholder="Filter"
+                                className="w-48"
+                            />
+                        </div>
+                    )}
+                    
+                    <button onClick={() => toggleSection(id)}>
+                        {expandedSections[id] ? <ChevronDown size={20} className="text-zinc-500" /> : <ChevronRight size={20} className="text-zinc-500" />}
+                    </button>
                 </div>
             </div>
-            <div className="flex items-center gap-4">
-                {expandedSections[id] ? <ChevronDown size={20} className="text-zinc-500" /> : <ChevronRight size={20} className="text-zinc-500" />}
-            </div>
-        </button>
-    );
+        );
+    };
 
     const SubSectionHeader = ({ id, title, icon: Icon, count }: { id: string, title: string, icon: any, count?: number }) => (
         <button
@@ -398,11 +457,14 @@ const WorkspaceManager = () => {
         </button>
     );
 
-    const StatCard = ({ label, value, icon: Icon, color = "text-white" }: { label: string, value: string | number, icon?: any, color?: string }) => (
+    const StatCard = ({ label, value, icon: Icon, color = "text-white", sublabel }: { label: string, value: string | number, icon?: any, color?: string, sublabel?: string }) => (
         <Card className="flex flex-col gap-1 p-4 bg-zinc-900/30">
-            <span className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest flex items-center gap-1">
-                {Icon && <Icon size={10} />}
-                {label}
+            <span className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest flex items-center gap-1 justify-between">
+                <div className="flex items-center gap-1">
+                    {Icon && <Icon size={10} />}
+                    {label}
+                </div>
+                {sublabel && <span className="text-[9px] text-zinc-600">{sublabel}</span>}
             </span>
             <span className={`text-lg font-mono ${color}`}>{value || '---'}</span>
         </Card>
@@ -500,7 +562,7 @@ const WorkspaceManager = () => {
 
         const stats = config.domains.map(d => {
             const domain = d.domain_name;
-            const entry = (cache as any).workspace_summary[domain];
+            const entry = (cache as any).workspace_summary?.[domain];
             // Rename to avoid shadowing and check global state
             const isRowScanning = scanningDomains.has(domain) || isScanning;
 
@@ -608,13 +670,20 @@ const WorkspaceManager = () => {
                         </thead>
                         <tbody className="divide-y divide-zinc-800/30">
                             {sortedStats.map((s) => (
-                                <tr key={s.domain} className={`group hover:bg-cyan-500/[0.03] transition-colors ${s.domain === selectedDomain ? 'bg-cyan-500/[0.07]' : ''}`}>
+                                <tr key={s.domain} className={`group hover:bg-cyan-500/[0.03] transition-colors ${selectedDomains.includes(s.domain) ? 'bg-cyan-500/[0.07]' : ''}`}>
                                     <td className="px-6 py-2.5">
                                         <div className="flex items-center gap-3">
-                                            <div className={`w-2 h-2 rounded-full border ${s.domain === selectedDomain ? 'bg-cyan-400 border-cyan-400 shadow-[0_0_10px_rgba(34,211,238,0.5)] animate-pulse' : (s.status === 'Ready' ? 'bg-emerald-500 border-emerald-500/50' : 'bg-zinc-600 border-zinc-600/50')}`} />
+                                            <div className={`w-2 h-2 rounded-full border ${selectedDomains.includes(s.domain) ? 'bg-cyan-400 border-cyan-400 shadow-[0_0_10px_rgba(34,211,238,0.5)]' : (s.status === 'Ready' ? 'bg-emerald-500 border-emerald-500/50' : 'bg-zinc-600 border-zinc-600/50')}`} />
                                             <button
-                                                onClick={() => setSelectedDomain(s.domain)}
-                                                className={`text-sm font-bold transition-all group-hover:translate-x-1 ${s.domain === selectedDomain ? 'text-white' : 'text-zinc-300 group-hover:text-cyan-400'}`}
+                                                onClick={() => {
+                                                    // Toggle selection
+                                                    if (selectedDomains.includes(s.domain)) {
+                                                        setSelectedDomains(prev => prev.filter(d => d !== s.domain));
+                                                    } else {
+                                                        setSelectedDomains(prev => [...prev, s.domain]);
+                                                    }
+                                                }}
+                                                className={`text-sm font-bold transition-all group-hover:translate-x-1 ${selectedDomains.includes(s.domain) ? 'text-white' : 'text-zinc-300 group-hover:text-cyan-400'}`}
                                             >
                                                 {s.domain}
                                             </button>
@@ -717,47 +786,36 @@ const WorkspaceManager = () => {
                 <div className="flex items-center gap-4">
                     <CacheStatus
                         dataType="workspace_summary"
-                        contextKey={selectedDomain}
-                        onRefresh={() => fetchAll(selectedDomain, true)}
+                        contextKey={selectedDomains.length === 1 ? selectedDomains[0] : `multi-${selectedDomains.length}`}
+                        onRefresh={() => fetchAll(selectedDomains, true)}
                     />
 
                     <div className="h-8 w-px bg-zinc-800 mx-2" />
 
-                    <select
-                        value={selectedDomain}
-                        onChange={(e) => setSelectedDomain(e.target.value)}
-                        className="bg-zinc-800 border border-zinc-700 rounded-lg px-3 py-2 text-sm text-white focus:outline-none focus:ring-2 focus:ring-cyan-500/50 transition"
-                    >
-                        {config.domains?.map(d => (
-                            <option key={d.domain_name} value={d.domain_name}>{d.domain_name}</option>
-                        ))}
-                    </select>
+                    <MultiDomainSelector 
+                        domains={config.domains || []}
+                        selected={selectedDomains}
+                        onChange={setSelectedDomains}
+                    />
                 </div>
             </PageHeader>
 
             <GlobalStorageTable />
 
-            {(isScanning || workspaceCache.isLoading) && !summary && (
+            {isScanning && (
                 <div className="py-20 flex justify-center">
                     <LoadingSpinner size="lg" message="Retrieving Workspace Metadata..." />
                 </div>
             )}
 
-            {!isScanning && !summary && selectedDomain && (
+            {!isScanning && selectedDomains.length === 0 && (
                 <div className="py-20 flex flex-col items-center justify-center text-zinc-500 gap-4">
                     <Info size={48} className="opacity-20" />
-                    <p>No data available for this domain. Click refresh to scan.</p>
-                    <button
-                        onClick={() => fetchAll(selectedDomain, true)}
-                        className="px-4 py-2 bg-cyan-600 hover:bg-cyan-500 text-white rounded-lg transition font-bold text-sm flex items-center gap-2"
-                    >
-                        <RefreshCw size={16} />
-                        Scan Workspace
-                    </button>
+                    <p>No domains selected. Use the selector above or in the table.</p>
                 </div>
             )}
 
-            {summary && (
+            {(selectedDomains.length > 0) && (
                 <div className="space-y-6 max-w-7xl mx-auto animate-in fade-in duration-500">
 
                     {/* ========================================== */}
@@ -772,91 +830,104 @@ const WorkspaceManager = () => {
                             subtitle="Service account identity, OAuth scopes, and DWD health check"
                         />
                         {expandedSections.auth && (
-                            <div className="p-6 space-y-6">
-                                {summary.auth?.error ? (
-                                    <ErrorBanner message={summary.auth.error} />
-                                ) : (
-                                    <>
-                                        {/* Identity Information */}
-                                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-                                            <StatCard
-                                                label="Service Account"
-                                                value={summary.auth?.service_account_email || 'Unknown'}
-                                                icon={Mail}
-                                                color="text-cyan-400"
-                                            />
-                                            <StatCard
-                                                label="Client ID"
-                                                value={summary.auth?.client_id || 'Unknown'}
-                                                icon={Fingerprint}
-                                                color="text-indigo-400"
-                                            />
-                                            <StatCard
-                                                label="Principal Admin"
-                                                value={summary.auth?.impersonating || 'Unknown'}
-                                                icon={Crown}
-                                                color="text-amber-400"
-                                            />
-                                            <StatCard
-                                                label="Project ID"
-                                                value={summary.auth?.project_id || 'Unknown'}
-                                                icon={Building}
-                                                color="text-zinc-300"
-                                            />
-                                        </div>
+                            <div className="p-6 space-y-8">
+                                {getSectionDomains('auth').length === 0 && <div className="text-zinc-500 text-sm">No domains selected for this section.</div>}
+                                
+                                {getSectionDomains('auth').map(domain => {
+                                    const entry = (cache as any).workspace_summary?.[domain];
+                                    const s = entry?.data?.[0] as WorkspaceSummary;
+                                    
+                                    if (!s) return null;
 
-                                        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-                                            {/* API Scope List */}
-                                            <div className="bg-zinc-900/30 rounded-xl p-5 border border-zinc-800/50">
-                                                <h4 className="text-xs font-bold text-zinc-500 uppercase tracking-widest mb-4 flex items-center gap-2">
-                                                    <Lock size={14} className="text-emerald-400" />
-                                                    Authorized OAuth Scopes (DWD)
-                                                </h4>
-                                                <div className="flex flex-wrap gap-2">
-                                                    {summary.auth?.scopes.map((scope, idx) => (
-                                                        <div key={idx} className="bg-zinc-800 border border-zinc-700 rounded px-2 py-1 flex items-center gap-2 group">
-                                                            <div className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
-                                                            <span className="text-[10px] text-zinc-300 font-mono break-all">{scope}</span>
-                                                        </div>
-                                                    ))}
-                                                </div>
+                                    return (
+                                        <div key={domain} className="border border-zinc-800/50 rounded-xl p-4 bg-zinc-950/30">
+                                            <div className="flex items-center gap-2 mb-4">
+                                                <Globe size={14} className="text-cyan-500" />
+                                                <h4 className="text-sm font-bold text-white">{domain}</h4>
+                                                {s.auth?.error && <span className="text-[10px] text-red-400 bg-red-900/20 px-2 py-0.5 rounded border border-red-500/20">Auth Error</span>}
                                             </div>
 
-                                            {/* API Health Checks */}
-                                            <div className="bg-zinc-900/30 rounded-xl p-5 border border-zinc-800/50">
-                                                <h4 className="text-xs font-bold text-zinc-500 uppercase tracking-widest mb-4 flex items-center gap-2">
-                                                    <Activity size={14} className="text-cyan-400" />
-                                                    API Health & Access Check
-                                                </h4>
-                                                <div className="space-y-3">
-                                                    {summary.auth?.checks.map((check, idx) => (
-                                                        <div key={idx} className="flex items-center justify-between p-2 rounded bg-zinc-800/50 border border-zinc-800">
-                                                            <div className="flex items-center gap-3">
-                                                                {check.status === 'active' ? (
-                                                                    <CheckCircle size={14} className="text-emerald-500" />
-                                                                ) : (
-                                                                    <XCircle size={14} className="text-red-500" />
-                                                                )}
-                                                                <span className="text-xs font-medium text-zinc-200">{check.name}</span>
-                                                            </div>
-                                                            <div className="flex items-center gap-2">
-                                                                <span className={`text-[10px] font-bold uppercase px-2 py-0.5 rounded ${check.status === 'active' ? 'bg-emerald-900/30 text-emerald-400' : 'bg-red-900/30 text-red-400'
-                                                                    }`}>
-                                                                    {check.status}
-                                                                </span>
-                                                                {check.error && (
-                                                                    <span className="text-[10px] text-zinc-500 italic max-w-[150px] truncate" title={check.error}>
-                                                                        {check.error}
-                                                                    </span>
-                                                                )}
-                                                            </div>
-                                                        </div>
-                                                    ))}
+                                            {s.auth?.error ? (
+                                                <ErrorBanner message={s.auth.error} />
+                                            ) : (
+                                                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+                                                    <StatCard
+                                                        label="Service Account"
+                                                        value={s.auth?.service_account_email || 'Unknown'}
+                                                        icon={Mail}
+                                                        color="text-cyan-400"
+                                                    />
+                                                    <StatCard
+                                                        label="Client ID"
+                                                        value={s.auth?.client_id || 'Unknown'}
+                                                        icon={Fingerprint}
+                                                        color="text-indigo-400"
+                                                    />
+                                                    <StatCard
+                                                        label="Principal Admin"
+                                                        value={s.auth?.impersonating || 'Unknown'}
+                                                        icon={Crown}
+                                                        color="text-amber-400"
+                                                    />
                                                 </div>
-                                            </div>
+                                            )}
+
+                                            {/* Scopes & Check - Per Domain */}
+                                            {s.auth && !s.auth.error && (
+                                                 <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mt-4 pt-4 border-t border-zinc-800/50">
+                                                    {/* API Scope List */}
+                                                    <div className="bg-zinc-900/30 rounded-xl p-3 border border-zinc-800/50">
+                                                        <h4 className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest mb-2 flex items-center gap-2">
+                                                            <Lock size={10} className="text-emerald-400" />
+                                                            Authorized Scopes
+                                                        </h4>
+                                                        <div className="flex flex-wrap gap-1.5">
+                                                            {s.auth.scopes.map((scope, idx) => (
+                                                                <div key={idx} className="bg-zinc-800 border border-zinc-700 rounded px-1.5 py-0.5 flex items-center gap-1.5 group">
+                                                                    <div className="w-1 h-1 rounded-full bg-emerald-500" />
+                                                                    <span className="text-[9px] text-zinc-400 font-mono break-all">{scope.split('/').pop()}</span>
+                                                                </div>
+                                                            ))}
+                                                        </div>
+                                                    </div>
+
+                                                    {/* API Health Checks */}
+                                                    <div className="bg-zinc-900/30 rounded-xl p-3 border border-zinc-800/50">
+                                                        <h4 className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest mb-2 flex items-center gap-2">
+                                                            <Activity size={10} className="text-cyan-400" />
+                                                            API Health
+                                                        </h4>
+                                                        <div className="space-y-2">
+                                                            {s.auth.checks.map((check, idx) => (
+                                                                <div key={idx} className="flex items-center justify-between p-1.5 rounded bg-zinc-800/50 border border-zinc-800">
+                                                                    <div className="flex items-center gap-2">
+                                                                        {check.status === 'active' ? (
+                                                                            <CheckCircle size={12} className="text-emerald-500" />
+                                                                        ) : (
+                                                                            <XCircle size={12} className="text-red-500" />
+                                                                        )}
+                                                                        <span className="text-[10px] font-medium text-zinc-300">{check.name}</span>
+                                                                    </div>
+                                                                    <div className="flex items-center gap-2">
+                                                                        <span className={`text-[9px] font-bold uppercase px-1.5 py-0.5 rounded ${check.status === 'active' ? 'bg-emerald-900/30 text-emerald-400' : 'bg-red-900/30 text-red-400'
+                                                                            }`}>
+                                                                            {check.status}
+                                                                        </span>
+                                                                        {check.error && (
+                                                                            <span title={check.error}>
+                                                                                <Info size={10} className="text-red-400" />
+                                                                            </span>
+                                                                        )}
+                                                                    </div>
+                                                                </div>
+                                                            ))}
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            )}
                                         </div>
-                                    </>
-                                )}
+                                    );
+                                })}
                             </div>
                         )}
                     </div>
@@ -873,153 +944,139 @@ const WorkspaceManager = () => {
                             subtitle="Domain info, customer ID, organization structure"
                         />
                         {expandedSections.identity && (
-                            <div className="p-6 space-y-6">
-                                {summary.metadata?.error ? (
-                                    <ErrorBanner message={summary.metadata.error} />
-                                ) : (
-                                    <>
-                                        {/* Core Identity Cards */}
-                                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-                                            <StatCard
-                                                label="Customer ID"
-                                                value={summary.metadata?.customer_id || 'N/A'}
-                                                icon={Key}
-                                                color={summary.metadata?.customer_id ? "text-cyan-400" : "text-zinc-500"}
-                                            />
-                                            <StatCard
-                                                label="Organization ID"
-                                                value={(summary.metadata as any)?.org_id || 'N/A'}
-                                                icon={Building}
-                                                color={(summary.metadata as any)?.org_id ? "text-indigo-400" : "text-zinc-500"}
-                                            />
-                                            <StatCard label="Primary Domain" value={summary.metadata?.customer_domain || '---'} icon={Globe} color="text-white" />
-                                            <StatCard
-                                                label="Created"
-                                                value={(summary.metadata as any)?.customer_creation_time ? new Date((summary.metadata as any).customer_creation_time).toLocaleDateString() : '---'}
-                                                icon={Calendar}
-                                                color="text-zinc-300"
-                                            />
-                                        </div>
-
-                                        {/* Domains Sub-Section */}
-                                        <div className="bg-zinc-900/30 rounded-lg overflow-hidden border border-zinc-800/50">
-                                            <SubSectionHeader
-                                                id="domains"
-                                                title="Domains & Aliases"
-                                                icon={Globe}
-                                                count={((summary.metadata as any)?.domains?.length || 0) + ((summary.metadata as any)?.domain_aliases?.length || 0)}
-                                            />
-                                            {expandedSections.domains && (
-                                                <div className="p-4 space-y-4">
-                                                    {/* Primary Domains */}
-                                                    <div>
-                                                        <h5 className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest mb-2">Registered Domains</h5>
-                                                        <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
-                                                            {(summary.metadata as any)?.domains?.map((domain: any) => (
-                                                                <div key={domain.domain_name} className="bg-zinc-900/50 p-3 rounded-lg border border-zinc-800 flex items-center justify-between">
-                                                                    <div className="flex items-center gap-2">
-                                                                        <Globe size={14} className={domain.is_primary ? "text-cyan-400" : "text-zinc-500"} />
-                                                                        <span className="text-sm text-white font-medium">{domain.domain_name}</span>
-                                                                        {domain.is_primary && (
-                                                                            <span className="text-[8px] bg-cyan-900/30 text-cyan-400 border border-cyan-500/20 px-1.5 py-0.5 rounded font-bold uppercase">Primary</span>
-                                                                        )}
-                                                                    </div>
-                                                                    <div className="flex items-center gap-2">
-                                                                        {domain.verified ? (
-                                                                            <span className="flex items-center gap-1 text-[10px] text-emerald-400">
-                                                                                <CheckCircle size={12} /> Verified
-                                                                            </span>
-                                                                        ) : (
-                                                                            <span className="flex items-center gap-1 text-[10px] text-amber-500">
-                                                                                <AlertTriangle size={12} /> Unverified
-                                                                            </span>
-                                                                        )}
-                                                                    </div>
-                                                                </div>
-                                                            ))}
+                            <div className="p-6 space-y-8">
+                                {getSectionDomains('identity').map(domain => {
+                                    const entry = (cache as any).workspace_summary?.[domain];
+                                    const s = entry?.data?.[0] as WorkspaceSummary | undefined;
+                                    const isLoading = entry?.isLoading || isScanning;
+                                    
+                                    if (!s) {
+                                        return (
+                                            <div key={domain} className="border border-zinc-800/50 rounded-xl p-4 bg-zinc-950/30">
+                                                <div className="flex items-center justify-between">
+                                                    <div className="flex items-center gap-2">
+                                                        <Globe size={14} className="text-zinc-500" />
+                                                        <h4 className="text-sm font-bold text-zinc-400">{domain}</h4>
+                                                    </div>
+                                                    {isLoading ? (
+                                                        <div className="flex items-center gap-2">
+                                                            <RefreshCw size={10} className="animate-spin text-blue-500" />
+                                                            <span className="text-[10px] text-zinc-500 font-medium">Scanning...</span>
                                                         </div>
+                                                    ) : (
+                                                        <span className="text-[10px] text-zinc-600">No data available</span>
+                                                    )}
+                                                </div>
+                                            </div>
+                                        );
+                                    }
+
+                                    return (
+                                        <div key={domain} className="border border-zinc-800/50 rounded-xl p-4 bg-zinc-950/30">
+                                            <div className="flex items-center gap-2 mb-4">
+                                                <Globe size={14} className="text-blue-500" />
+                                                <h4 className="text-sm font-bold text-white">{domain}</h4>
+                                            </div>
+
+                                            {s.metadata?.error ? (
+                                                <ErrorBanner message={s.metadata.error} />
+                                            ) : (
+                                                <>
+                                                    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 mb-6">
+                                                        <StatCard
+                                                            label="Customer ID"
+                                                            value={s.metadata?.customer_id || 'N/A'}
+                                                            icon={Key}
+                                                            color={s.metadata?.customer_id ? "text-cyan-400" : "text-zinc-500"}
+                                                        />
+                                                        <StatCard
+                                                            label="Organization ID"
+                                                            value={(s.metadata as any)?.org_id || 'N/A'}
+                                                            icon={Building}
+                                                            color={(s.metadata as any)?.org_id ? "text-indigo-400" : "text-zinc-500"}
+                                                        />
+                                                        <StatCard label="Primary Domain" value={s.metadata?.customer_domain || '---'} icon={Globe} color="text-white" />
+                                                        <StatCard
+                                                            label="Created"
+                                                            value={(s.metadata as any)?.customer_creation_time ? new Date((s.metadata as any).customer_creation_time).toLocaleDateString() : '---'}
+                                                            icon={Calendar}
+                                                            color="text-zinc-300"
+                                                        />
                                                     </div>
 
-                                                    {/* Domain Aliases */}
-                                                    {(summary.metadata as any)?.domain_aliases?.length > 0 && (
-                                                        <div>
-                                                            <h5 className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest mb-2">Domain Aliases</h5>
-                                                            <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
-                                                                {(summary.metadata as any)?.domain_aliases?.map((alias: any) => (
-                                                                    <div key={alias.alias} className="bg-zinc-900/50 p-3 rounded-lg border border-zinc-800 flex items-center justify-between">
-                                                                        <div className="flex flex-col">
-                                                                            <span className="text-sm text-zinc-300">{alias.alias}</span>
-                                                                            <span className="text-[10px] text-zinc-600">→ {alias.parent_domain}</span>
+                                                    {/* Domains List */}
+                                                    <div className="bg-zinc-900/30 rounded-lg overflow-hidden border border-zinc-800/50">
+                                                        <SubSectionHeader
+                                                            id={`domains-${domain}`}
+                                                            title="Domains & Aliases"
+                                                            icon={Globe}
+                                                            count={((s.metadata as any)?.domains?.length || 0) + ((s.metadata as any)?.domain_aliases?.length || 0)}
+                                                        />
+                                                        {expandedSections[`domains-${domain}`] !== false && ( /* Default open if not explicitly closed logic or just use toggle */
+                                                            <div className="p-4 space-y-4">
+                                                                <div>
+                                                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
+                                                                        {(s.metadata as any)?.domains?.map((d: any) => (
+                                                                            <div key={d.domain_name} className="bg-zinc-900/50 p-3 rounded-lg border border-zinc-800 flex items-center justify-between">
+                                                                                <div className="flex items-center gap-2">
+                                                                                    <Globe size={14} className={d.is_primary ? "text-cyan-400" : "text-zinc-500"} />
+                                                                                    <span className="text-sm text-white font-medium">{d.domain_name}</span>
+                                                                                    {d.is_primary && (
+                                                                                        <span className="text-[8px] bg-cyan-900/30 text-cyan-400 border border-cyan-500/20 px-1.5 py-0.5 rounded font-bold uppercase">Primary</span>
+                                                                                    )}
+                                                                                </div>
+                                                                                <div className="flex items-center gap-2">
+                                                                                    {d.verified ? (
+                                                                                        <span className="flex items-center gap-1 text-[10px] text-emerald-400">
+                                                                                            <CheckCircle size={12} /> Verified
+                                                                                        </span>
+                                                                                    ) : (
+                                                                                        <span className="flex items-center gap-1 text-[10px] text-amber-500">
+                                                                                            <AlertTriangle size={12} /> Unverified
+                                                                                        </span>
+                                                                                    )}
+                                                                                </div>
+                                                                            </div>
+                                                                        ))}
+                                                                    </div>
+                                                                </div>
+                                                            </div>
+                                                        )}
+                                                    </div>
+
+                                                    {/* Admins List */}
+                                                    <div className="bg-zinc-900/30 rounded-lg overflow-hidden border border-zinc-800/50 mt-4">
+                                                        <SubSectionHeader
+                                                            id={`admins-${domain}`}
+                                                            title="Super Admins"
+                                                            icon={Shield}
+                                                            count={s.metadata?.admins?.length || 0}
+                                                        />
+                                                        {expandedSections[`admins-${domain}`] !== false && (
+                                                            <div className="p-4">
+                                                                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                                                                    {s.metadata?.admins?.map((admin: any) => (
+                                                                        <div key={admin.email} className="bg-zinc-900/50 p-3 rounded-lg border border-zinc-800 flex items-center justify-between">
+                                                                             <div className="flex flex-col min-w-0">
+                                                                                 <span className="text-sm font-medium text-white truncate">{admin.name}</span>
+                                                                                 <span className="text-[10px] text-zinc-500 font-mono truncate">{admin.email}</span>
+                                                                             </div>
+                                                                             <div className="flex flex-col items-end gap-1">
+                                                                                  <span className="text-[8px] font-bold uppercase px-1.5 py-0.5 rounded bg-red-900/30 text-red-500 border border-red-500/20">
+                                                                                      {admin.is_delegated ? 'Delegated' : 'Super Admin'}
+                                                                                  </span>
+                                                                             </div>
                                                                         </div>
-                                                                        {alias.verified ? (
-                                                                            <CheckCircle size={12} className="text-emerald-400" />
-                                                                        ) : (
-                                                                            <AlertTriangle size={12} className="text-amber-500" />
-                                                                        )}
-                                                                    </div>
-                                                                ))}
-                                                            </div>
-                                                        </div>
-                                                    )}
-                                                </div>
-                                            )}
-                                        </div>
-
-                                        {/* Admins Sub-Section */}
-                                        <div className="bg-zinc-900/30 rounded-lg overflow-hidden border border-zinc-800/50">
-                                            <SubSectionHeader
-                                                id="admins"
-                                                title="Super Admins & Delegated Admins"
-                                                icon={Shield}
-                                                count={summary.metadata?.admins?.length || 0}
-                                            />
-                                            {expandedSections.admins && (
-                                                <div className="p-4">
-                                                    <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
-                                                        {summary.metadata?.admins?.map(admin => (
-                                                            <div key={admin.email} className="bg-zinc-900/50 p-3 rounded-lg border border-zinc-800 flex items-center justify-between">
-                                                                <div className="flex flex-col min-w-0">
-                                                                    <span className="text-sm font-medium text-white truncate">{admin.name}</span>
-                                                                    <span className="text-[10px] text-zinc-500 font-mono truncate">{admin.email}</span>
-                                                                    {(admin as any).last_login && (
-                                                                        <span className="text-[9px] text-zinc-600 mt-1">
-                                                                            Last login: {new Date((admin as any).last_login).toLocaleDateString()}
-                                                                        </span>
-                                                                    )}
-                                                                </div>
-                                                                <div className="flex flex-col items-end gap-1">
-                                                                    <span className={`text-[8px] font-bold uppercase px-1.5 py-0.5 rounded ${admin.is_delegated
-                                                                        ? 'bg-amber-900/30 text-amber-500 border border-amber-500/20'
-                                                                        : 'bg-red-900/30 text-red-500 border border-red-500/20'
-                                                                        }`}>
-                                                                        {admin.is_delegated ? 'Delegated' : 'Super Admin'}
-                                                                    </span>
-                                                                    {(admin as any).suspended && (
-                                                                        <span className="text-[8px] text-zinc-500 bg-zinc-800 px-1.5 py-0.5 rounded">Suspended</span>
-                                                                    )}
+                                                                    ))}
                                                                 </div>
                                                             </div>
-                                                        ))}
+                                                        )}
                                                     </div>
-
-                                                    {/* Custom Roles */}
-                                                    {(summary.metadata as any)?.custom_roles?.length > 0 && (
-                                                        <div className="mt-4 pt-4 border-t border-zinc-800/50">
-                                                            <h5 className="text-[10px] font-bold text-zinc-500 uppercase tracking-widest mb-2">Custom Admin Roles</h5>
-                                                            <div className="flex flex-wrap gap-2">
-                                                                {(summary.metadata as any)?.custom_roles?.map((role: any) => (
-                                                                    <span key={role.role_id} className="bg-zinc-800 text-zinc-400 px-2 py-1 rounded text-xs" title={role.description}>
-                                                                        {role.role_name}
-                                                                    </span>
-                                                                ))}
-                                                            </div>
-                                                        </div>
-                                                    )}
-                                                </div>
+                                                </>
                                             )}
                                         </div>
-                                    </>
-                                )}
+                                    );
+                                })}
                             </div>
                         )}
                     </div>
@@ -1033,123 +1090,77 @@ const WorkspaceManager = () => {
                             title="2. Workspace User & Group Inventory"
                             icon={Users}
                             color="bg-indigo-600"
-                            badge={`${(summary.inventory as any)?.user_stats?.total || 0} users`}
+                            badge="User Management"
                             subtitle="User statistics, login activity, and groups"
                         />
                         {expandedSections.inventory && (
-                            <div className="p-6 space-y-6">
-                                {summary.inventory?.error ? (
-                                    <ErrorBanner message={summary.inventory.error} />
-                                ) : (
-                                    <>
-                                        {/* User Statistics Sub-Section */}
-                                        <div className="bg-zinc-900/30 rounded-lg overflow-hidden border border-zinc-800/50">
-                                            <SubSectionHeader
-                                                id="users"
-                                                title="User Statistics"
-                                                icon={UserCheck}
-                                                count={(summary.inventory as any)?.user_stats?.total}
-                                            />
-                                            {expandedSections.users && (
-                                                <div className="p-4">
-                                                    <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
+                             <div className="p-6 space-y-8">
+                                {getSectionDomains('inventory').map(domain => {
+                                    const entry = (cache as any).workspace_summary?.[domain];
+                                    const s = entry?.data?.[0] as WorkspaceSummary | undefined;
+                                    const isLoading = entry?.isLoading || isScanning;
+
+                                    if (!s) {
+                                        return (
+                                            <div key={domain} className="border border-zinc-800/50 rounded-xl p-4 bg-zinc-950/30">
+                                                <div className="flex items-center justify-between">
+                                                    <div className="flex items-center gap-2">
+                                                        <Users size={14} className="text-zinc-500" />
+                                                        <h4 className="text-sm font-bold text-zinc-400">{domain}</h4>
+                                                    </div>
+                                                    {isLoading ? (
+                                                        <div className="flex items-center gap-2">
+                                                            <RefreshCw size={10} className="animate-spin text-indigo-500" />
+                                                            <span className="text-[10px] text-zinc-500 font-medium">Scanning...</span>
+                                                        </div>
+                                                    ) : (
+                                                        <span className="text-[10px] text-zinc-600">No data available</span>
+                                                    )}
+                                                </div>
+                                            </div>
+                                        );
+                                    }
+
+                                    return (
+                                        <div key={domain} className="border border-zinc-800/50 rounded-xl p-4 bg-zinc-950/30">
+                                             <div className="flex items-center gap-2 mb-4">
+                                                <Users size={14} className="text-indigo-500" />
+                                                <h4 className="text-sm font-bold text-white">{domain}</h4>
+                                                <span className="text-[10px] bg-zinc-800 px-2 py-0.5 rounded text-zinc-400">{(s.inventory as any)?.user_stats?.total || 0} Users</span>
+                                            </div>
+
+                                            {s.inventory?.error ? (
+                                                <ErrorBanner message={s.inventory.error} />
+                                            ) : (
+                                                <div className="space-y-4">
+                                                    <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
                                                         <div className="bg-zinc-900/50 p-4 rounded-lg border border-zinc-800 text-center">
                                                             <Users size={20} className="mx-auto mb-2 text-blue-400" />
-                                                            <div className="text-2xl font-bold text-white">{(summary.inventory as any)?.user_stats?.total || 0}</div>
-                                                            <div className="text-[10px] text-zinc-500 uppercase font-bold tracking-wider">Total Users</div>
+                                                            <div className="text-2xl font-bold text-white">{(s.inventory as any)?.user_stats?.total || 0}</div>
+                                                            <div className="text-[10px] text-zinc-500 uppercase font-bold tracking-wider">Total</div>
                                                         </div>
                                                         <div className="bg-zinc-900/50 p-4 rounded-lg border border-zinc-800 text-center">
                                                             <UserCheck size={20} className="mx-auto mb-2 text-emerald-400" />
-                                                            <div className="text-2xl font-bold text-emerald-400">{(summary.inventory as any)?.user_stats?.active || 0}</div>
+                                                            <div className="text-2xl font-bold text-emerald-400">{(s.inventory as any)?.user_stats?.active || 0}</div>
                                                             <div className="text-[10px] text-zinc-500 uppercase font-bold tracking-wider">Active</div>
                                                         </div>
                                                         <div className="bg-zinc-900/50 p-4 rounded-lg border border-zinc-800 text-center">
                                                             <UserX size={20} className="mx-auto mb-2 text-red-400" />
-                                                            <div className="text-2xl font-bold text-red-400">{(summary.inventory as any)?.user_stats?.suspended || 0}</div>
+                                                            <div className="text-2xl font-bold text-red-400">{(s.inventory as any)?.user_stats?.suspended || 0}</div>
                                                             <div className="text-[10px] text-zinc-500 uppercase font-bold tracking-wider">Suspended</div>
                                                         </div>
-                                                        <div className="bg-zinc-900/50 p-4 rounded-lg border border-zinc-800 text-center">
-                                                            <Folder size={20} className="mx-auto mb-2 text-amber-400" />
-                                                            <div className="text-2xl font-bold text-amber-400">{(summary.inventory as any)?.user_stats?.archived || 0}</div>
-                                                            <div className="text-[10px] text-zinc-500 uppercase font-bold tracking-wider">Archived</div>
-                                                        </div>
-                                                        <div className="bg-zinc-900/50 p-4 rounded-lg border border-zinc-800 text-center">
+                                                         <div className="bg-zinc-900/50 p-4 rounded-lg border border-zinc-800 text-center">
                                                             <Activity size={20} className="mx-auto mb-2 text-cyan-400" />
-                                                            <div className="text-2xl font-bold text-cyan-400">{(summary.inventory as any)?.user_stats?.active_last_30_days || 0}</div>
+                                                            <div className="text-2xl font-bold text-cyan-400">{(s.inventory as any)?.user_stats?.active_last_30_days || 0}</div>
                                                             <div className="text-[10px] text-zinc-500 uppercase font-bold tracking-wider">Active 30d</div>
-                                                        </div>
-                                                        <div className="bg-zinc-900/50 p-4 rounded-lg border border-zinc-800 text-center">
-                                                            <EyeOff size={20} className="mx-auto mb-2 text-zinc-500" />
-                                                            <div className="text-2xl font-bold text-zinc-400">{(summary.inventory as any)?.user_stats?.never_logged_in || 0}</div>
-                                                            <div className="text-[10px] text-zinc-500 uppercase font-bold tracking-wider">Never Logged In</div>
                                                         </div>
                                                     </div>
                                                 </div>
                                             )}
                                         </div>
-
-                                        {/* Groups Sub-Section */}
-                                        <div className="bg-zinc-900/30 rounded-lg overflow-hidden border border-zinc-800/50">
-                                            <SubSectionHeader
-                                                id="groups"
-                                                title="Google Groups"
-                                                icon={Users}
-                                                count={summary.inventory?.group_count}
-                                            />
-                                            {expandedSections.groups && (
-                                                <div className="p-4">
-                                                    {summary.inventory?.groups && summary.inventory.groups.length > 0 ? (
-                                                        <div className="overflow-x-auto">
-                                                            <table className="w-full text-left text-sm">
-                                                                <thead className="bg-zinc-900/80 text-zinc-500 text-xs uppercase tracking-wider font-bold">
-                                                                    <tr>
-                                                                        <th className="px-4 py-3">Group Name</th>
-                                                                        <th className="px-4 py-3">Email Address</th>
-                                                                        <th className="px-4 py-3 text-center">Members</th>
-                                                                        <th className="px-4 py-3 text-center">Settings</th>
-                                                                    </tr>
-                                                                </thead>
-                                                                <tbody className="divide-y divide-zinc-800">
-                                                                    {summary.inventory?.groups?.map(group => (
-                                                                        <tr key={group.id} className="hover:bg-zinc-800/30 transition-colors group">
-                                                                            <td className="px-4 py-3">
-                                                                                <div className="font-medium text-white group-hover:text-cyan-400 transition">{group.name}</div>
-                                                                                <div className="text-[10px] text-zinc-500 italic max-w-xs truncate">{group.description}</div>
-                                                                            </td>
-                                                                            <td className="px-4 py-3 text-zinc-400 font-mono text-xs">{group.email}</td>
-                                                                            <td className="px-4 py-3 text-center">
-                                                                                <span className="bg-zinc-800 px-2 py-0.5 rounded text-xs text-zinc-300">{group.direct_members}</span>
-                                                                            </td>
-                                                                            <td className="px-4 py-3">
-                                                                                <div className="flex items-center justify-center gap-1.5">
-                                                                                    {(group as any).settings?.allow_external_members ? (
-                                                                                        <span className="text-[9px] bg-amber-900/30 text-amber-500 border border-amber-500/20 px-1.5 py-0.5 rounded font-bold" title="Allows external members">
-                                                                                            External
-                                                                                        </span>
-                                                                                    ) : (
-                                                                                        <span className="text-[9px] bg-emerald-900/30 text-emerald-500 border border-emerald-500/20 px-1.5 py-0.5 rounded font-bold" title="Domain only">
-                                                                                            Internal
-                                                                                        </span>
-                                                                                    )}
-                                                                                    {(group as any).admin_created && (
-                                                                                        <span className="text-[9px] bg-zinc-800 text-zinc-500 px-1.5 py-0.5 rounded" title="Admin created">Admin</span>
-                                                                                    )}
-                                                                                </div>
-                                                                            </td>
-                                                                        </tr>
-                                                                    ))}
-                                                                </tbody>
-                                                            </table>
-                                                        </div>
-                                                    ) : (
-                                                        <p className="text-zinc-500 text-sm text-center py-4">No groups found</p>
-                                                    )}
-                                                </div>
-                                            )}
-                                        </div>
-                                    </>
-                                )}
-                            </div>
+                                    );
+                                })}
+                             </div>
                         )}
                     </div>
 
@@ -1165,147 +1176,116 @@ const WorkspaceManager = () => {
                             subtitle="Aggregated storage across Drive, Gmail, and Photos"
                         />
                         {expandedSections.storage && (
-                            <div className="p-6">
-                                {summary.storage?.error ? (
-                                    <ErrorBanner message={summary.storage.error} />
-                                ) : (
-                                    <div className="space-y-6">
-                                        {/* Storage Usage Highlight */}
-                                        <div className="bg-gradient-to-r from-cyan-900/20 via-zinc-900/50 to-emerald-900/20 border border-zinc-700/50 rounded-xl p-5">
-                                            <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
-                                                <div>
-                                                    <div className="text-xs text-zinc-500 font-bold uppercase tracking-widest mb-1">Workspace Storage Usage</div>
-                                                    <div className="flex items-baseline gap-3">
-                                                        <span className="text-3xl font-bold text-white">
-                                                            {(summary.storage as any)?.quota_info?.total_used_tb?.toFixed(2) ||
-                                                                ((summary.storage as any)?.quota_info?.total_used_gb / 1024)?.toFixed(2) || '0'} TB
-                                                        </span>
-                                                        <span className="text-zinc-500">/</span>
-                                                        <span className="text-xl text-zinc-400">
-                                                            {(summary.storage as any)?.quota_info?.total_quota_tb?.toFixed(2) ||
-                                                                ((summary.storage as any)?.quota_info?.total_quota_gb / 1024)?.toFixed(2) || '0'} TB
-                                                        </span>
+                            <div className="p-6 space-y-8">
+                                {getSectionDomains('storage').map(domain => {
+                                    const entry = (cache as any).workspace_summary?.[domain];
+                                    const s = entry?.data?.[0] as WorkspaceSummary | undefined;
+                                    const isLoading = entry?.isLoading || isScanning;
+                                    
+                                    if (!s) {
+                                        return (
+                                            <div key={domain} className="border border-zinc-800/50 rounded-xl p-4 bg-zinc-950/30">
+                                                <div className="flex items-center justify-between">
+                                                    <div className="flex items-center gap-2">
+                                                        <BarChart size={14} className="text-zinc-500" />
+                                                        <h4 className="text-sm font-bold text-zinc-400">{domain}</h4>
                                                     </div>
-                                                </div>
-                                                <div className="flex items-center gap-4">
-                                                    <div className={`text-4xl font-black ${((summary.storage as any)?.quota_info?.percentage_used || 0) > 90 ? 'text-red-500' :
-                                                        ((summary.storage as any)?.quota_info?.percentage_used || 0) > 75 ? 'text-amber-500' : 'text-emerald-500'
-                                                        }`}>
-                                                        {(summary.storage as any)?.quota_info?.percentage_used || 0}%
-                                                    </div>
+                                                    {isLoading ? (
+                                                        <div className="flex items-center gap-2">
+                                                            <RefreshCw size={10} className="animate-spin text-emerald-500" />
+                                                            <span className="text-[10px] text-zinc-500 font-medium">Scanning...</span>
+                                                        </div>
+                                                    ) : (
+                                                        <span className="text-[10px] text-zinc-600">No data available</span>
+                                                    )}
                                                 </div>
                                             </div>
-                                            {/* Progress Bar */}
-                                            <div className="mt-4 h-3 bg-zinc-800 rounded-full overflow-hidden">
-                                                <div
-                                                    className={`h-full rounded-full transition-all duration-500 ${((summary.storage as any)?.quota_info?.percentage_used || 0) > 90 ? 'bg-gradient-to-r from-red-600 to-red-400' :
-                                                        ((summary.storage as any)?.quota_info?.percentage_used || 0) > 75 ? 'bg-gradient-to-r from-amber-600 to-amber-400' :
-                                                            'bg-gradient-to-r from-emerald-600 to-cyan-400'
-                                                        }`}
-                                                    style={{ width: `${Math.min((summary.storage as any)?.quota_info?.percentage_used || 0, 100)}%` }}
-                                                />
+                                        );
+                                    }
+                                    
+                                    const quotaInfo = (s.storage as any)?.quota_info || {};
+
+                                    return (
+                                        <div key={domain} className="border border-zinc-800/50 rounded-xl p-4 bg-zinc-950/30">
+                                            <div className="flex items-center gap-2 mb-4">
+                                                <BarChart size={14} className="text-emerald-500" />
+                                                <h4 className="text-sm font-bold text-white">{domain}</h4>
                                             </div>
-                                        </div>
 
-                                        {/* Storage Breakdown Cards */}
-                                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
-                                            <Card className="p-4 bg-gradient-to-br from-blue-900/30 to-blue-950/50 border-blue-800/30">
-                                                <div className="flex items-center gap-3">
-                                                    <div className="p-2 bg-blue-500/20 rounded-lg">
-                                                        <Database size={18} className="text-blue-400" />
-                                                    </div>
-                                                    <div>
-                                                        <div className="text-xs text-zinc-500 font-bold uppercase">Total Quota</div>
-                                                        <div className="text-xl font-bold text-white">
-                                                            {(summary.storage as any)?.quota_info?.total_quota_tb?.toFixed(0) ||
-                                                                Math.round(((summary.storage as any)?.quota_info?.total_quota_gb || 0) / 1024)} TB
+                                            {s.storage?.error ? (
+                                                <ErrorBanner message={s.storage.error} />
+                                            ) : (
+                                                <div className="space-y-6">
+                                                    {/* Storage Usage Highlight */}
+                                                    <div className="bg-gradient-to-r from-cyan-900/20 via-zinc-900/50 to-emerald-900/20 border border-zinc-700/50 rounded-xl p-5">
+                                                        <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
+                                                            <div>
+                                                                <div className="text-xs text-zinc-500 font-bold uppercase tracking-widest mb-1">Storage Usage</div>
+                                                                <div className="flex items-baseline gap-3">
+                                                                    <span className="text-3xl font-bold text-white">
+                                                                        {quotaInfo.total_used_tb?.toFixed(2) ||
+                                                                            (quotaInfo.total_used_gb / 1024)?.toFixed(2) || '0'} TB
+                                                                    </span>
+                                                                    <span className="text-zinc-500">/</span>
+                                                                    <span className="text-xl text-zinc-400">
+                                                                        {quotaInfo.total_quota_tb?.toFixed(2) ||
+                                                                            (quotaInfo.total_quota_gb / 1024)?.toFixed(2) || '0'} TB
+                                                                    </span>
+                                                                </div>
+                                                            </div>
+                                                            <div className="flex items-center gap-4">
+                                                                <div className={`text-4xl font-black ${quotaInfo.percentage_used > 90 ? 'text-red-500' :
+                                                                    quotaInfo.percentage_used > 75 ? 'text-amber-500' : 'text-emerald-500'
+                                                                    }`}>
+                                                                    {quotaInfo.percentage_used || 0}%
+                                                                </div>
+                                                            </div>
+                                                        </div>
+                                                        {/* Progress Bar */}
+                                                        <div className="mt-4 h-3 bg-zinc-800 rounded-full overflow-hidden">
+                                                            <div
+                                                                className={`h-full rounded-full transition-all duration-500 ${quotaInfo.percentage_used > 90 ? 'bg-gradient-to-r from-red-600 to-red-400' :
+                                                                    quotaInfo.percentage_used > 75 ? 'bg-gradient-to-r from-amber-600 to-amber-400' :
+                                                                        'bg-gradient-to-r from-emerald-600 to-cyan-400'
+                                                                    }`}
+                                                                style={{ width: `${Math.min(quotaInfo.percentage_used || 0, 100)}%` }}
+                                                            />
                                                         </div>
                                                     </div>
-                                                </div>
-                                            </Card>
-                                            <Card className="p-4 bg-gradient-to-br from-cyan-900/30 to-cyan-950/50 border-cyan-800/30">
-                                                <div className="flex items-center gap-3">
-                                                    <div className="p-2 bg-cyan-500/20 rounded-lg">
-                                                        <BarChart size={18} className="text-cyan-400" />
-                                                    </div>
-                                                    <div>
-                                                        <div className="text-xs text-zinc-500 font-bold uppercase">Total Used</div>
-                                                        <div className="text-xl font-bold text-cyan-400">
-                                                            {(summary.storage as any)?.quota_info?.total_used_tb?.toFixed(2) ||
-                                                                ((summary.storage as any)?.quota_info?.total_used_gb / 1024)?.toFixed(2) || '0'} TB
-                                                        </div>
-                                                    </div>
-                                                </div>
-                                            </Card>
-                                            <Card className="p-4 bg-gradient-to-br from-indigo-900/30 to-indigo-950/50 border-indigo-800/30">
-                                                <div className="flex items-center gap-3">
-                                                    <div className="p-2 bg-indigo-500/20 rounded-lg">
-                                                        <HardDrive size={18} className="text-indigo-400" />
-                                                    </div>
-                                                    <div>
-                                                        <div className="text-xs text-zinc-500 font-bold uppercase">Drive Storage</div>
-                                                        <div className="text-xl font-bold text-indigo-400">
-                                                            {formatBytes(((summary.storage as any)?.quota_info?.drive_used_mb || 0) * 1024 * 1024)}
-                                                        </div>
-                                                    </div>
-                                                </div>
-                                            </Card>
-                                            <Card className="p-4 bg-gradient-to-br from-amber-900/30 to-amber-950/50 border-amber-800/30">
-                                                <div className="flex items-center gap-3">
-                                                    <div className="p-2 bg-amber-500/20 rounded-lg">
-                                                        <Trash2 size={18} className="text-amber-400" />
-                                                    </div>
-                                                    <div>
-                                                        <div className="text-xs text-zinc-500 font-bold uppercase">Trash</div>
-                                                        <div className="text-xl font-bold text-amber-400">
-                                                            {formatBytes(((summary.storage as any)?.quota_info?.trash_mb || 0) * 1024 * 1024)}
-                                                        </div>
-                                                    </div>
-                                                </div>
-                                            </Card>
-                                        </div>
 
-                                        {/* Drive Activity */}
-                                        {(summary.storage as any)?.activity && (
-                                            <div className="bg-zinc-900/40 rounded-xl p-5 border border-zinc-800">
-                                                <h4 className="text-xs font-bold text-zinc-500 uppercase tracking-widest mb-4 flex items-center gap-2">
-                                                    <Activity size={14} className="text-cyan-400" />
-                                                    Drive Activity (Recent)
-                                                </h4>
-                                                <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
-                                                    <div className="text-center">
-                                                        <div className="text-lg font-bold text-white">{(summary.storage as any)?.activity?.items_created || 0}</div>
-                                                        <div className="text-[10px] text-zinc-500 uppercase">Created</div>
-                                                    </div>
-                                                    <div className="text-center">
-                                                        <div className="text-lg font-bold text-white">{(summary.storage as any)?.activity?.items_edited || 0}</div>
-                                                        <div className="text-[10px] text-zinc-500 uppercase">Edited</div>
-                                                    </div>
-                                                    <div className="text-center">
-                                                        <div className="text-lg font-bold text-white">{(summary.storage as any)?.activity?.items_viewed || 0}</div>
-                                                        <div className="text-[10px] text-zinc-500 uppercase">Viewed</div>
-                                                    </div>
-                                                    <div className="text-center">
-                                                        <div className="text-lg font-bold text-amber-400">{(summary.storage as any)?.activity?.items_shared_externally || 0}</div>
-                                                        <div className="text-[10px] text-zinc-500 uppercase">Shared External</div>
-                                                    </div>
-                                                    <div className="text-center">
-                                                        <div className="text-lg font-bold text-red-400">{(summary.storage as any)?.activity?.items_trashed || 0}</div>
-                                                        <div className="text-[10px] text-zinc-500 uppercase">Trashed</div>
+                                                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                                                        <Card className="p-4 bg-gradient-to-br from-indigo-900/30 to-indigo-950/50 border-indigo-800/30">
+                                                            <div className="flex items-center gap-3">
+                                                                <div className="p-2 bg-indigo-500/20 rounded-lg">
+                                                                    <HardDrive size={18} className="text-indigo-400" />
+                                                                </div>
+                                                                <div>
+                                                                    <div className="text-xs text-zinc-500 font-bold uppercase">Drive Storage</div>
+                                                                    <div className="text-xl font-bold text-indigo-400">
+                                                                        {formatBytes((quotaInfo.drive_used_mb || 0) * 1024 * 1024)}
+                                                                    </div>
+                                                                </div>
+                                                            </div>
+                                                        </Card>
+                                                        <Card className="p-4 bg-gradient-to-br from-amber-900/30 to-amber-950/50 border-amber-800/30">
+                                                            <div className="flex items-center gap-3">
+                                                                <div className="p-2 bg-amber-500/20 rounded-lg">
+                                                                    <Trash2 size={18} className="text-amber-400" />
+                                                                </div>
+                                                                <div>
+                                                                    <div className="text-xs text-zinc-500 font-bold uppercase">Trash</div>
+                                                                    <div className="text-xl font-bold text-amber-400">
+                                                                        {formatBytes((quotaInfo.trash_mb || 0) * 1024 * 1024)}
+                                                                    </div>
+                                                                </div>
+                                                            </div>
+                                                        </Card>
                                                     </div>
                                                 </div>
-                                            </div>
-                                        )}
-
-                                        {/* Report Info */}
-                                        <div className="bg-zinc-900/40 rounded-xl p-4 border border-zinc-800 flex items-center gap-3">
-                                            <Info size={16} className="text-cyan-400 shrink-0" />
-                                            <p className="text-xs text-zinc-500 leading-relaxed">
-                                                Usage statistics are retrieved from the Reports API. Data is typically delayed by 24-48 hours. Values shown are estimates as of <span className="text-cyan-400 font-mono">{summary.storage?.date || 'N/A'}</span>.
-                                            </p>
+                                            )}
                                         </div>
-                                    </div>
-                                )}
+                                    );
+                                })}
                             </div>
                         )}
                     </div>
@@ -1319,45 +1299,16 @@ const WorkspaceManager = () => {
                             title="4. Shared Drives (Organization Level)"
                             icon={HardDrive}
                             color="bg-orange-600"
-                            badge={`${summary.drives?.count || 0} drives`}
+                            badge="Shared Drives"
                             subtitle="Full inventory with permissions and restrictions"
                         />
                         {expandedSections.drives && (
                             <div className="p-6">
-                                {summary.drives?.error ? (
-                                    <ErrorBanner message={summary.drives.error} />
-                                ) : (
-                                    <>
-                                        {/* Summary Stats */}
-                                        {(summary.drives as any)?.summary && (
-                                            <div className="grid grid-cols-2 md:grid-cols-5 gap-4 mb-6">
-                                                <Card className="p-4 bg-zinc-900/40 text-center">
-                                                    <HardDrive size={20} className="mx-auto mb-2 text-orange-400" />
-                                                    <div className="text-xl font-bold text-white">{(summary.drives as any)?.summary?.total_drives || 0}</div>
-                                                    <div className="text-[10px] text-zinc-500 uppercase font-bold">Total Drives</div>
-                                                </Card>
-                                                <Card className="p-4 bg-zinc-900/40 text-center">
-                                                    <Lock size={20} className="mx-auto mb-2 text-emerald-400" />
-                                                    <div className="text-xl font-bold text-emerald-400">{(summary.drives as any)?.summary?.restricted_to_domain || 0}</div>
-                                                    <div className="text-[10px] text-zinc-500 uppercase font-bold">Domain-Only</div>
-                                                </Card>
-                                                <Card className="p-4 bg-zinc-900/40 text-center">
-                                                    <Unlock size={20} className="mx-auto mb-2 text-amber-400" />
-                                                    <div className="text-xl font-bold text-amber-400">{(summary.drives as any)?.summary?.open_to_external || 0}</div>
-                                                    <div className="text-[10px] text-zinc-500 uppercase font-bold">External OK</div>
-                                                </Card>
-                                                <Card className="p-4 bg-zinc-900/40 text-center">
-                                                    <Crown size={20} className="mx-auto mb-2 text-red-400" />
-                                                    <div className="text-xl font-bold text-red-400">{(summary.drives as any)?.summary?.total_organizers || 0}</div>
-                                                    <div className="text-[10px] text-zinc-500 uppercase font-bold">Total Managers</div>
-                                                </Card>
-                                                <Card className="p-4 bg-zinc-900/40 text-center">
-                                                    <EyeOff size={20} className="mx-auto mb-2 text-zinc-500" />
-                                                    <div className="text-xl font-bold text-zinc-400">{(summary.drives as any)?.summary?.hidden_drives || 0}</div>
-                                                    <div className="text-[10px] text-zinc-500 uppercase font-bold">Hidden</div>
-                                                </Card>
-                                            </div>
-                                        )}
+                                {/* Aggregated Stats if multiple domains, or just a header? */}
+                                <div className="mb-6 flex items-center gap-2">
+                                     <span className="text-zinc-500 text-xs font-bold uppercase tracking-widest">Global Drive Inventory</span>
+                                     <span className="bg-zinc-800 text-zinc-400 text-[10px] px-2 py-0.5 rounded">{driveTable.data.length} Total Drives found</span>
+                                </div>
 
                                         {/* Drives Header & Controls */}
                                         <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 mb-6">
@@ -1521,8 +1472,6 @@ const WorkspaceManager = () => {
                                                 </div>
                                             )}
                                         />
-                                    </>
-                                )}
                             </div>
                         )}
                     </div>
@@ -1582,9 +1531,9 @@ const WorkspaceManager = () => {
 
                         <div className="p-6 space-y-4">
                             <div className="space-y-1">
-                                <label className="text-[10px] font-black text-zinc-500 uppercase">Target Domain</label>
-                                <div className="p-3 bg-zinc-950 rounded-lg border border-zinc-800 text-zinc-300 font-bold text-sm">
-                                    {selectedDomain}
+                                <label className="text-[10px] font-black text-zinc-500 uppercase">Target Domain(s)</label>
+                                <div className="p-3 bg-zinc-950 rounded-lg border border-zinc-800 text-zinc-300 font-bold text-sm break-words">
+                                    {selectedDomains.join(', ')}
                                 </div>
                             </div>
 

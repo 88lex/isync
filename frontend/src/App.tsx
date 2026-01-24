@@ -24,6 +24,7 @@ import DashboardPage from './pages/Dashboard'; // Added
 import { IsyncDataProvider } from './contexts/IsyncDataContext';
 import ErrorBoundary from './components/ErrorBoundary';
 import { ConfigStatusIndicator } from './components/ConfigStatusIndicator';
+import { ActivityMonitor } from './components/ActivityMonitor';
 
 type ViewType = 'dashboard' | 'users' | 'batch' | 'config' | 'sync' | 'history' | 'schedules' | 'servers' | 'drives' | 'prep' | 'remotesync' | 'rclone' | 'excluded' | 'keys' | 'workspace';
 
@@ -55,7 +56,7 @@ const navGroups: NavGroup[] = [
       { id: 'users', label: 'User Manager', icon: Users },
       {
         id: 'batch',
-        label: 'Batch Generator',
+        label: 'Sync Pairs',
         icon: FileCode,
         subItems: [
           { id: 'generator', label: 'Generator' },
@@ -213,6 +214,11 @@ function App() {
                 );
               })}
             </nav>
+
+            {/* Active Operations Monitor */}
+            <div className="py-2">
+                 <ActivityMonitor />
+            </div>
 
             {/* Config Status */}
             <div className="py-4 border-t border-zinc-800">

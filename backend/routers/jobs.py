@@ -31,6 +31,10 @@ class SyncPair(BaseModel):
     meta_server_id: Optional[str] = None
     meta_execution_mode: Optional[str] = "local" # local, ssh
     
+    # Dashboard Scan Config
+    scan_source_server_id: Optional[str] = None
+    scan_dest_server_id: Optional[str] = None
+    
     class Config:
         extra = "ignore"
 
@@ -49,6 +53,7 @@ class SaveBatchRequest(BaseModel):
     filename: str
     commands: Dict[str, str]
     include_header: bool = True
+    random_order: bool = False
 
 
 class BatchCompareRequest(BaseModel):
@@ -60,7 +65,7 @@ class BatchCompareRequest(BaseModel):
 class RandomBatchRequest(BaseModel):
     """Request to generate batch with random users from selected domains."""
     pairs: List[SyncPair]
-    user_count: int
+    user_count: Optional[int] = 0
     domains: List[str]
     dry_run: bool = False
     random_order: bool = False
@@ -480,6 +485,7 @@ def save_batch(request: SaveBatchRequest):
                 f.write("#!/bin/bash\n")
                 f.write(f"# ISync Batch Commands\n")
                 f.write(f"# Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n")
+                f.write(f"# Random Order: {request.random_order}\n")
                 f.write(f"# Commands: {len(request.commands)}\n")
                 f.write("#\n")
                 f.write("# Copy and paste these commands to a remote server\n")

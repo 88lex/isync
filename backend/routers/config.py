@@ -37,6 +37,10 @@ class SyncPair(BaseModel):
     meta_server_id: Optional[str] = None
     meta_execution_mode: Optional[str] = "local" # local, ssh
     
+    # Dashboard Scan Config
+    scan_source_server_id: Optional[str] = None
+    scan_dest_server_id: Optional[str] = None
+    
     class Config:
         extra = "ignore"
 
@@ -56,6 +60,10 @@ class SyncPairCreate(BaseModel):
     dest_server_id: Optional[str] = None
     meta_server_id: Optional[str] = None
     meta_execution_mode: Optional[str] = "local"
+    
+    # Dashboard Scan Config
+    scan_source_server_id: Optional[str] = None
+    scan_dest_server_id: Optional[str] = None
     
     class Config:
         extra = "ignore"
@@ -174,7 +182,9 @@ def update_synclist(update: SyncListUpdate, db: Session = Depends(get_db)):
             dest_type=pair.dest_type or "LOCAL",
             dest_server_id=pair.dest_server_id,
             meta_server_id=pair.meta_server_id,
-            meta_execution_mode=pair.meta_execution_mode or "local"
+            meta_execution_mode=pair.meta_execution_mode or "local",
+            scan_source_server_id=pair.scan_source_server_id,
+            scan_dest_server_id=pair.scan_dest_server_id
         )
         db.add(new_pair)
     
@@ -206,7 +216,9 @@ def create_sync_pair(pair: SyncPairCreate, db: Session = Depends(get_db)):
         dest_type=pair.dest_type or "LOCAL",
         dest_server_id=pair.dest_server_id,
         meta_server_id=pair.meta_server_id,
-        meta_execution_mode=pair.meta_execution_mode or "local"
+        meta_execution_mode=pair.meta_execution_mode or "local",
+        scan_source_server_id=pair.scan_source_server_id,
+        scan_dest_server_id=pair.scan_dest_server_id
     )
     
     # Invalidate cache
@@ -236,7 +248,9 @@ def update_sync_pair(pair_id: str, pair: SyncPairCreate, db: Session = Depends(g
         dest_type=pair.dest_type,
         dest_server_id=pair.dest_server_id,
         meta_server_id=pair.meta_server_id,
-        meta_execution_mode=pair.meta_execution_mode
+        meta_execution_mode=pair.meta_execution_mode,
+        scan_source_server_id=pair.scan_source_server_id,
+        scan_dest_server_id=pair.scan_dest_server_id
     )
     
     if not updated:

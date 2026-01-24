@@ -421,7 +421,7 @@ def check_google_cloud_apis(base_path: str = None) -> Dict[str, Any]:
                 version = 'v1'
                 if api == 'drive': version = 'v3'
                 elif api == 'cloudresourcemanager': version = 'v3'
-                build(api, version, credentials=creds)
+                build(api, version, credentials=creds, cache_discovery=False)
             except Exception as e:
                 missing.append(api)
                 errors.append(f"{api}: {str(e)[:50]}")

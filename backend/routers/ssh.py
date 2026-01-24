@@ -171,11 +171,7 @@ def delete_ssh_server(server_id: str, db: Session = Depends(get_db)):
 @router.post("/servers/{server_id}/test")
 def api_test_ssh_server(server_id: str):
     """Test SSH connection to a server."""
-    store = get_store()
-    config = store.get_config()
-    servers = config.get('ssh_servers', [])
-    
-    server = next((s for s in servers if s.get('id') == server_id), None)
+    server = get_server_by_id(server_id)
     if not server:
         raise HTTPException(status_code=404, detail="Server not found")
     
@@ -194,11 +190,7 @@ def api_test_ssh_server(server_id: str):
 @router.get("/servers/{server_id}/status")
 def api_get_ssh_server_status(server_id: str):
     """Get detailed status of SSH server."""
-    store = get_store()
-    config = store.get_config()
-    servers = config.get('ssh_servers', [])
-    
-    server = next((s for s in servers if s.get('id') == server_id), None)
+    server = get_server_by_id(server_id)
     if not server:
         raise HTTPException(status_code=404, detail="Server not found")
         
@@ -217,11 +209,7 @@ def api_get_ssh_server_status(server_id: str):
 @router.get("/servers/{server_id}/verify")
 def api_verify_ssh_server(server_id: str):
     """Deep verification of SSH server configuration."""
-    store = get_store()
-    config = store.get_config()
-    servers = config.get('ssh_servers', [])
-    
-    server = next((s for s in servers if s.get('id') == server_id), None)
+    server = get_server_by_id(server_id)
     if not server:
         raise HTTPException(status_code=404, detail="Server not found")
         
@@ -241,14 +229,10 @@ def api_verify_ssh_server(server_id: str):
 @router.get("/servers/{server_id}/folders")
 def api_list_server_folders(server_id: str, path: str = "/", depth: int = 2):
     """List folders on a remote server."""
-    store = get_store()
-    config = store.get_config()
-    servers = config.get('ssh_servers', [])
-    
     if server_id == 'local':
         server = None
     else:
-        server = next((s for s in servers if s.get('id') == server_id), None)
+        server = get_server_by_id(server_id)
         if not server:
             raise HTTPException(status_code=404, detail="Server not found")
     
@@ -259,11 +243,7 @@ def api_list_server_folders(server_id: str, path: str = "/", depth: int = 2):
 @router.get("/servers/{server_id}/remotes")
 def api_list_server_remotes(server_id: str):
     """List rclone remotes on a remote server."""
-    store = get_store()
-    config = store.get_config()
-    servers = config.get('ssh_servers', [])
-    
-    server = next((s for s in servers if s.get('id') == server_id), None)
+    server = get_server_by_id(server_id)
     if not server:
         raise HTTPException(status_code=404, detail="Server not found")
     
@@ -274,11 +254,7 @@ def api_list_server_remotes(server_id: str):
 @router.get("/servers/{server_id}/remotes/{remote_name}/drives")
 def api_list_shared_drives(server_id: str, remote_name: str):
     """List Shared Drives for an rclone remote."""
-    store = get_store()
-    config = store.get_config()
-    servers = config.get('ssh_servers', [])
-    
-    server = next((s for s in servers if s.get('id') == server_id), None)
+    server = get_server_by_id(server_id)
     if not server:
         raise HTTPException(status_code=404, detail="Server not found")
     
@@ -289,11 +265,7 @@ def api_list_shared_drives(server_id: str, remote_name: str):
 @router.get("/servers/{server_id}/remotes/{remote_name}/ls")
 def api_list_remote_path(server_id: str, remote_name: str, path: str = ""):
     """List contents of an rclone remote path."""
-    store = get_store()
-    config = store.get_config()
-    servers = config.get('ssh_servers', [])
-    
-    server = next((s for s in servers if s.get('id') == server_id), None)
+    server = get_server_by_id(server_id)
     if not server:
         raise HTTPException(status_code=404, detail="Server not found")
     
@@ -539,7 +511,9 @@ def pull_remote_items(req: RemoteSyncItemsRequest):
     
     results = []
     
-    for item in req.items:
+    from concurrent.futures import ThreadPoolExecutor
+
+    def pull_single_item(item):
         if req.item_type == 'batch':
             remote = f"{server.get('remote_path', '/opt/isync')}/batch/{item}"
             local = os.path.join(base_path, "batch", item)
@@ -552,8 +526,7 @@ def pull_remote_items(req: RemoteSyncItemsRequest):
             local = os.path.join(base_path, "keys", item)
             os.makedirs(os.path.dirname(local), exist_ok=True)
         else:
-            results.append({"item": item, "status": "error", "message": "Unknown type"})
-            continue
+            return {"item": item, "status": "error", "message": "Unknown type"}
         
         cmd = ["scp", "-o", "StrictHostKeyChecking=no"]
         if server.get('key_path'):
@@ -563,11 +536,14 @@ def pull_remote_items(req: RemoteSyncItemsRequest):
         try:
             res = subprocess.run(cmd, capture_output=True, text=True, timeout=45)
             if res.returncode == 0:
-                results.append({"item": item, "status": "success"})
+                return {"item": item, "status": "success"}
             else:
-                results.append({"item": item, "status": "error", "message": res.stderr.strip()})
+                return {"item": item, "status": "error", "message": res.stderr.strip()}
         except Exception as e:
-            results.append({"item": item, "status": "error", "message": str(e)})
+            return {"item": item, "status": "error", "message": str(e)}
+
+    with ThreadPoolExecutor(max_workers=min(len(req.items), 8)) as executor:
+        results = list(executor.map(pull_single_item, req.items))
     
     return {"results": results, "pulled": len([r for r in results if r['status'] == 'success'])}
 
@@ -607,7 +583,9 @@ def push_remote_items(req: RemoteSyncItemsRequest):
     
     results = []
     
-    for item in req.items:
+    from concurrent.futures import ThreadPoolExecutor
+
+    def push_single_item(item):
         if req.item_type == 'batch':
             local = os.path.join(base_path, "batch", item)
             remote = f"{remote_base}/batch/{item}"
@@ -618,15 +596,13 @@ def push_remote_items(req: RemoteSyncItemsRequest):
             local = os.path.join(base_path, "keys", item)
             remote = f"{remote_base}/keys/{item}"
         else:
-            results.append({"item": item, "status": "error", "message": "Unknown type"})
-            continue
+            return {"item": item, "status": "error", "message": "Unknown type"}
         
         if not os.path.exists(local):
             logger.warning(f"[push_remote_items] Local file not found: {local}")
-            results.append({"item": item, "status": "error", "message": f"Local file not found: {local}"})
-            continue
+            return {"item": item, "status": "error", "message": f"Local file not found: {local}"}
         
-        logger.info(f"[push_remote_items] Pushing {local} -> {ssh_target}:{remote}")
+        logger.debug(f"[push_remote_items] Pushing {local} -> {ssh_target}:{remote}")
         
         # Try direct SCP first
         cmd = ["scp", "-o", "StrictHostKeyChecking=no"]
@@ -637,47 +613,43 @@ def push_remote_items(req: RemoteSyncItemsRequest):
         try:
             res = subprocess.run(cmd, capture_output=True, text=True, timeout=90)
             if res.returncode == 0:
-                # Verify file exists on remote
-                verify_res = exec_remote_command(ssh_req, f"test -f {remote} && stat --printf='%s' {remote}")
-                if verify_res['status'] == 'success' and verify_res.get('stdout'):
-                    remote_size = verify_res.get('stdout', '').strip()
-                    local_size = os.path.getsize(local)
-                    results.append({
-                        "item": item, 
-                        "status": "success",
-                        "source": local,
-                        "destination": f"{ssh_target}:{remote}",
-                        "local_size": local_size,
-                        "remote_size": int(remote_size) if remote_size.isdigit() else 0
-                    })
-                    logger.info(f"[push_remote_items] Successfully pushed {item} ({local_size} bytes)")
-                else:
-                    # SCP reported success but file not found - try sudo fallback
-                    logger.warning(f"[push_remote_items] SCP succeeded but file not found, trying sudo fallback")
-                    tmp_remote = f"/tmp/{item}"
-                    cmd2 = ["scp", "-o", "StrictHostKeyChecking=no"]
-                    if server.get('key_path'):
-                        cmd2.extend(["-i", server['key_path']])
-                    cmd2.extend([local, f"{ssh_target}:{tmp_remote}"])
-                    res2 = subprocess.run(cmd2, capture_output=True, text=True, timeout=60)
-                    if res2.returncode == 0:
-                        mv_res = exec_remote_command(ssh_req, f"sudo mv {tmp_remote} {remote} && sudo chmod 644 {remote}")
-                        if mv_res['status'] == 'success':
-                            results.append({"item": item, "status": "success", "source": local, "destination": f"{ssh_target}:{remote}", "via_sudo": True})
-                        else:
-                            results.append({"item": item, "status": "error", "message": f"sudo mv failed: {mv_res.get('message')}"})
-                    else:
-                        results.append({"item": item, "status": "error", "message": f"Fallback SCP failed: {res2.stderr}"})
+                # Basic success result
+                return {
+                    "item": item, 
+                    "status": "success",
+                    "source": local,
+                    "destination": f"{ssh_target}:{remote}"
+                }
             else:
-                logger.error(f"[push_remote_items] SCP failed for {item}: {res.stderr}")
-                results.append({"item": item, "status": "error", "message": res.stderr.strip()})
+                # Try sudo fallback if direct fails
+                logger.info(f"[push_remote_items] Direct SCP failed for {item}, trying sudo fallback")
+                tmp_remote = f"/tmp/{item}"
+                cmd_tmp = ["scp", "-o", "StrictHostKeyChecking=no"]
+                if server.get('key_path'):
+                    cmd_tmp.extend(["-i", server.get('key_path')])
+                cmd_tmp.extend([local, f"{ssh_target}:{tmp_remote}"])
+                
+                res_tmp = subprocess.run(cmd_tmp, capture_output=True, text=True, timeout=60)
+                if res_tmp.returncode == 0:
+                    mv_res = exec_remote_command(ssh_req, f"sudo mv {tmp_remote} {remote} && sudo chmod 644 {remote}")
+                    if mv_res['status'] == 'success':
+                        return {"item": item, "status": "success", "source": local, "destination": f"{ssh_target}:{remote}", "via_sudo": True}
+                    else:
+                        return {"item": item, "status": "error", "message": f"sudo mv failed: {mv_res.get('message')}"}
+                else:
+                    return {"item": item, "status": "error", "message": res_tmp.stderr.strip()}
         except subprocess.TimeoutExpired:
-            results.append({"item": item, "status": "error", "message": "Timeout"})
+            return {"item": item, "status": "error", "message": "Timeout"}
         except Exception as e:
-            results.append({"item": item, "status": "error", "message": str(e)})
+            return {"item": item, "status": "error", "message": str(e)}
+
+    # Use ThreadPoolExecutor for parallel transfers to the same server
+    # Limit concurrency to 8 threads to avoid overwhelming SSH or local resources
+    with ThreadPoolExecutor(max_workers=min(len(req.items), 8)) as executor:
+        results = list(executor.map(push_single_item, req.items))
     
     success_count = len([r for r in results if r['status'] == 'success'])
-    logger.info(f"[push_remote_items] Complete: {success_count}/{len(req.items)} items pushed successfully")
+    logger.info(f"[push_remote_items] Complete: {success_count}/{len(req.items)} items pushed successfully to {ssh_target}")
     
     return {
         "results": results, 

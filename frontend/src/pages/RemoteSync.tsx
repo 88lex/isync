@@ -215,7 +215,7 @@ const RemoteSync: React.FC = () => {
         setPushStatus(`Starting push...`);
 
         try {
-            for (const serverId of Array.from(selectedServers)) {
+            const pushPromises = Array.from(selectedServers).map(async (serverId) => {
                 const server = servers.find(s => s.id === serverId);
                 const serverName = server?.name || serverId;
 
@@ -228,14 +228,14 @@ const RemoteSync: React.FC = () => {
                             remote_names: Array.from(selectedLocal),
                             overwrite: overwrite
                         });
-                        allResults.push({ server: serverName, ...res.data });
+                        return { server: serverName, ...res.data };
                     } else {
                         const res = await axios.post(`${API_BASE}/ssh/remote/push-items`, {
                             server_id: serverId,
                             items: Array.from(selectedLocal),
                             item_type: activeTab
                         });
-                        allResults.push({ server: serverName, ...res.data });
+                        return { server: serverName, ...res.data };
                     }
                 } else {
                     // Remote Source -> Remote Target (Relay)
@@ -249,7 +249,7 @@ const RemoteSync: React.FC = () => {
                     });
 
                     // Transform relay result to push result format
-                    allResults.push({
+                    return {
                         server: serverName,
                         pushed: res.data.pushed,
                         total: res.data.total,
@@ -258,9 +258,12 @@ const RemoteSync: React.FC = () => {
                             status: r.targets[0]?.status || 'error',
                             destination: r.targets[0]?.message
                         }))
-                    });
+                    };
                 }
-            }
+            });
+
+            const results = await Promise.all(pushPromises);
+            allResults.push(...results);
 
             const totalPushed = allResults.reduce((sum, r) => {
                 if (Array.isArray(r.pushed)) return sum + r.pushed.length;
@@ -370,7 +373,7 @@ const RemoteSync: React.FC = () => {
         setPushStatus(`Starting ${direction} to ${serverNames.join(', ')}...`);
 
         try {
-            for (const serverId of Array.from(selectedServers)) {
+            const syncPromises = Array.from(selectedServers).map(async (serverId) => {
                 const server = servers.find(s => s.id === serverId);
                 const serverName = server?.name || serverId;
                 setPushStatus(`${direction === 'push' ? 'Pushing to' : 'Pulling from'} ${serverName}...`);
@@ -382,8 +385,11 @@ const RemoteSync: React.FC = () => {
                     include_keys: syncAllKeys,
                     direction
                 });
-                allResults.push({ server: serverName, ...res.data });
-            }
+                return { server: serverName, ...res.data };
+            });
+
+            const results = await Promise.all(syncPromises);
+            allResults.push(...results);
 
             const totalSuccess = allResults.reduce((sum, r) => sum + (r.success || 0), 0);
             const totalItems = allResults.reduce((sum, r) => sum + (r.total || 0), 0);
@@ -424,6 +430,18 @@ const RemoteSync: React.FC = () => {
                     <div className="flex items-center gap-2">
                         <Server size={18} className="text-cyan-400" />
                         <span className="text-sm text-zinc-400">Target Servers (select one or more):</span>
+                        <button
+                            onClick={() => {
+                                if (selectedServers.size === servers.length) {
+                                    setSelectedServers(new Set());
+                                } else {
+                                    setSelectedServers(new Set(servers.map(s => s.id)));
+                                }
+                            }}
+                            className="text-[10px] text-cyan-400 hover:text-cyan-300 font-bold uppercase tracking-wider transition ml-2"
+                        >
+                            {selectedServers.size === servers.length ? 'Deselect All' : 'Select All'}
+                        </button>
                         <button
                             onClick={loadItems}
                             disabled={loading}

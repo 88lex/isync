@@ -1,10 +1,7 @@
-"""
-Google Drive API Module
-Provides direct Google Drive API access for Shared Drive operations.
-Uses service account with domain-wide delegation for authentication.
-"""
 import json
 import logging
+import asyncio
+import threading
 from typing import Dict, Any, List, Optional, Set
 from pathlib import Path
 
@@ -20,6 +17,9 @@ except ImportError:
     GOOGLE_API_AVAILABLE = False
     logger.warning("Google API libraries not installed. Install with: pip install google-api-python-client google-auth")
 
+# Module-level thread-local storage for services
+_local = threading.local()
+
 
 SCOPES = ['https://www.googleapis.com/auth/drive']
 
@@ -30,6 +30,7 @@ def get_drive_service(
 ):
     """
     Create a Google Drive API service using service account with domain-wide delegation.
+    Thread-local caching is used to avoid repeated discovery doc fetches.
     """
     if not GOOGLE_API_AVAILABLE:
         raise RuntimeError("Google API libraries not installed. Run: pip install google-api-python-client google-auth")
@@ -37,19 +38,16 @@ def get_drive_service(
     if not impersonate_email:
         raise ValueError("impersonate_email is required for Domain-Wide Delegation authentication.")
 
-    # Log attempt (excluding sensitive content of SA file)
-    logger.debug(f"Creating Drive service: SA={Path(service_account_file).name}, Impersonate={impersonate_email}")
+    key = f"drive_{service_account_file}_{impersonate_email}"
+    if not hasattr(_local, key):
+        credentials = service_account.Credentials.from_service_account_file(
+            service_account_file,
+            scopes=SCOPES
+        )
+        delegated_credentials = credentials.with_subject(impersonate_email)
+        setattr(_local, key, build('drive', 'v3', credentials=delegated_credentials, cache_discovery=False))
     
-    credentials = service_account.Credentials.from_service_account_file(
-        service_account_file,
-        scopes=SCOPES
-    )
-    
-    # Delegate credentials to impersonate the admin user
-    delegated_credentials = credentials.with_subject(impersonate_email)
-    
-    service = build('drive', 'v3', credentials=delegated_credentials)
-    return service
+    return getattr(_local, key)
 
 
 async def create_shared_drive_api(
@@ -82,10 +80,12 @@ async def create_shared_drive_api(
             'name': drive_name
         }
         
-        result = service.drives().create(
-            requestId=request_id,
-            body=drive_metadata
-        ).execute()
+        result = await asyncio.to_thread(
+            service.drives().create(
+                requestId=request_id,
+                body=drive_metadata
+            ).execute
+        )
         
         return {
             "status": "ok",
@@ -204,11 +204,13 @@ async def list_shared_drives_api(
         page_token = None
         
         while True:
-            result = service.drives().list(
-                pageSize=page_size,
-                pageToken=page_token,
-                fields="nextPageToken, drives(id, name, kind, hidden)"
-            ).execute()
+            result = await asyncio.to_thread(
+                service.drives().list(
+                    pageSize=page_size,
+                    pageToken=page_token,
+                    fields="nextPageToken, drives(id, name, kind, hidden)"
+                ).execute
+            )
             
             for drive in result.get('drives', []):
                 if prefix is None or drive['name'].startswith(prefix):
@@ -281,25 +283,27 @@ async def add_drive_member_api(
         service = get_drive_service(service_account_file, impersonate_email)
         
         # Helper to try adding permission with a specific type
-        def try_add_permission(p_type):
+        async def try_add_permission(p_type):
             permission = {
                 'type': p_type,
                 'role': role,
                 'emailAddress': member_email
             }
-            return service.permissions().create(
-                fileId=drive_id,
-                body=permission,
-                supportsAllDrives=True,
-                sendNotificationEmail=False
-            ).execute()
+            return await asyncio.to_thread(
+                service.permissions().create(
+                    fileId=drive_id,
+                    body=permission,
+                    supportsAllDrives=True,
+                    sendNotificationEmail=False
+                ).execute
+            )
 
         # Try 'group' first, fallback to 'user'
         try:
-            result = try_add_permission('group')
+            result = await try_add_permission('group')
         except HttpError:
             try:
-                result = try_add_permission('user')
+                result = await try_add_permission('user')
             except HttpError as e:
                 # If both fail, re-raise the last error to be caught by outer block
                 raise e
@@ -347,11 +351,13 @@ async def copy_drive_members_api(
         service = get_drive_service(service_account_file, impersonate_email)
         
         # Get permissions from source drive
-        permissions = service.permissions().list(
-            fileId=source_drive_id,
-            supportsAllDrives=True,
-            fields="permissions(id, emailAddress, role, type)"
-        ).execute()
+        permissions = await asyncio.to_thread(
+            service.permissions().list(
+                fileId=source_drive_id,
+                supportsAllDrives=True,
+                fields="permissions(id, emailAddress, role, type)"
+            ).execute
+        )
         
         copied = []
         failed = []
@@ -405,10 +411,12 @@ async def rename_shared_drive_api(
     try:
         service = get_drive_service(service_account_file, impersonate_email)
         
-        result = service.drives().update(
-            driveId=drive_id,
-            body={'name': new_name}
-        ).execute()
+        result = await asyncio.to_thread(
+            service.drives().update(
+                driveId=drive_id,
+                body={'name': new_name}
+            ).execute
+        )
         
         return {
             "status": "ok",
@@ -428,7 +436,9 @@ async def delete_shared_drive_api(
     try:
         service = get_drive_service(service_account_file, impersonate_email)
         
-        service.drives().delete(driveId=drive_id).execute()
+        await asyncio.to_thread(
+            service.drives().delete(driveId=drive_id).execute
+        )
         
         return {"status": "ok", "id": drive_id}
     except Exception as e:
@@ -445,18 +455,22 @@ async def get_drive_details_api(
         service = get_drive_service(service_account_file, impersonate_email)
 
         # Get Drive Metadata
-        drive = service.drives().get(
-            driveId=drive_id,
-            fields="id, name, createdTime, orgUnitId, restrictions"
-        ).execute()
+        drive = await asyncio.to_thread(
+            service.drives().get(
+                driveId=drive_id,
+                fields="id, name, createdTime, orgUnitId, restrictions"
+            ).execute
+        )
 
         # Get Permissions
-        permissions_res = service.permissions().list(
-            fileId=drive_id,
-            supportsAllDrives=True,
-            fields="permissions(id, emailAddress, role, type, displayName)",
-            pageSize=100
-        ).execute()
+        permissions_res = await asyncio.to_thread(
+            service.permissions().list(
+                fileId=drive_id,
+                supportsAllDrives=True,
+                fields="permissions(id, emailAddress, role, type, displayName)",
+                pageSize=100
+            ).execute
+        )
 
         permissions = []
         for p in permissions_res.get('permissions', []):

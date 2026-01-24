@@ -491,7 +491,7 @@ const DriveManager = () => {
         return saved ? JSON.parse(saved).gdriveRemote : '';
     });
 
-    const { setDriveManager, setCached, setLoading: setCacheLoading } = useIsyncData();
+    const { setCached, setLoading: setCacheLoading } = useIsyncData();
     const domainKey = selectedDomain?.domain_name || 'unknown';
     const driveCache = useCacheStatus('shared_drives', domainKey);
     const remoteCache = useCacheStatus('rclone_remotes', 'local');
@@ -870,13 +870,6 @@ const DriveManager = () => {
 
             setCached('shared_drives', domainKey, res.drives || [], 'google_api');
 
-            // Legacy support sync (optional but good for stability)
-            setDriveManager(prev => ({
-                ...prev,
-                localRemotes: remotesRes.remotes || [],
-                drives: res.drives || [],
-                lastUpdated: Date.now()
-            }));
 
         } catch (e: any) {
             console.error(e);
@@ -1114,7 +1107,7 @@ const DriveManager = () => {
 
             try {
                 const remotesRes = await listLocalRemotes().catch(e => ({ remotes: [] }));
-                setDriveManager(prev => ({ ...prev, localRemotes: remotesRes.remotes || [] }));
+                setCached('rclone_remotes', 'local', remotesRes.remotes || [], 'rclone_api');
             } catch (e) { console.error('Failed remotes', e); }
 
         };

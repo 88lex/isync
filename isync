@@ -86,9 +86,59 @@ open_browser() {
 start_local() {
     print_header
     
-    # 1. Check if already running
-    if pgrep -f "uvicorn.*backend.main" > /dev/null; then
-        echo -e "${YELLOW}⚠ ISync Backend is already running.${NC}"
+    # 1. Check if already running (Comprehensive Port & Process check)
+    local backend_running=false
+    local frontend_running=false
+    local ghost_ports=""
+    
+    if pgrep -f 'uvicorn.*backend.main' > /dev/null 2>&1; then backend_running=true; fi
+    if pgrep -f 'vite.*5173' > /dev/null 2>&1 || pgrep -f 'node.*vite' > /dev/null 2>&1; then frontend_running=true; fi
+    
+    if command -v lsof &> /dev/null; then
+        for port in 5173 5174 8000; do
+            if lsof -ti:$port > /dev/null 2>&1; then
+                [ -n "$ghost_ports" ] && ghost_ports="$ghost_ports, $port" || ghost_ports="$port"
+            fi
+        done
+    fi
+
+    if [ "$backend_running" = true ] || [ "$frontend_running" = true ] || [ -n "$ghost_ports" ]; then
+        echo -e "${YELLOW}⚠ ISync is already running or ports are occupied:${NC}"
+        [ "$backend_running" = true ] && echo -e "  Backend:  ${GREEN}Running${NC}" || echo -e "  Backend:  ${RED}Stopped${NC}"
+        [ "$frontend_running" = true ] && echo -e "  Frontend: ${GREEN}Running${NC}" || echo -e "  Frontend: ${RED}Stopped${NC}"
+        [ -n "$ghost_ports" ] && echo -e "  ${YELLOW}Ghost processes on ports: $ghost_ports${NC}"
+        
+        echo ""
+        echo "Options:"
+        echo "  [R] Restart - Stop existing and start fresh"
+        echo "  [O] Open browser only (don't restart)"
+        echo "  [Q] Quit"
+        echo ""
+        read -p "Choice [R/O/Q]: " choice
+        
+        case "${choice,,}" in
+            r|restart)
+                echo -e "${YELLOW}Stopping existing ISync...${NC}"
+                pkill -f 'uvicorn.*backend.main' 2>/dev/null
+                pkill -f 'vite' 2>/dev/null
+                pkill -f 'node.*vite' 2>/dev/null
+                if command -v lsof &> /dev/null; then
+                    for port in 5173 5174 8000; do
+                        local port_pid=$(lsof -t -i:$port 2>/dev/null)
+                        [ -n "$port_pid" ] && kill -9 $port_pid 2>/dev/null
+                    done
+                fi
+                sleep 2
+                echo -e "${GREEN}Stopped. Starting fresh...${NC}"
+                ;;
+            o|open)
+                open_browser
+                exit 0
+                ;;
+            q|quit|*)
+                exit 0
+                ;;
+        esac
     fi
 
     # 2. Activate Virtual Environment
@@ -103,6 +153,7 @@ start_local() {
     fi
 
     # 3. Start Backend
+    mkdir -p logs
     echo -e "${BLUE}Starting Backend on port $LOCAL_BACKEND_PORT...${NC}"
     uvicorn backend.main:app --host 0.0.0.0 --port $LOCAL_BACKEND_PORT > logs/backend.log 2>&1 &
     BACKEND_PID=$!
@@ -131,7 +182,6 @@ stop_local() {
     pkill -f "uvicorn.*backend.main" || true
     pkill -f "vite" || true
     echo -e "${GREEN}Stopped.${NC}"
-    exit 0
 }
 
 # --- Remote Operations -----------------------------------------------------------------

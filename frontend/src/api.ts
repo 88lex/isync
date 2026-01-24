@@ -451,6 +451,7 @@ export interface SaveBatchRequest {
     filename: string;
     commands: Record<string, string>;
     include_header?: boolean;
+    random_order?: boolean;
 }
 
 export interface BatchFile {
@@ -553,7 +554,7 @@ export const compareBatchUsers = async (req: BatchCompareRequest): Promise<Batch
 // --- Random Batch Generation ---
 export interface RandomBatchRequest {
     pairs: SyncPair[];
-    user_count: number;
+    user_count?: number;
     domains: string[];
     dry_run: boolean;
     random_order: boolean;
@@ -2047,7 +2048,9 @@ export const fetchWorkspaceDrives = async (domain: string): Promise<WorkspaceDri
 
 export const fetchWorkspaceSummary = async (domain: string, refresh: boolean = false, quick: boolean = false): Promise<WorkspaceSummary> => {
     const res = await axios.get(`${API_BASE}/workspace/summary`, { params: { domain, refresh, quick } });
-    return res.data;
+    // Handle potential wrapping from backend/cache
+    const data = res.data;
+    return Array.isArray(data) ? data[0] : data;
 };
 
 export interface DomainStats {

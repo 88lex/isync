@@ -20,6 +20,7 @@
 - **Workspace Manager**: Fixed granular scope authorization and data refresh
 - **Database Maintenance**: Added comprehensive maintenance API and UI
 - **ConfigStore DB Update Logic**: Implemented `add_known_email` method with proper DB persistence (2026-01-23)
+- **Schema Alignment**: Verified and aligned DB/State structures with new Workspace Manager features (2026-01-24)
 
 ### 🎯 Current Focus
 
@@ -358,7 +359,7 @@ export default logger;
 | File | Line | Description | Priority |
 |------|------|-------------|----------|
 | ~~`backend/store.py`~~ | ~~265~~ | ~~Implement DB update~~ | ~~High~~ ✅ Done |
-| `frontend/src/contexts/IsyncDataContext.tsx` | 107, 114 | Remove legacy driveManager/rcloneManager state | Medium |
+| ~~`frontend/src/contexts/IsyncDataContext.tsx`~~ | ~~107, 114~~ | ~~Remove legacy driveManager/rcloneManager state~~ | ~~Medium~~ ✅ Done |
 
 ### Known Technical Debt
 
