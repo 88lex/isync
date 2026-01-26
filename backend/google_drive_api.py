@@ -58,33 +58,20 @@ async def create_shared_drive_api(
 ) -> Dict[str, Any]:
     """
     Create a single Shared Drive using Google Drive API.
-    
-    Args:
-        service_account_file: Path to service account JSON
-        impersonate_email: Admin email for impersonation
-        drive_name: Name of the new Shared Drive
-        request_id: Unique request ID for idempotency
-    
-    Returns:
-        Dict with created drive info or error
     """
     try:
-        service = get_drive_service(service_account_file, impersonate_email)
-        
-        # Generate request_id if not provided (for idempotency)
-        if not request_id:
-            import uuid
-            request_id = str(uuid.uuid4())
+        import uuid
+        rid = request_id or str(uuid.uuid4())
         
         drive_metadata = {
             'name': drive_name
         }
         
         result = await asyncio.to_thread(
-            service.drives().create(
-                requestId=request_id,
+            lambda: get_drive_service(service_account_file, impersonate_email).drives().create(
+                requestId=rid,
                 body=drive_metadata
-            ).execute
+            ).execute()
         )
         
         return {
@@ -103,6 +90,36 @@ async def create_shared_drive_api(
             "status": "error",
             "message": error_msg,
             "code": e.resp.status
+        }
+    except Exception as e:
+        return {
+            "status": "error",
+            "message": str(e)
+        }
+
+
+async def list_drive_members_api(
+    service_account_file: str,
+    impersonate_email: str,
+    drive_id: str
+) -> Dict[str, Any]:
+    """
+    List members of a Shared Drive.
+    """
+    try:
+        results = await asyncio.to_thread(
+            lambda: get_drive_service(service_account_file, impersonate_email).permissions().list(
+                fileId=drive_id,
+                supportsAllDrives=True,
+                fields="permissions(id, emailAddress, role, type, displayName)"
+            ).execute()
+        )
+        
+        # In this context (copying members), drive_manager expects 'emailAddress' specifically
+        # based on my observation of its current implementation.
+        return {
+            "status": "ok",
+            "members": results.get('permissions', [])
         }
     except Exception as e:
         return {
@@ -198,18 +215,16 @@ async def list_shared_drives_api(
         Dict with list of drives
     """
     try:
-        service = get_drive_service(service_account_file, impersonate_email)
-        
         drives = []
         page_token = None
         
         while True:
             result = await asyncio.to_thread(
-                service.drives().list(
+                lambda: get_drive_service(service_account_file, impersonate_email).drives().list(
                     pageSize=page_size,
                     pageToken=page_token,
                     fields="nextPageToken, drives(id, name, kind, hidden)"
-                ).execute
+                ).execute()
             )
             
             for drive in result.get('drives', []):
@@ -268,20 +283,8 @@ async def add_drive_member_api(
 ) -> Dict[str, Any]:
     """
     Add a member to a Shared Drive.
-    
-    Args:
-        service_account_file: Path to service account JSON
-        impersonate_email: Admin email for impersonation
-        drive_id: ID of the Shared Drive
-        member_email: Email of the member to add
-        role: Role to assign (organizer, fileOrganizer, writer, commenter, reader)
-    
-    Returns:
-        Dict with result
     """
     try:
-        service = get_drive_service(service_account_file, impersonate_email)
-        
         # Helper to try adding permission with a specific type
         async def try_add_permission(p_type):
             permission = {
@@ -290,12 +293,12 @@ async def add_drive_member_api(
                 'emailAddress': member_email
             }
             return await asyncio.to_thread(
-                service.permissions().create(
+                lambda: get_drive_service(service_account_file, impersonate_email).permissions().create(
                     fileId=drive_id,
                     body=permission,
                     supportsAllDrives=True,
                     sendNotificationEmail=False
-                ).execute
+                ).execute()
             )
 
         # Try 'group' first, fallback to 'user'
@@ -348,15 +351,13 @@ async def copy_drive_members_api(
         Dict with results
     """
     try:
-        service = get_drive_service(service_account_file, impersonate_email)
-        
         # Get permissions from source drive
         permissions = await asyncio.to_thread(
-            service.permissions().list(
+            lambda: get_drive_service(service_account_file, impersonate_email).permissions().list(
                 fileId=source_drive_id,
                 supportsAllDrives=True,
                 fields="permissions(id, emailAddress, role, type)"
-            ).execute
+            ).execute()
         )
         
         copied = []
@@ -409,13 +410,11 @@ async def rename_shared_drive_api(
 ) -> Dict[str, Any]:
     """Rename a Shared Drive."""
     try:
-        service = get_drive_service(service_account_file, impersonate_email)
-        
         result = await asyncio.to_thread(
-            service.drives().update(
+            lambda: get_drive_service(service_account_file, impersonate_email).drives().update(
                 driveId=drive_id,
                 body={'name': new_name}
-            ).execute
+            ).execute()
         )
         
         return {
@@ -434,10 +433,8 @@ async def delete_shared_drive_api(
 ) -> Dict[str, Any]:
     """Delete a Shared Drive."""
     try:
-        service = get_drive_service(service_account_file, impersonate_email)
-        
         await asyncio.to_thread(
-            service.drives().delete(driveId=drive_id).execute
+            lambda: get_drive_service(service_account_file, impersonate_email).drives().delete(driveId=drive_id).execute()
         )
         
         return {"status": "ok", "id": drive_id}
@@ -452,24 +449,22 @@ async def get_drive_details_api(
 ) -> Dict[str, Any]:
     """Get detailed information about a Shared Drive."""
     try:
-        service = get_drive_service(service_account_file, impersonate_email)
-
         # Get Drive Metadata
         drive = await asyncio.to_thread(
-            service.drives().get(
+            lambda: get_drive_service(service_account_file, impersonate_email).drives().get(
                 driveId=drive_id,
                 fields="id, name, createdTime, orgUnitId, restrictions"
-            ).execute
+            ).execute()
         )
 
         # Get Permissions
         permissions_res = await asyncio.to_thread(
-            service.permissions().list(
+            lambda: get_drive_service(service_account_file, impersonate_email).permissions().list(
                 fileId=drive_id,
                 supportsAllDrives=True,
                 fields="permissions(id, emailAddress, role, type, displayName)",
                 pageSize=100
-            ).execute
+            ).execute()
         )
 
         permissions = []

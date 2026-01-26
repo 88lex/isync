@@ -708,15 +708,24 @@ def rename_batch_file(filename: str, new_name: str):
     old_path = os.path.join(batch_dir, filename)
     new_path = os.path.join(batch_dir, new_name)
     
+    # Normalize paths for comparison
+    if os.path.abspath(old_path) == os.path.abspath(new_path):
+        return {"status": "ok", "old_name": filename, "new_name": new_name, "message": "No change"}
+
     if not os.path.exists(old_path):
+        logger.error(f"[jobs] Rename failed: Source file {filename} not found at {old_path}")
         raise HTTPException(status_code=404, detail="Batch file not found")
+        
     if os.path.exists(new_path):
+        logger.warning(f"[jobs] Rename failed: Destination {new_name} already exists")
         raise HTTPException(status_code=409, detail="A file with that name already exists")
     
     try:
         os.rename(old_path, new_path)
+        logger.info(f"[jobs] Success: Renamed batch {filename} to {new_name}")
         return {"status": "ok", "old_name": filename, "new_name": new_name}
     except Exception as e:
+        logger.error(f"[jobs] Rename error: {e}")
         raise HTTPException(status_code=500, detail=f"Failed to rename: {str(e)}")
 
 

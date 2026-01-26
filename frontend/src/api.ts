@@ -250,12 +250,12 @@ export const bulkGenerateBatches = async (
 
 // --- Batch CRUD ---
 export const deleteBatchFile = async (filename: string): Promise<{ status: string; deleted: string }> => {
-    const res = await axios.delete(`${API_BASE}/manual/batch/${filename}`);
+    const res = await axios.delete(`${API_BASE}/manual/batch/${encodeURIComponent(filename)}`);
     return res.data;
 };
 
 export const renameBatchFile = async (filename: string, newName: string): Promise<{ status: string }> => {
-    const res = await axios.put(`${API_BASE}/manual/batch/${filename}?new_name=${encodeURIComponent(newName)}`);
+    const res = await axios.put(`${API_BASE}/manual/batch/${encodeURIComponent(filename)}?new_name=${encodeURIComponent(newName)}`);
     return res.data;
 };
 
@@ -474,7 +474,7 @@ export const listSavedBatches = async (): Promise<BatchFile[]> => {
 };
 
 export const getBatchFile = async (filename: string) => {
-    const res = await axios.get(`${API_BASE}/manual/batch/${filename}`);
+    const res = await axios.get(`${API_BASE}/manual/batch/${encodeURIComponent(filename)}`);
     return res.data;
 };
 
@@ -486,42 +486,42 @@ export interface BatchUsersResponse {
 }
 
 export const getBatchUsers = async (filename: string): Promise<BatchUsersResponse> => {
-    const res = await axios.get(`${API_BASE}/manual/batch/${filename}/users`);
+    const res = await axios.get(`${API_BASE}/manual/batch/${encodeURIComponent(filename)}/users`);
     return res.data;
 };
 
 export const pushBatch = async (filename: string, serverId: string) => {
-    const res = await axios.post(`${API_BASE}/batch/${filename}/push`, { server_id: serverId });
+    const res = await axios.post(`${API_BASE}/batch/${encodeURIComponent(filename)}/push`, { server_id: serverId });
     return res.data;
 };
 
 export const updateBatchContent = async (filename: string, content: string) => {
-    const res = await axios.patch(`${API_BASE}/manual/batch/${filename}`, { content });
+    const res = await axios.patch(`${API_BASE}/manual/batch/${encodeURIComponent(filename)}`, { content });
     return res.data;
 };
 
 export const checkBatchRemote = async (filename: string, serverId: string) => {
-    const res = await axios.post(`${API_BASE}/batch/${filename}/check`, { server_id: serverId });
+    const res = await axios.post(`${API_BASE}/batch/${encodeURIComponent(filename)}/check`, { server_id: serverId });
     return res.data;
 };
 
 export const pullBatch = async (filename: string, serverId: string) => {
-    const res = await axios.post(`${API_BASE}/batch/${filename}/pull`, { server_id: serverId });
+    const res = await axios.post(`${API_BASE}/batch/${encodeURIComponent(filename)}/pull`, { server_id: serverId });
     return res.data;
 };
 
 export const deleteBatchRemote = async (filename: string, serverId: string) => {
-    const res = await axios.delete(`${API_BASE}/batch/${filename}/remote?server_id=${serverId}`);
+    const res = await axios.delete(`${API_BASE}/batch/${encodeURIComponent(filename)}/remote?server_id=${serverId}`);
     return res.data;
 };
 
 export const deleteBatchLocal = async (filename: string) => {
-    const res = await axios.delete(`${API_BASE}/manual/batch/${filename}`);
+    const res = await axios.delete(`${API_BASE}/manual/batch/${encodeURIComponent(filename)}`);
     return res.data;
 };
 
 export const regenerateBatch = async (filename: string, randomOrder: boolean, selectedUsers?: string[], allUsers: boolean = false, pairId?: string) => {
-    const res = await axios.post(`${API_BASE}/manual/batch/${filename}/regenerate`, {
+    const res = await axios.post(`${API_BASE}/manual/batch/${encodeURIComponent(filename)}/regenerate`, {
         random_order: randomOrder,
         selected_users: selectedUsers && selectedUsers.length > 0 ? selectedUsers : undefined,
         all_users: allUsers,

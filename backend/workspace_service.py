@@ -101,6 +101,15 @@ class WorkspaceService:
             logger.warning(f"Failed to initialize Groups Settings API: {e}")
             return None
 
+    async def _execute(self, request_factory):
+        """
+        Helper to execute a Google API request in a separate thread.
+        The request_factory should be a lambda that returns a Google API request object.
+        This ensures that the service object is accessed and the request is created
+        within the same thread that executes it.
+        """
+        return await asyncio.to_thread(lambda: request_factory().execute())
+
     async def get_auth_status(self) -> Dict[str, Any]:
         """
         Retrieves the authorization status for all requested scopes and 
@@ -124,6 +133,7 @@ class WorkspaceService:
         # Define status check logic
         async def check_scope(name, api_call):
             try:
+                # api_call is already a lambda that uses self.drive/self.reports/etc.
                 await asyncio.to_thread(api_call)
                 return {"name": name, "status": "active", "error": None}
             except HttpError as e:
@@ -195,8 +205,8 @@ class WorkspaceService:
         try:
             # Check if scope is even possibly available before trying
             try:
-                customer_res = await asyncio.to_thread(
-                    self.directory.customers().get(customerKey='my_customer').execute
+                customer_res = await self._execute(
+                    lambda: self.directory.customers().get(customerKey='my_customer')
                 )
                 result["customer_id"] = customer_res.get('id')
                 result["customer_domain"] = customer_res.get('customerDomain')
@@ -211,8 +221,8 @@ class WorkspaceService:
         
         # Try to get Domain Info (requires admin.directory.domain scope)
         try:
-            domains_res = await asyncio.to_thread(
-                self.directory.domains().list(customer='my_customer').execute
+            domains_res = await self._execute(
+                lambda: self.directory.domains().list(customer='my_customer')
             )
             for d in domains_res.get('domains', []):
                 domain_info = {
@@ -237,8 +247,8 @@ class WorkspaceService:
         
         # Try to get Domain Aliases (requires admin.directory.domain scope)
         try:
-            aliases_res = await asyncio.to_thread(
-                self.directory.domainAliases().list(customer='my_customer').execute
+            aliases_res = await self._execute(
+                lambda: self.directory.domainAliases().list(customer='my_customer')
             )
             for alias in aliases_res.get('domainAliases', []):
                 result["domain_aliases"].append({
@@ -255,13 +265,13 @@ class WorkspaceService:
         
         # Get Admin Users (this should work with admin.directory.user scope)
         try:
-            users_res = await asyncio.to_thread(
-                self.directory.users().list(
+            users_res = await self._execute(
+                lambda: self.directory.users().list(
                     domain=domain, 
                     query="isAdmin=true", 
                     projection='full',
                     maxResults=500
-                ).execute
+                )
             )
             
             for u in users_res.get('users', []):
@@ -282,8 +292,8 @@ class WorkspaceService:
         
         # Try to get custom admin roles (requires admin.directory.rolemanagement scope)
         try:
-            roles_res = await asyncio.to_thread(
-                self.directory.roles().list(customer='my_customer').execute
+            roles_res = await self._execute(
+                lambda: self.directory.roles().list(customer='my_customer')
             )
             for role in roles_res.get('items', []):
                 if role.get('isSuperAdminRole') or role.get('isSystemRole'):
@@ -323,14 +333,14 @@ class WorkspaceService:
             thirty_days_ago = (datetime.now() - timedelta(days=30)).isoformat() + 'Z'
             
             while True:
-                users_res = await asyncio.to_thread(
-                    self.directory.users().list(
+                users_res = await self._execute(
+                    lambda: self.directory.users().list(
                         domain=domain,
                         maxResults=500,
                         pageToken=page_token,
                         projection='basic',
                         fields='users(primaryEmail,suspended,archived,isAdmin,isDelegatedAdmin,lastLoginTime),nextPageToken'
-                    ).execute
+                    )
                 )
                 
                 for user in users_res.get('users', []):
@@ -357,12 +367,12 @@ class WorkspaceService:
             page_token = None
             
             while True:
-                groups_res = await asyncio.to_thread(
-                    self.directory.groups().list(
+                groups_res = await self._execute(
+                    lambda: self.directory.groups().list(
                         domain=domain,
                         maxResults=200,
                         pageToken=page_token
-                    ).execute
+                    )
                 )
                 
                 for g in groups_res.get('groups', []):
@@ -378,8 +388,8 @@ class WorkspaceService:
                     # Try to get group settings if available
                     try:
                         if self.groupssettings:
-                            settings = await asyncio.to_thread(
-                                self.groupssettings.groups().get(groupUniqueId=g['email']).execute
+                            settings = await self._execute(
+                                lambda: self.groupssettings.groups().get(groupUniqueId=g['email'])
                             )
                             group_info['settings'] = {
                                 "who_can_join": settings.get('whoCanJoin', 'UNKNOWN'),
@@ -418,11 +428,11 @@ class WorkspaceService:
             try:
                 for days_ago in [2, 3, 4, 5, 6]:
                     date = (datetime.now() - timedelta(days=days_ago)).strftime('%Y-%m-%d')
-                    report = await asyncio.to_thread(
-                        self.reports.customerUsageReports().get(
+                    report = await self._execute(
+                        lambda: self.reports.customerUsageReports().get(
                             date=date,
                             parameters='accounts:num_users'
-                        ).execute
+                        )
                     )
                     if 'usageReports' in report and len(report['usageReports']) > 0:
                         params = {p['name']: int(p.get('intValue', 0)) for p in report['usageReports'][0].get('parameters', [])}
@@ -468,15 +478,14 @@ class WorkspaceService:
         
         # 1. Primary: Reports API for REAL Aggregate Domain Usage
         try:
-            # Check last 6 days for data (Reports API delayed by ~48h)
             for days_ago in [2, 3, 4, 5, 6]:
                 date = (datetime.now() - timedelta(days=days_ago)).strftime('%Y-%m-%d')
                 try:
-                    report = await asyncio.to_thread(
-                        self.reports.customerUsageReports().get(
+                    report = await self._execute(
+                        lambda: self.reports.customerUsageReports().get(
                             date=date,
                             parameters='accounts:used_quota_in_mb,accounts:total_quota_in_mb,drive:num_items_created,drive:num_items_edited,drive:num_items_viewed,drive:num_items_trashed'
-                        ).execute
+                        )
                     )
                     
                     if 'usageReports' in report and len(report['usageReports']) > 0:
@@ -521,8 +530,8 @@ class WorkspaceService:
 
         # 2. Fallback: Drive API about().get()
         try:
-            about = await asyncio.to_thread(
-                self.drive.about().get(fields='storageQuota,user').execute
+            about = await self._execute(
+                lambda: self.drive.about().get(fields='storageQuota,user')
             )
             storage_quota = about.get('storageQuota', {})
             limit_bytes = int(storage_quota.get('limit', 0))
@@ -569,13 +578,13 @@ class WorkspaceService:
             
             # 1. Fetch all drive objects first (paginated)
             while True:
-                res = await asyncio.to_thread(
-                    self.drive.drives().list(
+                res = await self._execute(
+                    lambda: self.drive.drives().list(
                         useDomainAdminAccess=True,
                         pageToken=page_token,
                         pageSize=100,
                         fields="nextPageToken, drives(id, name, restrictions, createdTime, hidden, themeId)"
-                    ).execute
+                    )
                 )
                 raw_drives.extend(res.get('drives', []))
                 page_token = res.get('nextPageToken')
@@ -606,13 +615,13 @@ class WorkspaceService:
                     if include_permissions:
                         try:
                             # Use thread-pool for synchronous request
-                            perms_res = await asyncio.to_thread(
-                                self.drive.permissions().list(
+                            perms_res = await self._execute(
+                                lambda: self.drive.permissions().list(
                                     fileId=d['id'],
                                     useDomainAdminAccess=True,
                                     supportsAllDrives=True,
                                     fields="permissions(id, type, emailAddress, role, displayName, deleted)"
-                                ).execute
+                                )
                             )
                             
                             permissions = []

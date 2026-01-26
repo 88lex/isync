@@ -210,17 +210,22 @@ export const BatchList: React.FC<BatchListProps> = ({
         }
     };
 
+    const [isRenaming, setIsRenaming] = useState(false);
+
     const handleRename = async (oldName: string, newName: string) => {
-        if (!newName || newName === oldName) {
+        if (!newName || newName === oldName || isRenaming) {
             setRenamingBatch(null);
             return;
         }
         try {
+            setIsRenaming(true);
             await renameBatchFile(oldName, newName);
             await loadSavedBatches();
             setRenamingBatch(null);
         } catch (e: any) {
             alert(`Rename failed: ${e.message}`);
+        } finally {
+            setIsRenaming(false);
         }
     };
 
